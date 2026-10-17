@@ -34,7 +34,7 @@ minimale, alla ChatGPT/Copilot, con pairing e onboarding dell'inferenza
 semplificati.
 
 **REA** — [[ChatGPT desktop - Analisi locale]], nella cartella `Content/REA`,
-documenta pacchetto analizzato, permessi, remoto, chat, baseline di 171 icone,
+documenta pacchetto analizzato, permessi, remoto, chat, baseline di 206 icone,
 evidenze e limiti. Estrazioni, sessioni e screenshot restano in `.artifact/`,
 solo locali e ignorati da Git.
 

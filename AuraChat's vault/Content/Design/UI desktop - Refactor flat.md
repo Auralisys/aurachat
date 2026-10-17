@@ -268,7 +268,7 @@ aperti. Lo shimmer indica lavoro attivo, l'attesa di consenso ha stato distinto;
 loader e animazioni rispettano movimento ridotto e visibilità della finestra.
 Sidebar e pannello attività mantengono palette, superfici e dimensioni AuraChat.
 
-Importata una baseline di 171 SVG selezionati dall'utente; `new_chat.svg`
+Importata una baseline di 206 SVG selezionati dall'utente; `new_chat.svg`
 sostituisce `new_chat_os_windows`. Home, Nuova chat, frecce, chevron, spunta e
 agenti usano già gli asset estratti. Le altre icone restano disponibili in
 `desktop/ui/assets/icons/`; simboli non sostituiti continuano a usare Lucide
@@ -279,3 +279,32 @@ approvazioni, attività, reasoning, sidebar, layout compatto e icone.
 Screenshot solo locali in `.artifact/`, ignorata da Git insieme al percorso
 legacy `artifacts/`; le vecchie catture sono state conservate localmente e
 rimosse dal tracciamento. Gli SVG scelti per l'app restano versionati.
+
+
+### Cartelle progetto e righe chat
+
+Aggiunti 35 SVG `folder_*` alla baseline (206 totali), con provenienza e hash
+nel manifest. Il progetto mostra `folder_closed` quando compresso e
+`folder_open` quando espanso, seguendo lo stato nativo di details anche da
+tastiera. Le chat nei progetti e nei Recenti non mostrano icona a sinistra;
+quelle di progetto mantengono il rientro rispetto al titolo del progetto.
+
+La cartella chiusa è ridotta otticamente al 90%, mantenendo lo stesso spazio
+di layout e lasciando invariata la dimensione della cartella aperta.
+Nuova chat usa una riga da 32 px, icona da 16 px, gap e padding orizzontale
+da 8 px: icona e testo sono allineati alle righe progetto. Il margine sotto
+l'azione scende da 16 a 4 px, avvicinandola all'header Progetti.
+
+### Accesso completo: segnale visivo
+
+Quando il backend conferma la modalità full, la CTA dei permessi mostra uno
+scudo con punto esclamativo; icona e label usano arancione `#f99741`.
+Tornando alle altre modalità si ripristinano scudo standard e colori normali.
+Il cambiamento riguarda la presentazione, senza modificare le autorizzazioni.
+
+Verifiche degli ultimi ritocchi: `sidebar-selection.cjs`, `ui-smoke.cjs`,
+`project-menus.cjs` e `permissions.cjs` passati. Coperti cambio cartella con
+mouse/tastiera, chat senza icone, ripristino degli stati e colore di icona/label.
+Screenshot controllati in `.artifact/sidebar-selection/` e
+`.artifact/permissions/full-access.png`. Eseguibile desktop non ricompilato;
+le 13 suite e i 32 test nativi citati sopra sono la verifica completa precedente.

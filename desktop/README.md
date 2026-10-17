@@ -349,11 +349,13 @@ esterno, migrazione e download del modello vocale rimangono esplicitamente opt-i
 
 ## Materiale locale di verifica
 
-La baseline di 171 icone SVG è in `ui/assets/icons/`, con nomi senza hash e
+La baseline di 206 icone SVG è in `ui/assets/icons/`, con nomi senza hash e
 provenienza in `provenance.json`. `new_chat_os_windows` è rinominata `new_chat.svg`.
-`ui/icons.js` incorpora i soli otto simboli usati nell'interfaccia (Home, Nuova
-chat, indietro, avanti, invio, chevron, spunta e agenti); gli altri SVG restano
-disponibili come asset. Le icone monocromatiche seguono il colore del tema.
+`ui/icons.js` incorpora i soli dieci simboli usati nell'interfaccia (Home, Nuova
+chat, indietro, avanti, invio, chevron, spunta, agenti e cartella chiusa/aperta); gli altri SVG restano
+disponibili come asset. Le icone monocromatiche seguono il colore del tema. I progetti usano
+`folder_closed` da chiusi e `folder_open` da aperti. Le righe chat di Progetti
+e Recenti non hanno icona a sinistra; le chat di progetto restano rientrate.
 
 Screenshot, sessioni REA e output generati sono conservati nella cartella
 `../.artifact/`, ignorata da Git. I test creano direttamente le proprie sottocartelle

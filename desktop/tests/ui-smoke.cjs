@@ -33,7 +33,7 @@ const assert = require('node:assert/strict');
   svg.remove();
   return result;
  }));
- assert.equal(importedGlyphs.length,8);
+ assert.equal(importedGlyphs.length,10);
  assert.ok(importedGlyphs.every(glyph => glyph.viewBox && glyph.hidden === 'true'));
  assert.equal(importedGlyphs.find(glyph => glyph.name === 'compose').viewBox,'0 0 16 16');
  assert.equal(importedGlyphs.find(glyph => glyph.name === 'home').stroke,'none');

@@ -231,6 +231,7 @@ function renderSidebar() {
 }
 
 const ICONS = {
+  "shield-alert": '<path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6z"/><path d="M12 8v4"/><circle cx="12" cy="16" r=".5" fill="currentColor" stroke="none"/>',
   "shield": '<path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6z"/><path d="m8 12 3 3 5-6"/>',
   "terminal": '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3m6 0h4"/>',
   "back": "<path d=\"m10 6-6 6 6 6M4 12h16\"/>",
@@ -306,7 +307,9 @@ function projectHeadEl(project) {
   const disclosure = icon('chevron');
   disclosure.classList.add('tree-disclosure');
   const folder = icon('project');
-  folder.classList.add('tree-icon');
+  folder.classList.add('tree-icon', 'tree-icon--closed');
+  const openFolder = icon('projectOpen');
+  openFolder.classList.add('tree-icon', 'tree-icon--open');
   const name = document.createElement('span');
   name.className = 'tree-project__name';
   name.textContent = project.name;
@@ -319,7 +322,7 @@ function projectHeadEl(project) {
   });
   configureMenuTrigger(more);
   actions.append(more, actionBtn('compose', 'sidebar.new_chat', () => newChat(project.id)));
-  el.append(disclosure, folder, name, actions);
+  el.append(disclosure, folder, openFolder, name, actions);
   el.addEventListener('contextmenu', e => {
     if (e.target.closest('input')) return;
     e.preventDefault();
@@ -484,7 +487,6 @@ function conversationEl(conv, section) {
   const active = conv.id === state.activeConversationId && section === state.activeConversationSection;
   el.className = 'tree-conv' + (active ? ' is-active' : '');
   el.dataset.conversationId = conv.id;
-  const glyph = icon('chat');glyph.classList.add('tree-conv__icon');el.append(glyph);
   const title = document.createElement('span');
   title.className = 'tree-conv__title';
   title.tabIndex = 0;
@@ -1135,6 +1137,7 @@ async function refreshPermissions() {
     if (!['ask', 'auto', 'full'].includes(mode)) throw new Error(t('permissions.unavailable'));
     permissionModes.set(cacheKey,mode);$('#permission-name').textContent = t(`permissions.${mode}`);
     control.dataset.mode = mode;
+    trigger.querySelector('svg').replaceWith(icon(mode === 'full' ? 'shield-alert' : 'shield'));
     menu.replaceChildren();
     for (const value of ['ask', 'auto', 'full']) {
       const option = choiceOption(t(`permissions.${value}`), value === mode, async () => {

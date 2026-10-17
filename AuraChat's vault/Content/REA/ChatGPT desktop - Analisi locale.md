@@ -131,9 +131,9 @@ fork/rigenerazione e ripristino dopo riavvio restano solo parzialmente indagati.
 
 ## Icone selezionate per AuraChat
 
-Su richiesta dell'utente, importati 171 SVG da `webview/assets` nelle famiglie
+Su richiesta dell'utente, importati 206 SVG da `webview/assets` nelle famiglie
 `alarm_*`, `alert_*`, `align_*`, `archive_*`, `arrow_*`, `app_*`, `bot_*`,
-`chevron_*`, `check_*`, comprese le rispettive basi quando presenti, più Home
+`chevron_*`, `check_*`, `folder_*`, comprese le rispettive basi quando presenti, più Home
 e Nuova chat Windows. Non è stato importato l'intero catalogo.
 
 - Destinazione versionata: `desktop/ui/assets/icons/`.
@@ -141,8 +141,9 @@ e Nuova chat Windows. Non è stato importato l'intero catalogo.
 - L'inchiostro scuro neutro degli SVG monocromatici diventa `currentColor`;
   i loghi multicolore conservano la palette.
 - `provenance.json` conserva nome originale e SHA-256 del file sorgente.
-- `desktop/ui/icons.js` incorpora gli otto simboli attualmente collegati:
-  Home, Nuova chat, indietro, avanti, invio, chevron, spunta e agenti.
+- `desktop/ui/icons.js` incorpora i dieci simboli attualmente collegati:
+  Home, Nuova chat, indietro, avanti, invio, chevron, spunta, agenti e
+  cartella chiusa/aperta. Aggiunti 35 SVG `folder_*` ai 171 iniziali.
   Gli altri sono asset disponibili. L'identità visiva resta AuraChat.
 - Il rendering conserva viewBox, riempimento e tratto originali, evitando
   che le regole CSS delle vecchie icone aggiungano contorni ai glifi pieni.
