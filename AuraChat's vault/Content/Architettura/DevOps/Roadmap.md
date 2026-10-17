@@ -137,3 +137,32 @@ verificate due trascrizioni locali consecutive. Ragionamento e attività unifica
 nella chat con cervello viola animato, testo della conversazione ridotto a 13 px.
 Verifiche e limiti: [[Desktop gateway - Tauri]], [[UI desktop - Refactor flat]]
 e [[Problemi noti]]. Mobile, relay/pairing e push restano pianificati.
+
+## Aggiornamento companion e notifiche — 17 ottobre 2026
+
+Il mobile Flutter Android e il trasporto gateway sono ora implementati in
+`mobile/` e `desktop/src-tauri/src/companion.rs`. Login email/password condiviso,
+non pairing anonimo. Implementate notifiche native Windows ed eventi per FCM;
+mittente Cloud Function pronto in `functions/`, non distribuito perché il progetto
+è senza billing. Il controllo remoto è disabilitato finché le regole permissive
+non vengono sostituite con isolamento per UID. L'aggiornamento automatico delle
+regole è stato bloccato dalla revisione automatica e resta un intervento in console.
+
+Verificati build Android, test locali e trasporto/CRUD Firestore reali.
+Il test completo sull'emulatore è stato tentato, ma richiede prima il login
+nell'app con lo stesso account del desktop. Vedi [[Companion mobile - Flutter]]
+e `mobile/README.md` per prerequisiti, limiti e comandi ripetibili.
+
+
+Verifiche successive: login Android reale completato, FCM diretto ricevuto sia in
+background sia dopo chiusura del processo, tap che apre la conversazione, toast
+Windows nella cronologia del sistema, installer Windows corretto e verificato.
+Inferenza remota ancora bloccata dalle regole; deploy automatico FCM ancora da fare.
+
+## Companion e push operative — 18 ottobre 2026
+
+Regole per UID pubblicate, Blaze attivo, completionPush distribuita. Collegamento
+reale Android/PC/modello e push automatiche provati; notifiche Windows verificate.
+Funzione senza istanze minime, max 3, CPU frazionaria/256 MiB; retry limitato a
+24 ore e immagini delle build eliminate dopo un giorno. Notifiche di risposta
+con nome chat e anteprima del testo. Restano firma release Android e sviluppo iOS.

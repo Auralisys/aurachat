@@ -1,0 +1,273 @@
+import 'dart:async';
+import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
+
+const firebaseOptions = FirebaseOptions(
+  apiKey: 'AIzaSyB-fMMzxv-83F3s-1uY0wtUk4SCv3QmT44',
+  appId: '1:840348621130:android:7b61fb11b72a72b25e09b3',
+  messagingSenderId: '840348621130',
+  projectId: 'auralisys-chat',
+);
+
+@pragma('vm:entry-point')
+Future<void> backgroundMessage(RemoteMessage message) async {
+  await Firebase.initializeApp(options: firebaseOptions);
+}
+
+String friendlyError(Object error) {
+  if (error is FirebaseException) {
+    return switch (error.code) {
+      'invalid-credential' ||
+      'wrong-password' ||
+      'user-not-found' => 'Email o password non corretta.',
+      'invalid-email' => 'Controlla l’indirizzo email.',
+      'too-many-requests' => 'Troppi tentativi. Attendi prima di riprovare.',
+      'network-request-failed' ||
+      'unavailable' => 'Connessione assente. Controlla la rete e riprova.',
+      'permission-denied' =>
+        'Accesso ai dati negato. Controlla le regole Firebase.',
+      _ => 'Operazione non riuscita (${error.code}). Riprova.',
+    };
+  }
+  return 'Operazione non riuscita. Riprova.';
+}
+
+bool deviceOnline(Map<String, dynamic> device, [int? now]) =>
+    device['remote_enabled'] == true &&
+    (now ?? DateTime.now().millisecondsSinceEpoch) -
+            ((device['last_seen'] as num?)?.toInt() ?? 0) <
+        45000;
+
+List<Map<String, dynamic>> chatIndex(Map<String, dynamic> tree) {
+  final chats = Map<String, dynamic>.from(tree['conversations'] ?? {});
+  final projects = Map<String, dynamic>.from(tree['projects'] ?? {});
+  return chats.entries.map((entry) {
+    final project = projects.entries
+        .where(
+          (p) => ((p.value as Map)['conversation_ids'] as List? ?? []).contains(
+            entry.key,
+          ),
+        )
+        .firstOrNull;
+    return <String, dynamic>{
+      ...Map<String, dynamic>.from(entry.value),
+      'id': entry.key,
+      'project_id': project?.key,
+      'project_name': (project?.value as Map?)?['name'],
+    };
+  }).toList()..sort(
+    (a, b) => ((b['updated_at'] as num?) ?? 0).compareTo(
+      (a['updated_at'] as num?) ?? 0,
+    ),
+  );
+}
+
+class Companion {
+  Companion(this.uid);
+  final String uid;
+  final db = FirebaseFirestore.instance;
+  DocumentReference<Map<String, dynamic>> get user =>
+      db.collection('users').doc(uid);
+  CollectionReference<Map<String, dynamic>> get devices =>
+      user.collection('devices');
+  Stream<DocumentSnapshot<Map<String, dynamic>>> get index =>
+      user.collection('companion').doc('state').snapshots();
+  Stream<QuerySnapshot<Map<String, dynamic>>> messages(String id) => user
+      .collection('conversations')
+      .doc(id)
+      .collection('messages')
+      .orderBy('sequence')
+      .snapshots();
+  CollectionReference<Map<String, dynamic>> requests(String device) =>
+      devices.doc(device).collection('requests');
+  Future<String> send(
+    String device,
+    String conversation,
+    String content, {
+    bool newConversation = false,
+    String? project,
+    String action = 'chat',
+    Map<String, dynamic> extra = const {},
+  }) async {
+    final request = requests(device).doc();
+    // A unique request is written once; ambiguous outcomes are never auto-replayed.
+    await request.set({
+      'conversation_id': conversation,
+      'content': content,
+      'new_conversation': newConversation,
+      'project_id': project,
+      'action': action,
+      'created_at': DateTime.now().millisecondsSinceEpoch,
+      'status': 'pending',
+      ...extra,
+    });
+    return request.id;
+  }
+
+  Future<List<Map<String, dynamic>>> decodeMessages(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) async {
+    final result = <Map<String, dynamic>>[];
+    for (final doc in docs) {
+      final value = doc.data();
+      if (value['chunked'] == true) {
+        final parts = await doc.reference
+            .collection('parts')
+            .orderBy(FieldPath.documentId)
+            .get();
+        if (parts.docs.length != value['part_count']) {
+          throw StateError('incomplete_message');
+        }
+        result.add(
+          Map<String, dynamic>.from(
+            jsonDecode(
+              parts.docs.map((p) => p.data()['data'] as String).join(),
+            ),
+          ),
+        );
+      } else {
+        result.add(value);
+      }
+    }
+    return result;
+  }
+}
+
+class PushNotifications {
+  final target = ValueNotifier<String?>(null);
+  final warning = ValueNotifier<String?>(null);
+  final local = FlutterLocalNotificationsPlugin();
+  final _subscriptions = <StreamSubscription<dynamic>>[];
+  String? _uid, _installation;
+  static const channel = AndroidNotificationChannel(
+    'aurachat_completion',
+    'Attività completate',
+    description: 'Risposte, agenti e operazioni del desktop',
+    importance: Importance.high,
+  );
+  Future<void> initialize() async {
+    await local.initialize(
+      settings: const InitializationSettings(
+        android: AndroidInitializationSettings('ic_notification'),
+      ),
+      onDidReceiveNotificationResponse: (response) =>
+          target.value = response.payload,
+    );
+    await local
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.createNotificationChannel(channel);
+    final launch = await local.getNotificationAppLaunchDetails();
+    if (launch?.didNotificationLaunchApp == true) {
+      target.value = launch?.notificationResponse?.payload;
+    }
+    FirebaseMessaging.onBackgroundMessage(backgroundMessage);
+    _subscriptions.add(
+      FirebaseMessaging.onMessage.listen((message) async {
+        if (_uid == null || message.data['uid'] != _uid) {
+          return;
+        }
+        final id =
+            message.data['event_id'] ?? message.messageId ?? const Uuid().v4();
+        await local.show(
+          id: id.hashCode & 0x7fffffff,
+          title: message.notification?.title ?? 'AuraChat',
+          body: message.notification?.body,
+          notificationDetails: const NotificationDetails(
+            android: AndroidNotificationDetails(
+              'aurachat_completion',
+              'Attività completate',
+              importance: Importance.high,
+              priority: Priority.high,
+            ),
+          ),
+          payload: message.data['conversation_id'],
+        );
+      }),
+    );
+    _subscriptions.add(
+      FirebaseMessaging.onMessageOpenedApp.listen((message) {
+        if (_uid != null && message.data['uid'] == _uid) {
+          target.value = message.data['conversation_id'];
+        }
+      }),
+    );
+    final initial = await FirebaseMessaging.instance.getInitialMessage();
+    if (initial != null) {
+      target.value = initial.data['conversation_id'];
+    }
+    _subscriptions.add(
+      FirebaseMessaging.instance.onRegistered.listen((fid) async {
+        try {
+          await _register(fid);
+        } catch (error) {
+          warning.value = friendlyError(error);
+        }
+      }),
+    );
+  }
+
+  Future<void> bind(String uid) async {
+    _uid = uid;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _installation = prefs.getString('installation_id') ?? const Uuid().v4();
+      await prefs.setString('installation_id', _installation!);
+      final permission = await FirebaseMessaging.instance.requestPermission();
+      if (permission.authorizationStatus == AuthorizationStatus.denied) {
+        warning.value =
+            'Notifiche disattivate. Abilitale nelle impostazioni Android di AuraChat.';
+        return;
+      }
+      await FirebaseMessaging.instance.register();
+      warning.value = null;
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('FCM registration failed: $error');
+      }
+      warning.value = 'Notifiche: ${friendlyError(error)}';
+    }
+  }
+
+  Future<void> _register(String fid) async {
+    final uid = _uid;
+    if (uid == null || _installation == null) {
+      return;
+    }
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('phones')
+        .doc(_installation)
+        .set({
+          'fid': fid,
+          'platform': 'android',
+          'updated_at': DateTime.now().millisecondsSinceEpoch,
+        });
+  }
+
+  Future<void> signOut() async {
+    final uid = _uid;
+    if (uid != null && _installation != null) {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('phones')
+          .doc(_installation)
+          .delete();
+    }
+    await FirebaseMessaging.instance.unregister();
+    await local.cancelAll();
+    _uid = null;
+    target.value = null;
+    await FirebaseAuth.instance.signOut();
+  }
+}

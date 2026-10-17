@@ -1457,6 +1457,32 @@ async function init() {
   setupComposerExtras();
   setupSidebarSections();
   await setupActivity();
+  await appWindow.listen('companion-started', async ({payload}) => {
+    const id = payload?.conversation_id;if (!id || state.runs.get(id)?.pending) return;
+    const run = {pending:true, external:true, since:Date.now(), messages:[], usage:null};
+    state.runs.set(id,run);
+    try {
+      state.data = await invoke('get_data');state.persistedData = structuredClone(state.data);
+      const saved = findConversation(id)?.conversation;
+      run.messages = [...(saved?.messages || []), {role:'user',content:payload.content,attachments:[]}];
+      if (state.activeConversationId === id) {state.messages=run.messages;startTimer();renderMessages();updateComposerControls();}
+      renderSidebar();
+    } catch (error) { showError(localizeError(error)); }
+  });
+  await appWindow.listen('companion-updated', async ({payload}) => {
+    const run = state.runs.get(payload?.conversation_id);
+    if (run?.external) {run.pending=false;await finishLiveTurn(run);}
+    if (state.preparing || [...state.runs.values()].some(run => run.pending && !run.external)) return;
+    try {
+      const data = await invoke('get_data');
+      state.data = data;state.persistedData = structuredClone(data);
+      const active = findConversation(state.activeConversationId)?.conversation;
+      if (active?.messages_loaded) { state.messages = active.messages;renderMessages();updateContextInfo(); }
+      if (run?.external) {run.messages=conversationInData(data,payload.conversation_id)?.messages || run.messages;stopTimer();}
+      if (run?.external && state.activeConversationId !== payload.conversation_id) state.unread.add(payload.conversation_id);
+      renderSidebar();updateComposerControls();
+    } catch (error) { showError(localizeError(error)); }
+  });
   await appWindow.listen('window-geometry-changed', () => {
     clearTimeout(windowSaveTimer);
     windowSaveTimer = setTimeout(saveWindowState, 1000);

@@ -70,6 +70,56 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 impl Firestore {
+    pub async fn companion_isolated(&self, auth: &FirestoreAuth) -> Result<bool, String> {
+        let token=self.id_token(auth).await?;
+        let response=self.http.get(doc_url(&auth.project_id,"users/aurachat-isolation-probe"))
+            .bearer_auth(token).send().await.map_err(|e|e.to_string())?;
+        // A missing foreign document must still be forbidden, never readable.
+        Ok(response.status().as_u16()==403)
+    }
+    pub async fn relay_put(&self, auth: &FirestoreAuth, path: &str, value: &Value, revision: Option<&str>) -> Result<(), String> {
+        let write = if let Some(revision) = revision { update_write(auth, path, value, Some(revision))? }
+            else { new_write(auth, path, value)? };
+        self.commit(auth, vec![write]).await.map(|_| ())
+    }
+
+    pub async fn relay_upsert(&self, auth: &FirestoreAuth, path: &str, value: &Value) -> Result<(), String> {
+        let token = self.id_token(auth).await?;
+        let fields = encode_value(value)?["mapValue"]["fields"].clone();
+        let response = self.http.patch(doc_url(&auth.project_id, path)).bearer_auth(token)
+            .json(&json!({"fields": fields})).send().await.map_err(|e| e.to_string())?;
+        response_json(response).await.map(|_| ())
+    }
+
+    pub async fn relay_revisioned(&self,auth:&FirestoreAuth,path:&str,value:&Value)->Result<(),String>{
+        for _ in 0..3 {
+            let current=self.get_document(auth,path,None).await?;
+            if let Some(doc)=&current {
+                if document_fields(doc)?.get("revision").and_then(Value::as_u64).unwrap_or(0)>=value["revision"].as_u64().ok_or("missing_snapshot_revision")? {return Ok(());}
+            }
+            let revision=current.as_ref().map(version).transpose()?;
+            match self.relay_put(auth,path,value,revision).await {
+                Ok(())=>return Ok(()),
+                Err(e) if e.contains("FAILED_PRECONDITION") || e.contains("ALREADY_EXISTS") || e.contains("ABORTED")=>continue,
+                Err(e)=>return Err(e),
+            }
+        }
+        Err("snapshot_conflict".into())
+    }
+
+    pub async fn relay_requests(&self, auth: &FirestoreAuth, path: &str, status: &str) -> Result<Vec<(String, String, Value)>, String> {
+        let token = self.id_token(auth).await?;
+        let url = format!("{}:runQuery", doc_url(&auth.project_id, path));
+        let response = self.http.post(url).bearer_auth(token).json(&json!({"structuredQuery": {
+            "from":[{"collectionId":"requests"}], "where":{"fieldFilter":{"field":{"fieldPath":"status"},"op":"EQUAL","value":{"stringValue":status}}},"limit":10
+        }})).send().await.map_err(|e|e.to_string())?;
+        let result = response_json(response).await?;
+        result.as_array().ok_or("invalid_relay_response")?.iter().filter_map(|row|row.get("document")).map(|doc| {
+            let name=doc["name"].as_str().ok_or("invalid_relay_name")?.split("/documents/").nth(1).ok_or("invalid_relay_path")?.to_string();
+            Ok((name,version(doc)?.to_string(),Value::Object(document_fields(doc)?)))
+        }).collect()
+    }
+
     pub fn logout(&self) {
         *self.token.lock().unwrap() = None;
         self.trees.lock().unwrap().clear();
@@ -281,6 +331,17 @@ impl Firestore {
     }
 
     pub fn cached_tree(&self,uid:&str)->Option<ChatData>{self.trees.lock().unwrap().get(uid).cloned()}
+
+    pub async fn refresh_tree_preserving_history(&self,uid:&str,auth:&FirestoreAuth,local:&ChatData)->Result<ChatData,String>{
+        let mut tree=self.load_tree(uid,auth).await?;
+        for source in local.conversations_all().filter(|c|c.messages_loaded) {
+            if let Some(target)=tree.find_conversation_mut(&source.id) {
+                target.messages=source.messages.clone();target.messages_loaded=true;target.revision=source.revision.clone();
+            }
+        }
+        self.trees.lock().unwrap().insert(uid.into(),tree.clone());
+        Ok(tree)
+    }
 
     async fn get_document(&self,auth:&FirestoreAuth,path:&str,mask:Option<&str>) -> Result<Option<Value>,String> {
         let token = self.id_token(auth).await?;
@@ -754,6 +815,39 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Real authenticated relay CRUD; AURACHAT_REMOTE_SMOKE=1 required"]
+    fn real_companion_claim() {
+        assert_eq!(std::env::var("AURACHAT_REMOTE_SMOKE").as_deref(),Ok("1"));
+        let dir=std::path::PathBuf::from(std::env::var_os("APPDATA").unwrap()).join("dev.aurachat.desktop");
+        let config=crate::config::AppConfig::load(&dir);
+        let auth=config.firestore_auth();let uid=config.uid.clone();assert!(!uid.is_empty());
+        tauri::async_runtime::block_on(async {
+            let client=Firestore::new();
+            let collection=format!("users/{uid}/devices/transport-smoke-{}/requests",crate::data::now_millis());
+            let parent=collection.strip_suffix("/requests").unwrap();
+            let path=format!("{collection}/fixture");
+            client.relay_put(&auth,&path,&json!({"status":"pending","content":"Transport fixture, never executed"}),None).await.unwrap();
+            let result=async {
+                let requests=client.relay_requests(&auth,parent,"pending").await?;
+                if requests.len()!=1{return Err("pending_query_failed".to_string());}
+                let (_,revision,mut request)=requests[0].clone();request["status"]=json!("running");
+                client.relay_put(&auth,&path,&request,Some(&revision)).await?;
+                if client.relay_put(&auth,&path,&request,Some(&revision)).await.is_ok(){return Err("duplicate_claim_allowed".into());}
+                if !client.relay_requests(&auth,parent,"pending").await?.is_empty(){return Err("claimed_request_still_pending".into());}
+                client.relay_revisioned(&auth,&path,&json!({"status":"approved","revision":2})).await?;
+                client.relay_revisioned(&auth,&path,&json!({"status":"pending","revision":1})).await?;
+                let latest=client.get_document(&auth,&path,None).await?.ok_or("missing_snapshot")?;
+                if document_fields(&latest)?["status"]!="approved" {return Err("stale_approval_reactivated".into());}
+                assert!(client.companion_isolated(&auth).await?, "Owner-only rules must reject a valid foreign document path with 403");
+                println!("Authenticated relay verified: pending query, atomic claim, duplicate rejection, owner isolation.");
+                Ok::<(),String>(())
+            }.await;
+            let cleanup=client.commit(&auth,vec![json!({"delete":document_name(&auth,&path)})]).await;
+            cleanup.expect("Remove only temporary relay fixture");result.unwrap();
+        });
+    }
+
+    #[test]
     #[ignore = "Explicit development database migration; AURACHAT_MIGRATE=1 required"]
     fn real_user_history_migration(){
         assert_eq!(std::env::var("AURACHAT_MIGRATE").as_deref(),Ok("1"));
@@ -824,6 +918,10 @@ mod tests {
                 check(!summary.messages_loaded && summary.messages.is_empty(),"lazy summary")?;
                 let loaded=client.load_conversation(&uid,&auth,&id).await?;
                 check(serde_json::to_value(&loaded.messages).map_err(|e|e.to_string())?==expected_messages,"messages and attachments")?;
+                let local=client.cached_tree(&uid).ok_or("missing_history_cache")?;
+                let refreshed=client.refresh_tree_preserving_history(&uid,&auth,&local).await?;
+                let retained=refreshed.find_conversation(&id).ok_or("missing_refreshed_chat")?;
+                check(retained.messages_loaded && serde_json::to_value(&retained.messages).map_err(|e|e.to_string())?==expected_messages,"companion refresh preserves loaded history")?;
 
                 let stale=Firestore::new();let mut stale_tree=stale.load_tree(&uid,&auth).await?;
                 let stale_conversation=stale.load_conversation(&uid,&auth,&id).await?;

@@ -31,9 +31,12 @@ JSON stringificato resta leggibile; il database di sviluppo e stato migrato
 il 17 ottobre 2026, con backup locale e rimozione di `data/tree`. Le regole remote
 vanno limitate al proprietario UID dalla console (vedi vault).
 
-## Cosa NON fa (scope 3–4, non ancora implementati)
+## Companion e servizi esterni
 
-Pairing (codice/QR), relay e push FCM. Le chat di progetto possono leggere, creare e modificare file ed eseguire comandi attraverso i permessi locali descritti sotto.
+Il companion usa ora lo stesso account email/password, senza pairing codice/QR.
+Relay e notifiche sono implementati; l'attivazione remota richiede le regole
+Firestore limitate al proprietario e il deploy della funzione FCM su Blaze.
+Vedi la sezione finale e `../mobile/README.md` per lo stato delle verifiche.
 
 ## Struttura
 
@@ -438,3 +441,52 @@ Il test reale locale esegue preparazione e due trascrizioni consecutive. Con il 
 Il selettore mostra il logo bianco del provider prima del modello quando disponibile
 (DeepSeek); altrimenti usa “Provider · modello”. Le etichette accessibili includono
 sempre il nome del provider.
+
+## Companion e notifiche (17 ottobre 2026)
+
+`../mobile/` contiene il client Flutter Android con accesso allo stesso account,
+nome Windows del PC, chat/progetti, modelli, stop e approvazioni. Il gateway
+pubblica presenza e albero pubblico senza credenziali provider, prende in carico
+richieste tramite revisione Firestore e non riesegue i turni dopo un riavvio.
+Le richieste scadono dopo cinque minuti. I turni avviati dal telefono vengono
+mostrati anche nella UI desktop; la cronologia caricata di altre chat viene
+preservata durante l'aggiornamento dell'albero remoto.
+
+Le notifiche di completamento nascono nel backend Rust: funzionano anche se il
+webview è nascosto, senza dipendere dal rendering della chat. Coprono risposte,
+agenti, shell, strumenti, trascrizioni e download voce. Gli eventi Firestore sono
+inoltrati a FCM da `../functions/completionPush`. Le approvazioni in attesa
+producono una notifica con apertura della conversazione sul telefono.
+
+Stato esterno: regole limitate al proprietario pubblicate dall'utente e isolamento
+verificato con 403 su un percorso valido di un altro UID. Il gateway disabilita
+il controllo remoto se manca l'isolamento. Blaze è stato abilitato dall'utente
+per distribuire la Cloud Function. Dettagli in
+`../mobile/README.md`; nessuna regola o indice viene distribuito dal repository.
+
+Verifiche: 37 test Rust locali; test UI auth/chat/background; CRUD reale della
+cronologia con conservazione di config/window/albero originale, inclusa la
+preservazione della cronologia durante refresh; trasporto reale Firestore con
+claim atomico e duplicato rifiutato. Il login Android è stato poi verificato, insieme a push reali in background e dopo
+chiusura del processo, apertura della chat da push e notifica Windows nella
+cronologia di sistema. Il giro completo Android/Firestore/Windows/modello/Android
+è riuscito con la risposta di verifica `ANDROID_REMOTE_OK_20261017_2348`.
+
+Le notifiche Windows richiedono l'app installata (limite del plugin Tauri), non
+il solo eseguibile di sviluppo. Con una build debug installata, il test reale
+opt-in `AURACHAT_NOTIFICATION_SMOKE=1` invia una notifica di prova dopo cinque
+secondi e pubblica il corrispondente evento Firestore. Il hook non è compilato
+nelle build release.
+
+
+Verifica installer Windows: spostata la risoluzione di MAINBINARYSRCPATH dentro
+NSIS_HOOK_POSTINSTALL, dopo le definizioni di Tauri. Prima veniva incorporato
+l'eseguibile come DirectML.dll e l'app installata falliva con 0xc000007b.
+DLL installata verificata per hash e avvio reale riuscito. Il gateway usa una
+sola istanza e conserva su disco le notifiche ancora da pubblicare per ogni UID.
+
+Cloud Function `completionPush` attiva dal 18 ottobre 2026 in europe-west3.
+Invio automatico verificato con HTTP 204 e pubblicazione su Android. Nessuna
+istanza sempre accesa; 256 MiB/CPU frazionaria, max 3 istanze e build eliminate
+dopo un giorno. Le notifiche di fine risposta mostrano titolo della chat e primi
+200 caratteri della risposta, uguali su Windows e telefono.

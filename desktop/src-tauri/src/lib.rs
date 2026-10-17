@@ -11,6 +11,7 @@ mod permissions;
 mod approvals;
 mod agent_runs;
 mod chat_runs;
+mod companion;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -46,6 +47,7 @@ pub struct AppState {
     window_restoring: AtomicBool,
     window_save_lock: tauri::async_runtime::Mutex<()>,
     history_save_lock: tauri::async_runtime::Mutex<()>,
+    account_lock: tauri::async_runtime::Mutex<()>,
     running_chats: Mutex<std::collections::HashSet<String>>,
     chat_runs: chat_runs::ChatRuns,
 }
@@ -69,6 +71,7 @@ fn speech_model_status(state: tauri::State<'_, AppState>) -> speech::ModelStatus
 async fn download_speech_model(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<speech::ModelStatus, String> {
     let result = state.speech.download(|status| { let _ = app.emit("speech-model-progress", status); }).await;
     let _ = app.emit("speech-model-progress", state.speech.status());
+    companion::notify(&app,"speech-download",&data::now_millis().to_string(),"","Modello vocale",if result.is_ok(){"Il download è terminato."}else{"Il download non è stato completato."});
     result
 }
 #[tauri::command]
@@ -87,9 +90,11 @@ async fn prepare_speech_model(app: tauri::AppHandle, state: tauri::State<'_, App
     result
 }
 #[tauri::command]
-async fn transcribe_audio(state: tauri::State<'_, AppState>, samples: Vec<f32>, language: String) -> Result<String, String> {
+async fn transcribe_audio(app: tauri::AppHandle, state: tauri::State<'_, AppState>, samples: Vec<f32>, language: String) -> Result<String, String> {
     let speech = state.speech.clone();
-    tauri::async_runtime::spawn_blocking(move || speech.transcribe(samples, language)).await.map_err(|e| e.to_string())?
+    let result=tauri::async_runtime::spawn_blocking(move || speech.transcribe(samples, language)).await.map_err(|e| e.to_string())?;
+    companion::notify(&app,"transcription",&data::now_millis().to_string(),"","Trascrizione terminata",if result.is_ok(){"Il testo dettato è pronto."}else{"La trascrizione non è riuscita."});
+    result
 }
 
 fn clean(s: &str) -> String {
@@ -175,6 +180,8 @@ fn get_local_config(state: tauri::State<'_, AppState>) -> PublicConfig {
 
 #[tauri::command]
 async fn login(state: tauri::State<'_, AppState>, email: String, password: String) -> Result<PublicConfig, String> {
+    let _account=state.account_lock.lock().await;
+    if !state.running_chats.lock().unwrap().is_empty() { return Err("account_busy".into()); }
     let mut candidate = state.config.lock().unwrap().clone();
     candidate.firebase_email = clean(&email);
     candidate.firebase_password = password;
@@ -191,7 +198,7 @@ async fn login(state: tauri::State<'_, AppState>, email: String, password: Strin
     *state.user.lock().unwrap() = None;
     *state.data.lock().unwrap() = ChatData::default();
     state.data_loaded.store(false, Ordering::SeqCst);
-    get_config(state).await
+    get_config(state.clone()).await
 }
 
 #[tauri::command]
@@ -291,7 +298,8 @@ async fn remove_provider(state: tauri::State<'_, AppState>, id: String) -> Resul
 }
 
 #[tauri::command]
-fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _account=state.account_lock.lock().await;
     if !state.running_chats.lock().unwrap().is_empty() { return Err("account_busy".into()); }
     let mut cfg = state.config.lock().unwrap().clone();
     cfg.firebase_email.clear();
@@ -417,6 +425,44 @@ async fn chat(
     retry: Option<bool>,
     edit_index: Option<usize>,
 ) -> Result<ChatResponse, String> {
+    run_chat(app,state,conversation_id,content,attachments,retry,edit_index,None).await
+}
+
+async fn run_chat(
+    app:tauri::AppHandle, state:tauri::State<'_,AppState>,conversation_id:String,content:String,
+    attachments:Option<Vec<Attachment>>,retry:Option<bool>,edit_index:Option<usize>,expected_owner:Option<String>,
+) -> Result<ChatResponse,String> {
+    let notification_owner=state.config.lock().unwrap().uid.clone();
+    let event_id=format!("{}-{}",conversation_id,data::now_millis());
+    let result=chat_inner(app.clone(),state.clone(),conversation_id.clone(),content,attachments,retry,edit_index,expected_owner).await;
+    let (title,body)=match &result {
+        Ok(reply) if reply.cancelled => ("Risposta interrotta", "La risposta parziale è stata salvata."),
+        Ok(_) => ("Risposta pronta", "AuraChat ha terminato la risposta."),
+        Err(_) => ("Chat terminata con errore", "Apri AuraChat per controllare il problema."),
+    };
+    if state.firestore.uid().as_deref()==Some(notification_owner.as_str()) {
+        let chat_title=state.data.lock().unwrap().find_conversation(&conversation_id)
+            .map(|chat|chat.title.clone()).filter(|name|!name.trim().is_empty()).unwrap_or_else(||title.into());
+        let preview=match &result {
+            Ok(reply) if !reply.content.trim().is_empty()=>companion::notification_preview(&reply.content,200),
+            _=>body.into(),
+        };
+        companion::notify(&app,"chat",&event_id,&conversation_id,&companion::notification_preview(&chat_title,100),&preview);
+    }
+    result
+}
+
+async fn chat_inner(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    conversation_id: String,
+    content: String,
+    attachments: Option<Vec<Attachment>>,
+    retry: Option<bool>,
+    edit_index: Option<usize>,
+    expected_owner: Option<String>,
+) -> Result<ChatResponse, String> {
+    let account=state.account_lock.lock().await;
     if !state.running_chats.lock().unwrap().insert(conversation_id.clone()) { return Err("chat_in_progress".into()); }
     let _run = ConversationRun {active:&state.running_chats, id:conversation_id.clone()};
     let content = clean(&content);
@@ -429,6 +475,8 @@ async fn chat(
 
     let auth = firebase_auth(&state)?;
     let uid = ensure_uid(&state, &auth).await?;
+    if expected_owner.as_ref().is_some_and(|expected|expected!=&uid) {return Err("login_required".into());}
+    drop(account);
     let user = load_user_cached(&state, &auth, &uid).await?;
     // Registra il turno prima della richiesta, per poterlo fermare dallo stop.
     let (_turn, stop) = chat_runs::Turn::start(&state.chat_runs, &uid, &conversation_id);
@@ -787,11 +835,15 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app,_,_| {
+            if let Some(window)=app.get_webview_window("main") {let _=window.show();let _=window.set_focus();}
+        }))
         .manage(std::sync::Arc::new(managed_shells::Shells::default()))
         .manage(approvals::Approvals::default())
         .manage(agent_runs::AgentRuns::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let config = AppConfig::load(&config_dir);
@@ -813,6 +865,7 @@ pub fn run() {
                 window_restoring: AtomicBool::new(false),
                 window_save_lock: tauri::async_runtime::Mutex::new(()),
                 history_save_lock: tauri::async_runtime::Mutex::new(()),
+                account_lock: tauri::async_runtime::Mutex::new(()),
                 running_chats: Mutex::new(std::collections::HashSet::new()),
                 chat_runs: chat_runs::ChatRuns::default(),
             });
@@ -822,6 +875,7 @@ pub fn run() {
             }
 
             setup_tray(app)?;
+            companion::start(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -1,3 +1,4 @@
+param([string[]]$TestArguments = @())
 $ErrorActionPreference = 'Stop'
 $auraManifest = Join-Path $PSScriptRoot '../src-tauri/Cargo.toml'
 $auraExecutables = @()
@@ -19,6 +20,6 @@ foreach ($auraExecutable in $auraExecutables) {
     # Tauri embeds the app manifest in the app binary; lib test runners need their own Common Controls v6 activation.
     & $auraManifestTool -nologo -manifest (Join-Path $PSScriptRoot 'windows-test.manifest') "-outputresource:$auraExecutable;#1"
     if ($LASTEXITCODE -ne 0) { throw 'Could not embed the native test manifest' }
-    & $auraExecutable
+    & $auraExecutable @TestArguments
     if ($LASTEXITCODE -ne 0) { throw 'Native tests failed' }
 }

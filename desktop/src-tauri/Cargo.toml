@@ -21,6 +21,8 @@ tauri-plugin-opener = "2"
 transcribe-rs = { version = "=0.3.12", default-features = false, features = ["onnx"] }
 sha2 = "0.10"
 ort = "=2.0.0-rc.12"
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
 
 # Model verification hashes 2 GB; keep SHA-256 fast in desktop dev builds too.
 [profile.dev.package.sha2]

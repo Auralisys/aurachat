@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "840348621130",
+    "project_id": "auralisys-chat",
+    "storage_bucket": "auralisys-chat.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:840348621130:android:7b61fb11b72a72b25e09b3",
+        "android_client_info": {
+          "package_name": "dev.aurachat.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB-fMMzxv-83F3s-1uY0wtUk4SCv3QmT44"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

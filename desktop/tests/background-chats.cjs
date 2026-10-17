@@ -60,5 +60,16 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   assert.equal(await page.locator('#messages .msg--error').count(),0);
   await row('a').locator('.tree-conv__title').click();await page.locator('.msg--error').waitFor();assert.match(await page.locator('.msg--error').innerText(),/Background failure/);
   assert.equal(await row('a').locator('.tree-conv__unread').count(),0);
-  assert.deepEqual(errors,[]);await browser.close();console.log('PASS: concurrent chats, navigation/new chat during requests, background failures, unread completion dots, preserved drafts/focus, isolated results and no header loader.');
+  await page.evaluate(async()=>{await window.__events['companion-started']({payload:{conversation_id:'b',content:'Richiesta Android'}});});
+  await row('b').locator('.tree-conv__spinner').waitFor();
+  await page.evaluate(async()=>{
+    const conv=window.__data.conversations.find(c=>c.id==='b');
+    Object.assign(conv,{messages_loaded:true,messages:[{role:'user',content:'Richiesta Android'},{role:'assistant',content:'Risposta remota verificata'}]});
+    await window.__events['companion-updated']({payload:{conversation_id:'b'}});
+  });
+  await row('b').locator('.tree-conv__unread').waitFor();
+  assert.equal(await row('b').locator('.tree-conv__spinner').count(),0);
+  await row('b').locator('.tree-conv__title').click();
+  assert.match(await page.locator('#messages').innerText(),/Risposta remota verificata/);
+  assert.deepEqual(errors,[]);await browser.close();console.log('PASS: concurrent chats, background failures, drafts/focus, and remote Android activity/completion reconciliation.');
 })().catch(e=>{console.error(e);process.exit(1);});

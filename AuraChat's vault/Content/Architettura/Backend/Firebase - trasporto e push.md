@@ -189,3 +189,31 @@ console anche per le nuove subcollection. Le operazioni sopra 450 scritture o
 Fonti: [limiti Firestore](https://firebase.google.com/docs/firestore/quotas),
 [struttura dei dati](https://firebase.google.com/docs/firestore/manage-data/structure-data),
 [commit REST](https://firebase.google.com/docs/firestore/reference/rest/v1/projects.databases.documents/commit).
+
+## Implementazione companion e notifiche — 17 ottobre 2026
+
+Il codice del relay autenticato è ora presente nel desktop e in `mobile/`.
+Le decisioni attuali sostituiscono il pairing senza account: stessa email/password,
+PC riconoscibile dal nome Windows. `users/{uid}/companion/state` espone al telefono
+soltanto l'albero, senza `config`; gli eventi di completamento si trovano in
+`users/{uid}/notifications/{id}`. FID dei telefoni in `users/{uid}/phones/{id}`.
+La funzione di invio è pronta ma non distribuita: billing Firebase attualmente
+non abilitato. Le regole effettivamente lette via API sono ancora quelle globali
+per qualsiasi utente autenticato. La pubblicazione della sostituzione per UID è
+stata rifiutata dalla revisione automatica, senza dettagli oltre blocked by policy.
+Non sono state pubblicate regole o indici. Il gateway tiene spento il controllo
+remoto finché il controllo diagnostico sull'accesso a un altro UID non viene negato.
+
+## Notifiche attivate — 18 ottobre 2026
+
+L'utente ha pubblicato le regole proprietario e abilitato Blaze. Isolamento
+verificato con 403 su un percorso valido di un altro UID; corretto il probe del
+gateway che usava un ID riservato. Collegamento Android/PC/modello provato.
+Cloud Function `completionPush` ACTIVE in europe-west3, Node 22: invii automatici
+verificati con HTTP 204 e notifiche Android pubblicate, oltre alle notifiche
+Windows nella cronologia del sistema. Il client desktop invia soltanto eventi
+FireStore autenticati; nessuna credenziale amministrativa viene distribuita.
+Risorse: 256 MiB, CPU gcf_gen1, min 0/max 3 istanze, concorrenza 1, timeout 60 s.
+Retry degli errori fino a 24 ore; documenti non validi ignorati. Vecchie immagini
+Artifact Registry eliminate dopo un giorno. Titolo della notifica di risposta:
+nome della chat; testo: inizio della risposta, massimo 200 caratteri con ellissi.
