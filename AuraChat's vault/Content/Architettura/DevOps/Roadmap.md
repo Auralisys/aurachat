@@ -166,3 +166,23 @@ reale Android/PC/modello e push automatiche provati; notifiche Windows verificat
 Funzione senza istanze minime, max 3, CPU frazionaria/256 MiB; retry limitato a
 24 ore e immagini delle build eliminate dopo un giorno. Notifiche di risposta
 con nome chat e anteprima del testo. Restano firma release Android e sviluppo iOS.
+
+## Notifiche selettive, turni live e iOS — 18 ottobre 2026
+
+Le push non arrivano più per ogni attività: un solo esito per turno di chat,
+richieste di approvazione e operazioni esplicite (trascrizione, download voce).
+Tool, sub-agenti e comandi intermedi restano nell'app. La notifica di fine turno
+è soppressa se la chat conclusa è aperta nella finestra desktop a fuoco.
+
+Il telefono vede ora il turno in corso tramite
+`users/{uid}/devices/{device}/live_turns/{conversation_id}`: testo parziale,
+reasoning e attività/agenti, con loader nella lista chat e stop anche per i turni
+avviati dal desktop. Dettagli su cadenza, `turn_id`, limiti e retention in
+[[Desktop gateway - Tauri]], [[Companion mobile - Flutter]] e
+[[Firebase - trasporto e push]].
+
+iOS: creata via CLI l'app Firebase `com.ridney.aurachat` e aggiunto
+`GoogleService-Info.plist` al target Runner; corretto il crash immediato dovuto
+all'appId Android usato su iOS. Restano chiave APNs, capability Push e verifica
+su dispositivo reale. Per provare modifiche al gateway va ricompilato e
+riavviato il desktop, non solo l'app mobile.

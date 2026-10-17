@@ -23,8 +23,10 @@ sidebar interna. Sono implementati lettura delle root di progetto tramite tool,
 dettatura locale Cohere e cronologia Firestore v2 separata dal tree utente.
 Scrittura file, comandi, tre modalità di permesso e sub-agenti cancellabili
 sono implementati; i comandi usano l'account Windows senza sandbox OS.
-Mobile, relay/pairing e push restano da implementare. Stato UI e verifiche:
-[[UI desktop - Refactor flat]]; stato operativo: [[Desktop gateway - Tauri]].
+Mobile Android, relay e push sono operativi; i turni in corso sono visibili sul
+telefono. iOS è configurato (app Firebase e plist) ma attende chiave APNs e
+verifica su macOS. Stato UI e verifiche: [[UI desktop - Refactor flat]]; stato
+operativo: [[Desktop gateway - Tauri]].
 
 **Architettura** — [[Architettura - Overview]] è il punto di ingresso tecnico.
 Da lì si diramano le note su client (desktop + mobile) e trasporto/push.

@@ -16,14 +16,26 @@ remota pendente: il 17 ottobre 2026 il vecchio albero e stato assegnato
 all'unico account verificato e `data/tree` eliminato, con backup locale.
 Le vecchie configurazioni stringificate vengono lette e convertite al salvataggio.
 
-Le regole note consentono accesso a qualsiasi utente autenticato: il cambio di
-percorso nel client non sostituisce le regole. La console deve limitare
-`users/{uid}` a `request.auth.uid == uid`, rimuovendo la regola globale.
-Regole e indici restano gestiti manualmente, vedi [[Firebase - trasporto e push]].
+Le regole proprietario sono state pubblicate il 17 ottobre 2026 e verificate con
+403 su un percorso valido di un altro UID; la regola globale permissiva è stata
+rimossa. Regole e indici restano gestiti manualmente in console, vedi
+[[Firebase - trasporto e push]].
 La cronologia è stata separata dal documento utente: tree leggero nel parent,
 conversazioni e messaggi nelle subcollection per UID. Il limite del parent resta
 1 MiB, ma i testi e gli allegati non lo occupano più. Migrazione e verifica CRUD
 remota completate; dettagli in [[Firebase - trasporto e push]].
+
+## iOS e turni live — 18 ottobre 2026
+
+iOS non è ancora verificato su dispositivo reale. L'app Firebase con bundle
+`com.ridney.aurachat` e `GoogleService-Info.plist` sono pronti; mancano chiave
+APNs, abilitazione Push Notifications sull'App ID e build su macOS. Un appId
+Android usato su iOS aveva causato la chiusura immediata (`invalid GOOGLE_APP_ID`).
+
+Per i turni live, un arresto del desktop lascia il documento `live_turns` in
+stato `running`; il telefono lo ignora dopo 20 secondi, quindi non resta un
+loader permanente. I documenti terminali vengono eliminati dal desktop dopo
+60 secondi. La scrittura è troncata per rispettare il limite Firestore.
 
 ## Copertura delle verifiche UI
 

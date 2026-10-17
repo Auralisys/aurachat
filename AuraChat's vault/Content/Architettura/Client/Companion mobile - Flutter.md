@@ -14,23 +14,31 @@ Il gateway prende in carico una richiesta con precondizione di revisione; non
 riesegue una richiesta interrotta da un riavvio. Le richieste scadono dopo cinque
 minuti. La presenza è aggiornata ogni 15 secondi e scade sul telefono dopo 45.
 
-Notifiche native Windows ed eventi di completamento implementati per chat,
-agenti, shell, strumenti, trascrizioni e download del modello vocale. La funzione
-`functions/completionPush` inoltra gli eventi a FCM per il telefono anche in
-background. Il tap apre la conversazione; si notificano anche le approvazioni.
+Notifiche selettive: un solo esito per turno di chat (risposta pronta, errore o
+interruzione), richieste di approvazione e operazioni esplicite dell'utente
+(trascrizione, download del modello vocale). Tool, sub-agenti e comandi intermedi
+non generano push. La funzione `functions/completionPush` inoltra gli eventi a
+FCM anche in background; il tap apre la conversazione. La notifica di fine turno
+viene omessa quando la chat conclusa è aperta nella finestra desktop a fuoco.
+
+Durante un turno il telefono segue `live_turns`: mostra il testo assistant in
+streaming, **Ragionamento** e **Attività** espansi con etichette italiane,
+path degli strumenti e comando eseguito, oltre al passo corrente nel loader. La
+lista chat mostra un indicatore sulle conversazioni in corso, anche per i turni
+avviati dal desktop, e lo stop dal telefono interrompe lo stesso turno registrato
+in `chat_runs`. A turno concluso contano i messaggi salvati nella cronologia.
 
 Stato verificato: APK Android compilato/installato, analisi e test locali passati;
-trasporto Firestore reale verificato per query, claim atomico e duplicato rifiutato.
-Il login Android è ora verificato. Il controllo
-remoto è bloccato dalle attuali regole permissive, da aggiornare manualmente in
-console; la revisione automatica ha rifiutato la pubblicazione da parte dell'agente.
-Il progetto non ha ancora billing abilitato: la Cloud Function richiede Blaze.
+trasporto Firestore reale verificato per query, claim atomico e duplicato
+rifiutato. Login reale e giro completo Android → PC → modello → Android riusciti.
+Regole proprietario pubblicate e controllo remoto attivo; Blaze abilitato e
+`completionPush` distribuita in europe-west3.
 
-Dettagli operativi, schema e comandi: `mobile/README.md`. Nessuna build iOS pronta:
-la cartella iOS è uno scaffold, da configurare e verificare su macOS. Interfaccia
-mobile italiana; il testo parziale, il reasoning e le attività sono trasmessi dal
-desktop tramite `live_turns` e le chat in corso mostrano un loader. La persistenza
-offline non è implementata.
+Dettagli operativi, schema e comandi: `mobile/README.md`. iOS: app Firebase
+registrata con bundle ID `com.ridney.aurachat` e `GoogleService-Info.plist` nel
+target Runner; restano da caricare la chiave APNs, abilitare Push Notifications
+e verificare la build su macOS con un dispositivo reale. Interfaccia mobile
+italiana; la persistenza offline non è implementata.
 
 
 Prove successive riuscite: login reale e ripristino sessione Android, presenza del

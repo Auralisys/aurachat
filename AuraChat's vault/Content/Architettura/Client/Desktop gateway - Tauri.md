@@ -18,7 +18,8 @@ Il processo resta attivo nel tray; il frontend statico comunica con Rust via IPC
 - ascoltare Firestore per i prompt in arrivo dal telefono e scrivere le risposte;
 - accettare dal telefono comandi di cambio endpoint/modello (la key resta
   locale);
-- mostrare un **codice/QR di pairing** per associare il telefono;
+- associare il telefono con lo stesso account email/password; il pairing con
+  codice/QR del piano iniziale è stato sostituito;
 - stare nel system tray e girare in background.
 
 ## Vincoli
@@ -66,6 +67,28 @@ reali escluse dalla suite predefinita; 13 suite UI passate con servizi nativi
 simulati. Test HTTP dei sub-agenti con provider locale e file reali;
 test shell con processi reali. Account/provider esterni, microfono fisico
 e dialoghi WebView non verificati nuovamente in questa sessione.
+
+## Turni live e notifiche selettive — 18 ottobre 2026
+
+`run_chat` emette `live-turn` con `turn_id` all'avvio e alla fine di ogni turno,
+anche per le richieste che arrivano dal telefono. In `companion.rs` tre listener
+(`live-turn`, `chat-progress`, `agent-activity`) alimentano uno stato per
+conversazione; un task ogni secondo pubblica con `relay_upsert`
+`users/{uid}/devices/{device}/live_turns/{conversation_id}` con testo parziale,
+reasoning, activity, `user_content` e timestamp. Scritture coalescenti
+(~1/s), heartbeat ogni 5 s, campi e lista attività troncati, eliminazione dei
+documenti terminali dopo 60 s. Un `turn_id` diverso non può sovrascrivere o
+chiudere il turno realmente in corso; gli stati con UID sconosciuto vengono
+pubblicati sotto la sessione corrente. Il percorso è separato da
+`conversations/{id}` per non interferire con le precondizioni di versione.
+
+Il backend conosce la chat aperta tramite il comando `set_viewing_chat`, chiamato
+da `openConversation`/`clearChat`. La notifica di fine turno (toast Windows e
+push FCM) viene soppressa solo se quella chat è aperta **e** la finestra
+principale è a fuoco; tray, minimizzata, finestra non a fuoco o altra chat
+notificano normalmente. Le richieste di approvazione non vengono mai soppresse.
+`logout` azzera la chat osservata. Test Rust puro su `viewing_match` e sul
+reducer live.
 
 ## Decisioni (17 ottobre 2026)
 

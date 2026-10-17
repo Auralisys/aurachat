@@ -17,13 +17,13 @@ decisione presa (vedi [[Roadmap]]).
 - [[Client - Overview]] — le due app e le convenzioni comuni.
 - [[Desktop gateway - Tauri]] — l'app Tauri/Rust: key, endpoint configurabile,
   chiamata al LLM, tray, ascolto Firestore.
-- [[Companion mobile - Flutter]] — l'app Flutter: chat, pairing, invio prompt,
-  ricezione risposta e push.
+- [[Companion mobile - Flutter]] — l'app Flutter: chat con login condiviso,
+  invio prompt, turni live, risposte e push.
 
 ## Design
 
 - [[UIUX - Overview]] — direzione visiva unica (smooth, minimale,
-  ChatGPT/Copilot), pairing, onboarding dell'inferenza e token.
+  ChatGPT/Copilot), onboarding dell'inferenza e token.
 
 ## Trasporto e push
 

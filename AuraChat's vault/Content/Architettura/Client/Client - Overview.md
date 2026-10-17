@@ -11,8 +11,8 @@ Due app in due cartelle affiancate al vault, dentro
 
 - `desktop/` — **gateway Tauri/Rust**. Possiede la API key, chiama il LLM, sta
   nel tray, ascolta Firestore.
-- `mobile/` — **companion Flutter** (Android/iOS). Chat, pairing, invia i prompt
-  via Firestore, riceve risposte e push.
+- `mobile/` — **companion Flutter** (Android/iOS). Chat con login condiviso,
+  invia i prompt via Firestore, segue i turni live e riceve risposte e push.
 
 Nessuna delle due parla direttamente con l'altra: comunicano **solo** tramite
 Firestore (vedi [[Firebase - trasporto e push]]). È questo il vincolo che
