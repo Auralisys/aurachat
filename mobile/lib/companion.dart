@@ -149,7 +149,7 @@ class PushNotifications {
   static const channel = AndroidNotificationChannel(
     'aurachat_completion',
     'Attività completate',
-    description: 'Risposte, agenti e operazioni del desktop',
+    description: 'Risposte e richieste di approvazione',
     importance: Importance.high,
   );
   Future<void> initialize() async {

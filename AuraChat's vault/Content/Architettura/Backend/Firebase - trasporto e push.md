@@ -217,3 +217,12 @@ Risorse: 256 MiB, CPU gcf_gen1, min 0/max 3 istanze, concorrenza 1, timeout 60 s
 Retry degli errori fino a 24 ore; documenti non validi ignorati. Vecchie immagini
 Artifact Registry eliminate dopo un giorno. Titolo della notifica di risposta:
 nome della chat; testo: inizio della risposta, massimo 200 caratteri con ellissi.
+
+## Notifiche solo quando servono — 18 ottobre 2026
+
+I completamenti intermedi (chiamate ai tool, sub-agenti, comandi shell) non
+generano più push: restano visibili nell'app desktop. Vengono inviate soltanto:
+una notifica a fine turno di chat (risposta pronta, errore bloccante o
+interruzione), la richiesta di approvazione quando serve una decisione umana, e
+le operazioni esplicite dell'utente (download del modello vocale, trascrizione).
+La stessa regola vale per il banner Windows e per FCM.

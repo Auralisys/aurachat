@@ -3,7 +3,7 @@
 use crate::{AppState, config::FirestoreAuth, data::{self, Conversation}};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::HashSet, sync::Mutex, time::Duration};
+use std::time::Duration;
 use tauri::{Emitter, Listener, Manager};
 use tauri_plugin_notification::NotificationExt;
 
@@ -64,8 +64,6 @@ pub fn notify(app: &tauri::AppHandle, kind: &str, id: &str, conversation: &str, 
     });
 }
 
-fn terminal(status: &str) -> bool {matches!(status,"completed"|"failed"|"cancelled"|"exited"|"stopped")}
-
 pub fn start(app: &tauri::AppHandle) {
     let process_started=data::now_millis();
     #[cfg(debug_assertions)]
@@ -93,27 +91,9 @@ pub fn start(app: &tauri::AppHandle) {
             }
         });
     });
-    let seen=std::sync::Arc::new(Mutex::new(HashSet::new()));
-    for channel in ["agent-activity","shell-activity","chat-progress","speech-model-progress"] {
-        let app=app.clone();let handle=app.clone();let seen=seen.clone();
-        app.listen(channel,move |event| {
-            let Ok(mut value)=serde_json::from_str::<Value>(event.payload()) else{return};
-            if channel=="chat-progress" {
-                if value["kind"]!="__activity" {return;}
-                let conversation=value["conversation_id"].clone();
-                value=match serde_json::from_str(value["text"].as_str().unwrap_or("")){Ok(v)=>v,Err(_)=>return};
-                value["conversation_id"]=conversation;
-            }
-            let status=value["status"].as_str().unwrap_or("");
-            if !terminal(status) {return;}
-            let id=value["id"].as_str().unwrap_or("");if id.is_empty(){return;}
-            let key=format!("{channel}/{id}/{status}");
-            {let mut seen=seen.lock().unwrap();if !seen.insert(key.clone()){return;}if seen.len()>4096{seen.clear();seen.insert(key);}}
-            let label=match channel {"agent-activity"=>"Agente terminato","shell-activity"=>"Comando terminato",_=>"Attività terminata"};
-            let body=if status=="failed" {"L’attività si è conclusa con un errore."} else if matches!(status,"cancelled"|"stopped") {"L’attività è stata interrotta."} else {"L’attività è stata completata."};
-            notify(&handle,channel,&format!("{process_started}/{id}"),value["conversation_id"].as_str().unwrap_or(""),label,body);
-        });
-    }
+    // Intermediate work (tools, subagents, shell commands) stays in the app.
+    // Only events that need the user are pushed: approval requests here, plus
+    // one notification per chat turn and blocking errors from run_chat.
     let heartbeat=app.clone();
     tauri::async_runtime::spawn(async move {
         loop {
@@ -280,5 +260,5 @@ fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,Strin
         assert_eq!(notification_preview("Ciao 🌍!", 6), "Ciao 🌍…");
         assert_eq!(notification_preview("Breve", 200), "Breve");
     }
-    #[test]fn identity_and_terminal_states(){let (id,name)=identity();assert!(data::valid_id(&id).is_ok());assert!(!name.is_empty());assert_eq!(identity().0,id);assert!(terminal("failed"));assert!(!terminal("running"));assert!(!terminal("pending"));}
+    #[test]fn identity_stays_stable(){let (id,name)=identity();assert!(data::valid_id(&id).is_ok());assert!(!name.is_empty());assert_eq!(identity().0,id);}
 }
