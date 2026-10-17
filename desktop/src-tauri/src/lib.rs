@@ -7,6 +7,9 @@ mod window_state;
 mod speech;
 mod project_files;
 mod managed_shells;
+mod permissions;
+mod approvals;
+mod agent_runs;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,6 +39,7 @@ pub struct AppState {
     client: reqwest::Client,
     quitting: AtomicBool,
     folder_access: Mutex<FolderAccess>,
+    permissions: Mutex<permissions::Permissions>,
     window_geometry: Mutex<Option<WindowGeometry>>,
     window_owner: Mutex<Option<String>>,
     window_restoring: AtomicBool,
@@ -355,17 +359,19 @@ async fn chat(
         llm::prepare_turn(&conv.messages,content,attachments,retry,edit_index)?
     };
 
+    let turn_id=format!("turn-{}",data::now_millis());
     let project = {
         let tree = state.data.lock().unwrap();
         tree.projects.iter().find(|p| p.conversations.iter().any(|c| c.id == conversation_id)).map(|project| {
             let grants = state.folder_access.lock().unwrap().paths(&uid, &project.id);
             let (allowed, unavailable): (Vec<_>,Vec<_>) = project.source_folders.iter().cloned().partition(|p| grants.contains(p));
-            project_files::ProjectFiles { name: project.name.clone(), roots: allowed.into_iter().map(PathBuf::from).collect(), unavailable }
+            project_files::ProjectFiles { name: project.name.clone(), roots: allowed.into_iter().map(PathBuf::from).collect(), unavailable,
+                execution: Some(permissions::Execution {app:app.clone(),owner:uid.clone(),project:project.id.clone(),conversation:conversation_id.clone(),turn_id:turn_id.clone(),intent:history.last().map(|m|m.content.chars().take(16000).collect()).unwrap_or_default(),agent_id:None,cancellation:None}) }
         })
     };
     let turn_activity = std::sync::Mutex::new(Vec::<serde_json::Value>::new());
     let content_offset = std::sync::atomic::AtomicUsize::new(0);
-    let (reply, usage) = llm::chat_completion(&state.client, &base_url, &model, &api_key, &history, project, |action,text| {
+    let completion = llm::chat_completion(&state.client, &base_url, &model, &api_key, &history, project, Some(agent_runs::Runtime{app:app.clone(),owner:uid.clone(),conversation:conversation_id.clone()}), |action,text| {
         let mut events = turn_activity.lock().unwrap();
         if action == "__delta" { content_offset.fetch_add(text.encode_utf16().count(), std::sync::atomic::Ordering::Relaxed); }
         if action == "__reasoning" {
@@ -386,11 +392,17 @@ async fn chat(
         agent["conversation_id"] = serde_json::json!(conversation_id);
         let mut events = turn_activity.lock().unwrap();
         let mut stored = agent.clone();stored["kind"] = serde_json::json!("agent");stored["offset"] = content_offset.load(std::sync::atomic::Ordering::Relaxed).into();
-        if let Some(previous) = events.iter_mut().find(|e| e["kind"] == "agent" && e["id"] == stored["id"]) { *previous = stored; }
+        if let Some(previous) = events.iter_mut().find(|e| e["kind"] == "agent" && e["id"] == stored["id"]) { for (key,value) in stored.as_object().unwrap() {previous[key]=value.clone();} }
         else { events.push(stored); }
         let _ = app.emit("agent-activity", agent);
-    }).await?;
-    let turn_activity = turn_activity.into_inner().unwrap();
+    }).await;
+    let reviews=app.state::<approvals::Approvals>().take_turn(&uid,&conversation_id,&turn_id);
+    let (reply,mut usage)=completion?;
+    let mut turn_activity = turn_activity.into_inner().unwrap();
+    for review in reviews {
+        usage.prompt_tokens+=review.usage["prompt_tokens"].as_u64().unwrap_or(0);usage.completion_tokens+=review.usage["completion_tokens"].as_u64().unwrap_or(0);usage.total_tokens+=review.usage["total_tokens"].as_u64().unwrap_or(0);
+        let mut event=serde_json::to_value(review).map_err(|e|e.to_string())?;event["kind"]="approval".into();event["offset"]=0.into();turn_activity.push(event);
+    }
 
     let _save = state.history_save_lock.lock().await;
     if state.firestore.uid().as_deref() != Some(&uid) { return Err("login_required".into()); }
@@ -493,6 +505,36 @@ async fn project_folder_access(state: tauri::State<'_, AppState>, project_id: St
     let auth = firebase_auth(&state)?;
     let uid = ensure_uid(&state, &auth).await?;
     Ok(state.folder_access.lock().unwrap().paths(&uid, &project_id))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn project_permission_mode(state: tauri::State<'_, AppState>, project_id: String, mode: Option<permissions::Mode>) -> Result<permissions::Mode, String> {
+    let auth = firebase_auth(&state)?;
+    let uid = ensure_uid(&state, &auth).await?;
+    if !state.data.lock().unwrap().projects.iter().any(|p|p.id == project_id) { return Err("project_not_found".into()); }
+    let mut permissions = state.permissions.lock().unwrap();
+    if let Some(mode) = mode {
+        let tree = state.data.lock().unwrap();
+        let running = state.running_chats.lock().unwrap();
+        if tree.projects.iter().find(|p|p.id == project_id).is_some_and(|p|p.conversations.iter().any(|c|running.contains(&c.id))) { return Err("permissions_in_use".into()); }
+        permissions.set(&state.config_dir, &uid, &project_id, mode)?;
+    }
+    Ok(permissions.get(&uid, &project_id))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+fn list_approvals(state:tauri::State<'_,AppState>, approvals:tauri::State<'_,approvals::Approvals>, conversation_id:String)->Result<Vec<approvals::Snapshot>,String>{
+    let owner=state.firestore.uid().ok_or("login_required")?;Ok(approvals.list(&owner,&conversation_id))
+}
+#[tauri::command(rename_all = "snake_case")]
+fn resolve_approval(state:tauri::State<'_,AppState>, approvals:tauri::State<'_,approvals::Approvals>, conversation_id:String,id:String,allow:bool)->Result<(),String>{
+    let owner=state.firestore.uid().ok_or("login_required")?;approvals.resolve(&owner,&conversation_id,&id,allow)
+}
+#[tauri::command(rename_all = "snake_case")]
+async fn stop_subagent(state:tauri::State<'_,AppState>, agents:tauri::State<'_,agent_runs::AgentRuns>, shells:tauri::State<'_,std::sync::Arc<managed_shells::Shells>>,conversation_id:String,id:String)->Result<(),String>{
+    let owner=state.firestore.uid().ok_or("login_required")?;agents.stop(&owner,&conversation_id,&id)?;
+    let shells=shells.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {for shell in shells.list(&owner,&conversation_id).into_iter().filter(|s|s.agent_id.as_deref()==Some(&id)&&s.status=="running"){let _=shells.stop(&owner,&conversation_id,&shell.id);}}).await.map_err(|e|e.to_string())?;Ok(())
 }
 
 #[tauri::command]
@@ -637,6 +679,8 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 pub fn run() {
     tauri::Builder::default()
         .manage(std::sync::Arc::new(managed_shells::Shells::default()))
+        .manage(approvals::Approvals::default())
+        .manage(agent_runs::AgentRuns::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -647,6 +691,7 @@ pub fn run() {
                 speech: std::sync::Arc::new(speech::Speech::new(&config_dir)),
                 config: Mutex::new(config),
                 folder_access: Mutex::new(folder_access),
+                permissions: Mutex::new(permissions::Permissions::load(&config_dir)?),
                 config_dir,
                 user: Mutex::new(None),
                 data: Mutex::new(ChatData::default()),
@@ -701,6 +746,8 @@ pub fn run() {
             save_window_state,
             choose_project_folder,
             project_folder_access,
+            project_permission_mode,
+            list_approvals, resolve_approval, stop_subagent,
             prune_folder_access,
             choose_chat_files,
             open_external_url

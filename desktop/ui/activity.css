@@ -62,3 +62,21 @@
 }
 @media (max-width:850px) { .view--chat:not(.is-empty) .messages { padding-right:var(--space-4); } }
 @media (prefers-reduced-motion:reduce) { .activity-dock { --activity-motion:0ms; transition:none; } .view--chat:not(.is-empty) .messages,.chat-header { transition:none; } .agent-orb--running { animation:none; } }
+
+/* Agent identity follows the same icon and color system as the conversation. */
+.activity-dock { --agent-color:var(--c-glow); }
+.agent-orb { width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; border-radius:0; background:none; color:var(--agent-color); box-shadow:none; }
+.agent-orb .ui-icon { width:18px; height:18px; }
+.agent-orb--waiting,.agent-orb--cancelled,.agent-orb--failed { background:none; box-shadow:none; }
+.agent-orb--waiting,.agent-orb--failed { color:var(--c-glow); }
+.agent-orb--cancelled { color:var(--c-text-muted); }
+.activity-row { transition:background-color 140ms ease-out; }
+.activity-row:hover,.activity-row:focus-visible { background:var(--c-hover); }
+.activity-row__title.is-working-text { width:fit-content; max-width:100%; }
+.activity-detail-summary.is-working-text { width:fit-content; max-width:100%; }
+.agent-detail-history { margin:16px 0; }
+.activity-agent-tools { font-size:12px; }
+.agent-stream-content { min-width:0; }
+.activity-detail-meta .activity-stop { margin-left:auto; }
+.is-backgrounded .agent-orb--running { animation-play-state:paused; }
+@media (prefers-reduced-motion:reduce) { .activity-row { transition:none; } }

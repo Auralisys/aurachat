@@ -37,7 +37,7 @@ const assert = require('node:assert/strict');
  assert.equal(await page.locator('#boot-splash').isVisible(),true);
  assert.equal(await page.evaluate(()=>window.__saveCount),0);
  assert.deepEqual(await page.evaluate(()=>window.__windowCalls[0]),{cmd:'restore_window',args:{restore_saved:true},splashVisible:true});
- const shots=resolve(__dirname,'../../artifacts/window-state');mkdirSync(shots,{recursive:true});
+ const shots=resolve(__dirname,'../../.artifact/window-state');mkdirSync(shots,{recursive:true});
  await page.screenshot({path:resolve(shots,'splash-480x320.png')});
  await page.setViewportSize({width:1080,height:880});
  await page.evaluate(()=>{window.__restoreBlocked=false;window.__releaseRestore();});

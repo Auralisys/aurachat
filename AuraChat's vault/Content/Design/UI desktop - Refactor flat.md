@@ -135,8 +135,8 @@ Catture dell'interfaccia con **dati di test**, non dell'account reale dell'utent
 
 ![[desktop-shell-sidebar-compressa.png]]
 
-Copie originali nel progetto: `artifacts/app-shell/sidebar-progetti.png` e
-`artifacts/app-shell/sidebar-compressa.png`.
+Copie originali nel progetto: `.artifact/app-shell/sidebar-progetti.png` e
+`.artifact/app-shell/sidebar-compressa.png`.
 
 L'utente ha eseguito le proprie prove nell'app e approvato l'aspetto; i test
 eseguiti dall'agente restano simulati per Firebase/LLM. Non è stata ripetuta
@@ -165,7 +165,7 @@ Supportate frecce, Home/End, focus di ritorno e riduzione del movimento.
 `desktop/tests/project-menus.cjs`: backend simulato; verificati hover, conteggi,
 menu mouse/tastiera, creazione/rinomina/rimozione, conservazione delle chat,
 ripristino dopo errore di salvataggio e posizionamento a 1080x880 e 720x680.
-Catture in `artifacts/project-menus/`. Detector: solo advisory preesistente sul
+Catture in `.artifact/project-menus/`. Detector: solo advisory preesistente sul
 menu modello dentro `.workspace`, non sulle nuove anteprime o sui nuovi menu.
 
 ## Correzione gestione progetti e header (17 ottobre 2026)
@@ -191,7 +191,7 @@ menu ellissi con rinomina/eliminazione e supporto al clic destro/tastiera.
 
 Test `desktop/tests/project-menus.cjs` aggiornato al nuovo modello; fixture di
 `ui-smoke.cjs` e `auth-flow.cjs` aggiornate. Anteprime attuali in
-`artifacts/project-model/` a 1080x880 e 720x680. I precedenti screenshot dei menu
+`.artifact/project-model/` a 1080x880 e 720x680. I precedenti screenshot dei menu
 cartelle virtuali descrivono il comportamento superato.
 
 ## Sidebar: selezione contestuale e loader (17 ottobre 2026)
@@ -221,7 +221,7 @@ Verifiche browser con backend simulato: passati `sidebar-selection.cjs`,
 cronologia di navigazione, tastiera, loader su successo/errore, menu e caricamento
 differito. L'ultimo ripristino dello sfondo è stato verificato nel CSS;
 l'eseguibile desktop non è stato ricompilato. Le catture in
-`artifacts/sidebar-selection/` precedono il ripristino del colore di sfondo.
+`.artifact/sidebar-selection/` precedono il ripristino del colore di sfondo.
 
 
 ## Conversazione e audio — aggiornamento 17 ottobre 2026
@@ -256,3 +256,26 @@ La modifica riguarda la visualizzazione, senza rallentare acquisizione o
 trascrizione. X e Stop sono centrati nel pulsante tramite grid; il test UI
 controlla il centro geometrico delle icone e il numero di barrette per secondo.
 Codice: `desktop/ui/voice.js:125`; test `desktop/tests/voice-flow.cjs` passato.
+
+## Permessi, attività e icone — 17 ottobre 2026
+
+CTA dei permessi a sinistra, accanto al + degli allegati, con tre modalità
+effettive confermate dal backend e approvazioni inline. Dettagli operativi e
+limite di assenza sandbox OS: [[Desktop gateway - Tauri]].
+
+Reasoning e operazioni aggiornano nodi stabili, preservando focus e dettagli
+aperti. Lo shimmer indica lavoro attivo, l'attesa di consenso ha stato distinto;
+loader e animazioni rispettano movimento ridotto e visibilità della finestra.
+Sidebar e pannello attività mantengono palette, superfici e dimensioni AuraChat.
+
+Importata una baseline di 171 SVG selezionati dall'utente; `new_chat.svg`
+sostituisce `new_chat_os_windows`. Home, Nuova chat, frecce, chevron, spunta e
+agenti usano già gli asset estratti. Le altre icone restano disponibili in
+`desktop/ui/assets/icons/`; simboli non sostituiti continuano a usare Lucide
+o i glifi esistenti. Provenienza e dettagli in [[ChatGPT desktop - Analisi locale]].
+
+Verifica corrente: tutte le 13 suite browser passate, inclusi permessi,
+approvazioni, attività, reasoning, sidebar, layout compatto e icone.
+Screenshot solo locali in `.artifact/`, ignorata da Git insieme al percorso
+legacy `artifacts/`; le vecchie catture sono state conservate localmente e
+rimosse dal tracciamento. Gli SVG scelti per l'app restano versionati.

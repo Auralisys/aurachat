@@ -32,11 +32,40 @@ Il processo resta attivo nel tray; il frontend statico comunica con Rust via IPC
   la key e la lista modelli sono salvate nel documento utente Firestore (vedi
   [[Firebase - trasporto e push]]).
 
-## Non ancora deciso
+## Permessi e operazioni locali — 17 ottobre 2026
 
-- **Scrittura, esecuzione, modalità automatiche ed effort**: non implementati.
-  I soli strumenti già operativi sono esplorazione e lettura delle root autorizzate,
-  descritti sotto. Non equipararli a un agente con accesso completo al computer.
+Il selettore a sinistra del composer, accanto al +, salva la modalità per
+account e progetto: Richiedi approvazione (default), Approva per me e Accesso
+completo. Il backend conferma il cambio; full access richiede conferma iniziale.
+Il cambio attende che le chat del progetto siano ferme.
+
+Le approvazioni inline sono associate ad account, chat, turno e agente,
+monouso, con revisioni monotone e scadenza di dieci minuti. Il diniego non è
+ritentabile identico nello stesso turno. Il reviewer automatico è una chiamata
+separata al modello: solo JSON valido con allow e rischio low autorizza;
+errori e azioni ambigue passano al consenso umano. I token sono conteggiati.
+
+Gli strumenti file richiedono revisione SHA-256 o contenuto precedente;
+le sostituzioni puntuali devono essere univoche. Percorso e contenuto sono
+ricontrollati dopo l'approvazione. I sub-agenti ereditano modello e permessi,
+mantengono reasoning e operazioni e possono essere fermati cancellando le
+richieste HTTP e le shell registrate. Gli eventi tardivi non riattivano stati
+terminali. Le attività salvate ricostruiscono gli output file.
+
+**Limite effettivo:** le shell usano l'account Windows senza sandbox OS.
+La directory di lavoro non limita accesso a file e rete; root autorizzate e
+reviewer non sostituiscono isolamento di sistema. Accesso completo consente
+operazioni anche fuori dal progetto. SSH e controllo tra dispositivi restano
+da implementare. Riferimento esterno e differenze: [[ChatGPT desktop - Analisi locale]].
+
+Codice: `desktop/src-tauri/src/project_files.rs:37` (operazioni file),
+`desktop/src-tauri/src/approvals.rs:25` (richieste di consenso),
+`desktop/src-tauri/src/agent_runs.rs:21` (ciclo sub-agenti).
+Verifiche del 17 ottobre: 32 test Rust passati, quattro prove con servizi
+reali escluse dalla suite predefinita; 13 suite UI passate con servizi nativi
+simulati. Test HTTP dei sub-agenti con provider locale e file reali;
+test shell con processi reali. Account/provider esterni, microfono fisico
+e dialoghi WebView non verificati nuovamente in questa sessione.
 
 ## Decisioni (17 ottobre 2026)
 

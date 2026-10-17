@@ -21,9 +21,10 @@ gateway desktop Tauri implementato in `desktop/`, account Firebase e cronologia
 Firestore in uso; shell desktop approvata con barra stretta, menu superiori e
 sidebar interna. Sono implementati lettura delle root di progetto tramite tool,
 dettatura locale Cohere e cronologia Firestore v2 separata dal tree utente.
-Mobile, relay/pairing, push, scrittura file ed esecuzione comandi restano da
-implementare. Stato UI e verifiche: [[UI desktop - Refactor flat]]; stato
-operativo e limiti di lettura: [[Desktop gateway - Tauri]].
+Scrittura file, comandi, tre modalità di permesso e sub-agenti cancellabili
+sono implementati; i comandi usano l'account Windows senza sandbox OS.
+Mobile, relay/pairing e push restano da implementare. Stato UI e verifiche:
+[[UI desktop - Refactor flat]]; stato operativo: [[Desktop gateway - Tauri]].
 
 **Architettura** — [[Architettura - Overview]] è il punto di ingresso tecnico.
 Da lì si diramano le note su client (desktop + mobile) e trasporto/push.
@@ -31,6 +32,11 @@ Da lì si diramano le note su client (desktop + mobile) e trasporto/push.
 **Design** — [[UIUX - Overview]] fissa la direzione visiva unica: smooth,
 minimale, alla ChatGPT/Copilot, con pairing e onboarding dell'inferenza
 semplificati.
+
+**REA** — [[ChatGPT desktop - Analisi locale]], nella cartella `Content/REA`,
+documenta pacchetto analizzato, permessi, remoto, chat, baseline di 171 icone,
+evidenze e limiti. Estrazioni, sessioni e screenshot restano in `.artifact/`,
+solo locali e ignorati da Git.
 
 **Client** — [[Client - Overview]] descrive le due app:
 [[Desktop gateway - Tauri]] (gateway locale in Rust/Tauri) e

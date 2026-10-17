@@ -49,7 +49,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   assert.equal(await page.locator('#composer-input').inputValue(),'Bozza di B');assert.equal(await page.locator('#composer-input').evaluate(el=>el===document.activeElement),true);
   assert.equal(await page.locator('#messages').getByText('Risposta A',{exact:true}).count(),0);
   assert.equal(await row(c).count(),1,'An older background response must not remove newer chats');
-  const shots=resolve(__dirname,'../../artifacts/background-chats');mkdirSync(shots,{recursive:true});await page.screenshot({path:resolve(shots,'unread-completions.png')});
+  const shots=resolve(__dirname,'../../.artifact/background-chats');mkdirSync(shots,{recursive:true});await page.screenshot({path:resolve(shots,'unread-completions.png')});
   await row('a').locator('.tree-conv__title').click();assert.equal(await row('a').locator('.tree-conv__unread').count(),0);assert.match(await page.locator('#messages').innerText(),/Risposta A/);
   assert.equal(await row(c).locator('.tree-conv__unread').count(),1);
   await row(c).locator('.tree-conv__title').click();assert.match(await page.locator('#messages').innerText(),/Risposta C/);assert.equal(await row(c).locator('.tree-conv__unread').count(),0);

@@ -1,5 +1,4 @@
-//! Tracks processes started by a native runner. No command execution is exposed
-//! to the model or webview; the runner must obtain execution consent separately.
+//! Tracks processes started by the native runner after permission checks.
 use std::{collections::HashMap, io::Read, process::Child, sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}}, time::Duration};
 use serde::Serialize;
 
@@ -7,6 +6,7 @@ use serde::Serialize;
 pub struct Snapshot {
     pub id: String,
     pub conversation_id: String,
+    pub agent_id: Option<String>,
     pub title: String,
     pub command: String,
     pub cwd: String,
@@ -59,11 +59,10 @@ fn capture(reader: impl Read + Send + 'static, entry: Arc<Entry>) {
 
 impl Shells {
     /// A native runner hands over an already-authorized child with piped output.
-    #[allow(dead_code)] // The current model has read-only tools; a runner is not enabled yet.
-    pub fn track(&self, owner: String, conversation_id: String, command: String, cwd: String, mut child: Child, notify: impl Fn(Snapshot) + Send + Sync + 'static) -> Snapshot {
+    pub fn track(&self, owner: String, conversation_id: String, agent_id: Option<String>, command: String, cwd: String, mut child: Child, notify: impl Fn(Snapshot) + Send + Sync + 'static) -> Snapshot {
         let id = format!("shell-{}", self.sequence.fetch_add(1, Ordering::Relaxed));
         let stdout = child.stdout.take();let stderr = child.stderr.take();
-        let snapshot = Snapshot {id:id.clone(), conversation_id, title:command.clone(), command, cwd, status:"running".into(), output:String::new(), exit_code:None, revision:0};
+        let snapshot = Snapshot {id:id.clone(), conversation_id, agent_id, title:command.clone(), command, cwd, status:"running".into(), output:String::new(), exit_code:None, revision:0};
         let entry = Arc::new(Entry {owner, child:Mutex::new(child), snapshot:Mutex::new(snapshot.clone()), notify:Arc::new(notify), publish_lock:Mutex::new(())});
         self.entries.lock().unwrap().insert(id, entry.clone());entry.publish();
         if let Some(stdout) = stdout { capture(stdout, entry.clone()); }
@@ -129,7 +128,7 @@ mod tests {
         #[cfg(windows)] let mut command = {let mut c=Command::new("cmd.exe");c.args(["/D","/C","echo fixture-output & ping -n 60 127.0.0.1 >nul"]);c};
         #[cfg(not(windows))] let mut command = {let mut c=Command::new("sh");c.args(["-c","echo fixture-output; exec sleep 60"]);c};
         let child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-        let shell = shells.track("owner".into(), "conversation".into(), "fixture".into(), String::new(), child, |_| {});
+        let shell = shells.track("owner".into(), "conversation".into(), None, "fixture".into(), String::new(), child, |_| {});
         wait_until(|| shells.list("owner", "conversation")[0].output.contains("fixture-output"));
         assert!(shells.list("other", "conversation").is_empty());
         assert!(shells.stop("other", "conversation", &shell.id).is_err());
@@ -143,7 +142,7 @@ mod tests {
         let shells = Shells::default();
         #[cfg(windows)] let mut command = {let mut c=Command::new("cmd.exe");c.args(["/D","/C","exit 7"]);c};
         #[cfg(not(windows))] let mut command = {let mut c=Command::new("sh");c.args(["-c","exit 7"]);c};
-        let shell = shells.track("owner".into(), "conversation".into(), "fixture".into(), String::new(), command.spawn().unwrap(), |_| {});
+        let shell = shells.track("owner".into(), "conversation".into(), None, "fixture".into(), String::new(), command.spawn().unwrap(), |_| {});
         wait_until(|| shells.list("owner", "conversation")[0].status == "failed");
         assert_eq!(shells.stop("owner", "conversation", &shell.id).unwrap().exit_code, Some(7));
     }

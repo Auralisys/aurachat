@@ -231,6 +231,7 @@ function renderSidebar() {
 }
 
 const ICONS = {
+  "shield": '<path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6z"/><path d="m8 12 3 3 5-6"/>',
   "terminal": '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3m6 0h4"/>',
   "back": "<path d=\"m10 6-6 6 6 6M4 12h16\"/>",
   "forward": "<path d=\"m14 6 6 6-6 6M4 12h16\"/>",
@@ -262,9 +263,21 @@ const ICONS = {
 };
 
 function icon(name) {
-  if (name === 'compose') {
-    return lucide.createElement(lucide.icons.MessageCirclePlus, { class: 'ui-icon', 'aria-hidden': 'true' });
+  if (importedIcons[name]) {
+    const template = document.createElement('template');
+    template.innerHTML = importedIcons[name];
+    const svg = template.content.firstElementChild;
+    svg.classList.add('ui-icon');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    // Preserve filled glyphs and source strokes against the legacy outline icon rules.
+    for (const [property, fallback] of Object.entries({fill:'black', stroke:'none', 'stroke-width':'1', 'stroke-linecap':'butt', 'stroke-linejoin':'miter'})) {
+      svg.style.setProperty(property, svg.getAttribute(property) || fallback);
+    }
+    return svg;
   }
+  const glyph = {compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown'}[name];
+  if (glyph && lucide.icons[glyph]) return lucide.createElement(lucide.icons[glyph], {class:'ui-icon','aria-hidden':'true'});
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('aria-hidden', 'true');
@@ -471,6 +484,7 @@ function conversationEl(conv, section) {
   const active = conv.id === state.activeConversationId && section === state.activeConversationSection;
   el.className = 'tree-conv' + (active ? ' is-active' : '');
   el.dataset.conversationId = conv.id;
+  const glyph = icon('chat');glyph.classList.add('tree-conv__icon');el.append(glyph);
   const title = document.createElement('span');
   title.className = 'tree-conv__title';
   title.tabIndex = 0;
@@ -501,10 +515,12 @@ function conversationEl(conv, section) {
   el.appendChild(actions);
   if (state.runs.get(conv.id)?.pending || (state.loadingConversation && conv.id === state.activeConversationId)) {
     const spinner = document.createElement('span');
-    spinner.className = 'tree-conv__spinner';
+    const waiting = [...(permissionRequests.get(conv.id)?.values() || [])].some(r => r.status === 'pending');
+    spinner.className = `tree-conv__spinner${waiting ? ' is-waiting' : ''}`;
+    if (waiting) spinner.append(icon('shield'));
     spinner.setAttribute('role', 'status');
-    spinner.setAttribute('aria-label', t('chat.thinking'));
-    spinner.title = t('chat.thinking');
+    spinner.setAttribute('aria-label', t(waiting ? 'permissions.waiting' : 'chat.thinking'));
+    spinner.title = spinner.getAttribute('aria-label');
     el.appendChild(spinner);
   } else if (state.unread.has(conv.id)) {
     const dot = document.createElement('span');dot.className = 'tree-conv__unread';
@@ -1088,6 +1104,7 @@ function choiceOption(label, checked, onSelect) {
 }
 
 function populateProjectMenu() {
+  refreshPermissions();
   const project = state.data.projects.find(p => p.id === state.pendingProjectId);
   if (!project) state.pendingProjectId = null;
   $('#project-name').textContent = project?.name || t('chat.no_project');
@@ -1101,8 +1118,43 @@ function populateProjectMenu() {
   for (const p of state.data.projects) menu.appendChild(choiceOption(p.name, p.id === state.pendingProjectId, () => choose(p.id)));
 }
 
+let permissionEpoch = 0;
+const permissionModes = new Map();
+async function refreshPermissions() {
+  const epoch = ++permissionEpoch;
+  const project = activeConversation()?.project || state.data.projects.find(p => p.id === state.pendingProjectId);
+  const control = $('#permission-control'), trigger = $('#permission-select'), menu = $('#permission-menu');
+  control.hidden = !project;
+  if (!project) { menu.hidden = true; trigger.setAttribute('aria-expanded', 'false'); return; }
+  trigger.disabled = true;
+  const cacheKey = `${state.config.firebase_email}:${project.id}`;
+  $('#permission-name').textContent = permissionModes.has(cacheKey) ? t(`permissions.${permissionModes.get(cacheKey)}`) : t('ui.loading');
+  try {
+    const mode = await invoke('project_permission_mode', { project_id:project.id });
+    if (epoch !== permissionEpoch) return;
+    if (!['ask', 'auto', 'full'].includes(mode)) throw new Error(t('permissions.unavailable'));
+    permissionModes.set(cacheKey,mode);$('#permission-name').textContent = t(`permissions.${mode}`);
+    control.dataset.mode = mode;
+    menu.replaceChildren();
+    for (const value of ['ask', 'auto', 'full']) {
+      const option = choiceOption(t(`permissions.${value}`), value === mode, async () => {
+        if (value === 'full' && mode !== 'full' && !await confirmFullAccess(project)) return;
+        trigger.disabled = true;
+        try { await invoke('project_permission_mode', { project_id:project.id, mode:value }); }
+        catch(e) { if (epoch === permissionEpoch) composerStatus(localizeError(e)); }
+        finally { if (epoch === permissionEpoch) { await refreshPermissions(); trigger.focus(); } }
+      });
+      const description = document.createElement('small');description.textContent = t(`permissions.${value}_description`);
+      option.querySelector('span').append(description);menu.append(option);
+    }
+    trigger.disabled = project.conversations.some(c => state.runs.get(c.id)?.pending) || state.preparing;
+  } catch(e) {
+    if (epoch === permissionEpoch) { $('#permission-name').textContent = t('permissions.unavailable'); trigger.title = localizeError(e); }
+  }
+}
+
 function closeChoiceMenus() {
-  for (const id of ['model', 'project']) {
+  for (const id of ['model', 'project', 'permission']) {
     $(`#${id}-menu`).hidden = true;
     $(`#${id}-select`).setAttribute('aria-expanded', 'false');
   }
@@ -1115,6 +1167,11 @@ function setupChoiceMenu(id) {
     hideProjectPreview();
     closeChoiceMenus();
     menu.hidden = false;
+    if (id === 'permission') {
+      const rect = trigger.getBoundingClientRect();
+      menu.style.left = `${Math.max(16, Math.min(rect.left, innerWidth - Math.min(350, innerWidth - 32) - 16))}px`;
+      menu.style.bottom = `${innerHeight - rect.top + 8}px`;
+    }
     trigger.setAttribute('aria-expanded', 'true');
     const options = menu.querySelectorAll('button');
     (last ? options[options.length - 1] : menu.querySelector('[aria-checked="true"]') || options[0])?.focus();
@@ -1228,6 +1285,7 @@ async function init() {
     windowSaveTimer = setTimeout(saveWindowState, 1000);
   });
   await setupChatProgress();
+  await setupPermissions();
   setupShell();
 
   // Controlli finestra
@@ -1259,6 +1317,7 @@ async function init() {
   $('#composer-send').addEventListener('click', send);
   setupChoiceMenu('model');
   setupChoiceMenu('project');
+  setupChoiceMenu('permission');
 
   document.addEventListener('submit', async (e) => {
     const form = e.target.closest('[data-form]');
@@ -1504,6 +1563,7 @@ function setupAppMenus() {
 }
 
 function setupShell() {
+  window.addEventListener('resize',closeChoiceMenus);
   $('#sidebar-collapse').onclick = () => {
     closeTreeMenu();
     hideProjectPreview();
@@ -1526,7 +1586,7 @@ function setupShell() {
     selectSettingsTab(b.dataset.settingsTab);
   });
   document.addEventListener('click', e => {
-    if (!e.target.closest('.model-select, .composer__project')) closeChoiceMenus();
+    if (!e.target.closest('.model-select, .composer__project, .permission-control')) closeChoiceMenus();
     if (!e.target.closest('.rail__footer')) {
       $('#account-menu').hidden = true;
       $('#account-button').setAttribute('aria-expanded', 'false');

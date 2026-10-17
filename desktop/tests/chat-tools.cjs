@@ -32,7 +32,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   }}};
  },{locales});
  await page.goto(pathToFileURL(resolve(__dirname,'../ui/index.html')).href);await page.locator('#boot-splash').waitFor({state:'hidden'});
- const shots=resolve(__dirname,'../../artifacts/chat-alignment');mkdirSync(shots,{recursive:true});
+ const shots=resolve(__dirname,'../../.artifact/chat-alignment');mkdirSync(shots,{recursive:true});
  await page.click('#sidebar-collapse');
  await page.screenshot({path:resolve(shots,'conversation-desktop.png')});
  assert.match(await page.locator('.msg__text').first().evaluate(el=>getComputedStyle(el).fontFamily),/Segoe UI/);

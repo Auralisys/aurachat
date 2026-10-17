@@ -42,7 +42,7 @@ const assert = require('node:assert/strict');
   assert.equal(await page.locator('.tree-conv__spinner').count(),2);
   await selected('#sidebar-tree');
   await page.locator('#composer-input').hover();
-  const shots=resolve(__dirname,'../../artifacts/sidebar-selection');mkdirSync(shots,{recursive:true});
+  const shots=resolve(__dirname,'../../.artifact/sidebar-selection');mkdirSync(shots,{recursive:true});
   await page.locator('#sidebar').screenshot({path:resolve(shots,'sidebar-loading.png')});
   await page.evaluate(()=>window.__finishChat());
   await page.waitForFunction(()=>!document.querySelector('.tree-conv__spinner'));

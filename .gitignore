@@ -1,0 +1,4 @@
+# Local captures, research sessions and generated validation output.
+/.artifact/
+# Keep the legacy folder local if an older script recreates it.
+/artifacts/

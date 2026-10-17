@@ -6,7 +6,7 @@ tags: [aurachat, roadmap]
 
 ← [[Architettura - Overview]]
 
-**Stato al 17 ottobre 2026: scope 0+1 (gateway desktop `desktop/`) implementato e funzionante; Firebase configurato (Firestore abilitato, account email/password, regole impostate); scope 2 (mobile) non avviato; strumenti di lettura delle root e dettatura locale implementati; scrittura/esecuzione e agente completo non implementati.** Questa
+**Stato al 17 ottobre 2026: scope 0+1 (gateway desktop `desktop/`) implementato; Firebase configurato; scope 2 (mobile) non avviato. Lettura, scrittura con revisione, comandi, permessi e sub-agenti cancellabili implementati, oltre alla dettatura locale. I comandi Windows non hanno sandbox OS.** Questa
 roadmap è il build order verso un MVP usabile, non un'autorizzazione a partire:
 gli scope si avviano solo quando richiesto. DeepSeek è il default, ma ogni pezzo
 resta endpoint-agnostico.

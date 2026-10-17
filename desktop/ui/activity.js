@@ -21,7 +21,20 @@ function activityItems() {
   for (const url of links) sources.push({id:`link:${url}`, title:url, summary:t('activity.user_link'), url});
   state.attachments.forEach((file, index) => sources.push({ id: `draft-${index}`, title: file.name, summary: t('activity.draft'), content: file.content, plain: true }));
   sources.push(...(record?.sources.values() || []));
-  return { outputs: [...(record?.outputs.values() || [])], agents: [...activityAgentMap().values()], sources,
+  const outputs = new Map();
+  for (const message of state.messages) {
+    const events = (message.activity || []).flatMap(item => item.kind === 'agent' ? item.activity || [] : [item]);
+    for (const item of events) {
+      if (item.kind !== 'tool' || !['write_project_file','edit_project_file'].includes(item.action) || item.status !== 'completed') continue;
+      try {
+        const output = JSON.parse(item.output);
+        if (typeof output.path !== 'string' || !Number.isFinite(output.written_bytes)) continue;
+        const id = `file:${output.path}`;outputs.set(id,{id,title:output.path.split(/[\\/]/).at(-1),kind:'file',path:output.path,summary:`${output.written_bytes} bytes`});
+      } catch (_) { /* Non-file tool output is not an artifact. */ }
+    }
+  }
+  for (const [id,item] of record?.outputs || []) outputs.set(id,item);
+  return { outputs: [...outputs.values()], agents: [...activityAgentMap().values()], sources,
     shells: [...(record?.shells.values() || [])] };
 }
 
@@ -52,10 +65,10 @@ function activityRow(item, section, compact = false) {
   const row = document.createElement('button');row.type = 'button';row.className = 'activity-row';
   row.dataset.activityFocus = `${section}:${item.id}`;
   if (section === 'agents') {
-    const orb = activityText('span', '', `agent-orb agent-orb--${item.status}`);orb.setAttribute('aria-hidden', 'true');row.append(orb);
+    const orb = activityText('span', '', `agent-orb agent-orb--${item.status}`);orb.append(icon('agents'));orb.setAttribute('aria-hidden', 'true');row.append(orb);
   } else row.append(icon(section === 'sources' ? 'file' : section === 'shells' ? 'terminal' : 'compose'));
   const text = activityText('span', '', 'activity-row__text');
-  text.append(activityText('span', item.title, 'activity-row__title'));
+  const title = activityText('span',item.title,'activity-row__title');title.classList.toggle('is-working-text',section === 'agents' && item.status === 'running');text.append(title);
   if (!compact) text.append(activityText('span', item.summary || (['agents','shells'].includes(section) ? activityStatus(item) : ''), 'activity-row__summary'));
   row.append(text);
   if (section === 'agents' && !compact) {
@@ -85,7 +98,7 @@ function renderActivity() {
   if (activity.conversationId !== state.activeConversationId) {
     activity.conversationId = state.activeConversationId;activity.selected = null;
     if (activity.section === 'shells') activity.section = null;
-    if (state.activeConversationId) refreshActivityShells(state.activeConversationId);
+    if (state.activeConversationId) {refreshActivityShells(state.activeConversationId);refreshPermissionRequests(state.activeConversationId);}
   }
   const dock = $('#activity-dock'), items = activityItems();
   const hasActivity = state.messages.some(m => ['user','assistant'].includes(m.role)) || state.busy || Object.values(items).some(list => list.length);
@@ -113,10 +126,11 @@ function renderActivity() {
     title.append(activityText('span', t(`activity.${section}`)), activityText('span', String(groupItems.length)));
     title.onclick = () => openActivity(section);group.append(title);
     if (section === 'agents' && items.agents.length) {
-      const active = items.agents.filter(a => a.status === 'running').length;
+      const active = items.agents.filter(a => ['running','waiting'].includes(a.status)).length;
       const summary = activityText('button', '', 'activity-agents-summary');summary.type = 'button';
       summary.dataset.activityFocus = 'agents-summary';
-      summary.append(activityText('span', '', `agent-orb${active ? ' agent-orb--running' : ''}`), document.createTextNode(`${active} ${t('activity.running_count')} · ${items.agents.length} ${t('activity.total')}`));
+      const glyph = activityText('span','',`agent-orb${active ? ' agent-orb--running' : ''}`);glyph.append(icon('agents'));
+      summary.append(glyph, document.createTextNode(`${active} ${t('activity.running_count')} · ${items.agents.length} ${t('activity.total')}`));
       summary.onclick = () => openActivity('agents');group.append(summary);
     } else {
       for (const item of groupItems.slice(-3)) group.append(activityRow(item, section, section !== 'shells'));
@@ -138,7 +152,9 @@ function renderActivity() {
     tab.dataset.activityFocus = `tab:${name}`;
     tab.setAttribute('aria-current', String(name === section));tab.onclick = () => openActivity(name);tabs.append(tab);
   }
-  const content = $('#activity-panel-content');const scroll = content.scrollTop;content.replaceChildren();
+  const content = $('#activity-panel-content');const scroll = content.scrollTop;
+  if (section === 'agents' && selected) {renderAgentDetail(content,selected);content.scrollTop = scroll;updateAgentTimers();restoreFocus();return;}
+  content.dataset.agentId = '';content.replaceChildren();
   if (selected) {
     if (section === 'agents') {
       const meta = activityText('div', '', 'activity-detail-meta');
@@ -195,6 +211,45 @@ function renderActivity() {
     } else for (const item of items[section]) content.append(activityRow(item, section));
   }
   content.scrollTop = scroll;updateAgentTimers();restoreFocus();
+}
+
+let activityRenderFrame = null;
+function scheduleActivityRender() {
+  if (activityRenderFrame) return;
+  activityRenderFrame = requestAnimationFrame(() => {activityRenderFrame = null;renderActivity();});
+}
+
+async function stopActivityAgent(agent) {
+  if (!['running','waiting'].includes(agent.status) || agent.stop_pending) return;
+  const conversationId = state.activeConversationId;
+  agent.stop_pending = true;renderActivity();
+  try {await invoke('stop_subagent',{conversation_id:conversationId,id:agent.id});}
+  catch(e) {agent.stop_pending = false;composerStatus(localizeError(e));if (state.activeConversationId === conversationId) renderActivity();}
+}
+
+function renderAgentDetail(content, agent) {
+  if (content.dataset.agentId !== agent.id) {
+    content.dataset.agentId = agent.id;content.replaceChildren();
+    const meta = activityText('div','','activity-detail-meta');
+    meta.append(activityText('span','','agent-detail-status'),activityText('span',agent.model || ''));
+    const stop = activityText('button',t('activity.stop_agent'),'activity-stop');stop.type = 'button';stop.dataset.activityFocus = `stop-agent:${agent.id}`;meta.append(stop);
+    const summary = activityText('p','','activity-detail-summary');
+    const taskTitle = activityText('h3',t('activity.task'));
+    const task = activityText('p',agent.task || '','activity-task');
+    const history = activityText('div','','agent-detail-history');
+    const body = activityText('div','','markdown agent-stream-content');content.append(meta,summary,taskTitle,task,history,body);
+  }
+  const status = content.querySelector('.agent-detail-status');status.textContent = activityStatus(agent);status.dataset.status = agent.status;
+  const summary = content.querySelector('.activity-detail-summary');summary.textContent = agent.summary === 'agent_cancelled' ? t('activity.cancelled') : agent.summary || t('activity.no_updates');summary.classList.toggle('is-working-text',agent.status === 'running');
+  const stop = content.querySelector('.activity-stop');stop.hidden = !['running','waiting'].includes(agent.status);stop.disabled = !!agent.stop_pending;stop.textContent = t(agent.stop_pending ? 'activity.stopping' : 'activity.stop_agent');stop.onclick = () => stopActivityAgent(agent);
+  const list = [...(agent.reasoning_content ? [{kind:'reasoning',text:agent.reasoning_content}] : []),...(agent.activity || [])];
+  const history = content.querySelector('.agent-detail-history');
+  if (list.length) {const details = progressHistory(list,['running','waiting'].includes(agent.status),history.firstElementChild);if (!details.parentElement) history.append(details);}
+  else history.replaceChildren();
+  const body = content.querySelector('.agent-stream-content');
+  if (body._raw !== (agent.content || '')) {body._raw = agent.content || '';body.innerHTML = markdownHTML(body._raw);
+    body.querySelectorAll('a').forEach(link => link.onclick = async event => {event.preventDefault();if (!/^https?:$/.test(link.protocol)) return;try {await invoke('open_external_url',{url:link.href});}catch(_){composerStatus(t('chat.link_failed'));}});
+  }
 }
 
 function updateAgentTimers() {
@@ -270,11 +325,13 @@ async function setupActivity() {
     if (!payload?.conversation_id || typeof payload.id !== 'string' || !['running','waiting','completed','failed','cancelled'].includes(payload.status)) return;
     const record = activityRecord(payload.conversation_id), previous = record.agents.get(payload.id);
     const agent = {...previous, id: payload.id, status: payload.status};
-    for (const key of ['title','summary','task','content','model','reasoning']) if (typeof payload[key] === 'string') agent[key] = payload[key];
+    if (previous && ['completed','failed','cancelled'].includes(previous.status) && ['running','waiting'].includes(payload.status)) return;
+    for (const key of ['title','summary','task','content','model','reasoning','reasoning_content']) if (typeof payload[key] === 'string') agent[key] = payload[key];
+    if (Array.isArray(payload.activity)) agent.activity = payload.activity;
     agent.title ||= t('activity.agent');agent.started_at = previous?.started_at || (Number.isFinite(payload.started_at) ? payload.started_at : Date.now());
     agent.finished_at = ['completed','failed','cancelled'].includes(agent.status) ? (Number.isFinite(payload.finished_at) ? payload.finished_at : previous?.finished_at || Date.now()) : null;
     record.agents.set(agent.id, agent);
-    if (payload.conversation_id === state.activeConversationId) renderActivity();
+    if (payload.conversation_id === state.activeConversationId) {if (['completed','failed','cancelled'].includes(agent.status)) renderActivity();else scheduleActivityRender();}
   });
   setInterval(updateAgentTimers, 1000);
 }

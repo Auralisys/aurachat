@@ -129,6 +129,7 @@ pub async fn chat_completion(
     api_key: &str,
     messages: &[ChatMessage],
     project: Option<crate::project_files::ProjectFiles>,
+    runtime: Option<crate::agent_runs::Runtime>,
     activity: impl Fn(&str, &str) + Send + Sync,
     agents: impl Fn(serde_json::Value) + Send + Sync,
 ) -> Result<(String, Usage), String> {
@@ -136,14 +137,15 @@ pub async fn chat_completion(
     if base.is_empty() { return Err("base_url non configurata".into()); }
     let mut history = api_messages(messages);
     if let Some(files) = &project { history.insert(0, serde_json::json!({"role":"system","content":files.context()})); }
-    history.insert(0, serde_json::json!({"role":"system","content":"You can delegate focused work using create_subagent. When the user explicitly asks for a subagent, call this tool instead of merely describing one. Subagents use the current model, inherit the user-provided conversation context and authorized read-only project tools, and return a result to you. Do not claim an agent was started unless the tool succeeded."}));
-    let runner = Completion {client, url:format!("{base}/v1/chat/completions"), model, api_key, project, activity:&activity, agents:&agents};
+    history.insert(0, serde_json::json!({"role":"system","content":"You can delegate focused work using create_subagent. When the user explicitly asks for a subagent, call this tool instead of merely describing one. Subagents use the current model, inherit the user-provided conversation context and authorized project tools, and return a result to you. Do not claim an agent was started unless the tool succeeded."}));
+    let runner = Completion {client, url:format!("{base}/v1/chat/completions"), model, api_key, project, runtime, activity:&activity, agents:&agents};
     runner.run(history, true, None).await
 }
 
 struct Completion<'a> {
     client: &'a reqwest::Client, url: String, model: &'a str, api_key: &'a str,
     project: Option<crate::project_files::ProjectFiles>,
+    runtime: Option<crate::agent_runs::Runtime>,
     activity: &'a (dyn Fn(&str, &str) + Send + Sync),
     agents: &'a (dyn Fn(serde_json::Value) + Send + Sync),
 }
@@ -152,7 +154,19 @@ impl Completion<'_> {
     fn run<'a>(&'a self, mut history: Vec<serde_json::Value>, delegate: bool, agent: Option<&'a serde_json::Value>) -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<(String, Usage), String>> + Send + 'a>> {
         Box::pin(async move {
             let context = history.clone();
+            let agent_state = std::sync::Mutex::new(agent.cloned());
+            let last_emit = std::sync::Mutex::new(std::time::Instant::now());
+            let tool_progress = |event: &serde_json::Value| {
+                let mut state=agent_state.lock().unwrap();
+                if let Some(agent)=state.as_mut() {
+                    agent["summary"]=serde_json::json!(format!("{}: {}",event["action"].as_str().unwrap_or(""),event["path"].as_str().unwrap_or("")));
+                    let list=agent.as_object_mut().unwrap().entry("activity").or_insert_with(||serde_json::json!([])).as_array_mut().unwrap();
+                    if let Some(previous)=list.iter_mut().find(|e|e["id"]==event["id"]){*previous=event.clone();}else{list.push(event.clone());}
+                    (self.agents)(agent.clone());
+                } else {(self.activity)("__activity",&event.to_string());}
+            };
             let mut delegated = 0;
+            let mut tool_sequence = 0;
             let mut usage = Usage {prompt_tokens:0, completion_tokens:0, total_tokens:0};
     let mut reply = String::new();
             loop {
@@ -169,14 +183,14 @@ impl Completion<'_> {
                     let text = response.text().await.map_err(|e|e.to_string())?;
                     return Err(format!("API {}: {}",status.as_u16(),truncate(&text,300)));
                 }
-                let child_content = std::sync::Mutex::new(String::new());
                 let progress = |kind: &str, text: &str| {
-                    if let Some(agent) = agent {
-                        if kind == "__delta" {
-                            let mut content = child_content.lock().unwrap();content.push_str(text);
-                            let mut update = agent.clone();update["content"] = serde_json::json!(*content);(self.agents)(update);
-                        }
-                    } else { (self.activity)(kind,text); }
+                    let mut state=agent_state.lock().unwrap();
+                    if let Some(agent)=state.as_mut() {
+                        let key=if kind=="__delta" {"content"} else if kind=="__reasoning" {"reasoning_content"} else {return;};
+                        let mut value=agent[key].as_str().unwrap_or("").to_string();value.push_str(text);agent[key]=value.into();
+                        let mut last=last_emit.lock().unwrap();
+                        if last.elapsed().as_millis()>=50 {(self.agents)(agent.clone());*last=std::time::Instant::now();}
+                    } else {(self.activity)(kind,text);}
                 };
                 let streamed = response.headers().get("content-type").and_then(|h|h.to_str().ok()).is_some_and(|h|h.contains("text/event-stream"));
                 let value:serde_json::Value = if streamed {
@@ -206,6 +220,7 @@ impl Completion<'_> {
                 let message = &value["choices"][0]["message"];
         if let Some(content) = message["content"].as_str() { reply.push_str(content); }
                 let Some(calls) = message["tool_calls"].as_array().filter(|c| !c.is_empty()) else {
+                    if let Some(state)=agent_state.lock().unwrap().as_ref(){(self.agents)(state.clone());}
                     return message["content"].as_str().map(|_| (reply,usage)).ok_or_else(|| format!("risposta inattesa: {}",truncate(&value.to_string(),300)));
                 };
                 history.push(message.clone());
@@ -214,9 +229,11 @@ impl Completion<'_> {
                     let name = call["function"]["name"].as_str().ok_or("tool call missing name")?;
                     let arguments = call["function"]["arguments"].as_str().ok_or("tool call missing arguments")?;
                     let parsed:serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
+                    tool_sequence += 1;
                     let event_id = agent.map(|a|format!("{}:{id}",a["id"].as_str().unwrap_or("agent"))).unwrap_or_else(||id.to_string());
+                    let event_id=format!("{event_id}:{tool_sequence}");
                     let mut tool_event = serde_json::json!({"kind":"tool","id":event_id,"action":name,"path":parsed["path"],"arguments":parsed,"status":"running","at":crate::data::now_millis()});
-                    (self.activity)("__activity",&tool_event.to_string());
+                    tool_progress(&tool_event);
                     let result = if name == "create_subagent" && delegate {
                         let title = parsed["title"].as_str().unwrap_or("").trim();
                         let task = parsed["task"].as_str().unwrap_or("").trim();
@@ -227,11 +244,16 @@ impl Completion<'_> {
                             static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
                             let agent_id = format!("agent-{}-{}",crate::data::now_millis(),SEQUENCE.fetch_add(1,std::sync::atomic::Ordering::Relaxed));
                             let mut running = serde_json::json!({"id":agent_id,"title":title,"task":task,"summary":truncate(task,160),"status":"running","model":self.model,"started_at":crate::data::now_millis()});
+                            let cancellation=self.runtime.as_ref().map(|r|r.start(&agent_id));
                             (self.agents)(running.clone());
                             let mut child_history = context.clone();
-                            child_history.push(serde_json::json!({"role":"system","content":"You are the delegated subagent. Complete the assigned task directly. You may use the authorized read-only project tools. Further delegation is unavailable. Return your findings to the parent."}));
+                            child_history.push(serde_json::json!({"role":"system","content":"You are the delegated subagent. Complete the assigned task directly. You may use the authorized project tools. Further delegation is unavailable. Return your findings to the parent."}));
                             child_history.push(serde_json::json!({"role":"user","content":task}));
-                            match self.run(child_history, false, Some(&running)).await {
+                            let child_result=if let Some(cancellation)=cancellation {
+                                cancellation.run(self.run(child_history,false,Some(&running))).await.and_then(|r|r)
+                            } else {self.run(child_history,false,Some(&running)).await};
+                            if let Some(runtime)=&self.runtime {runtime.finish(&agent_id);}
+                            match child_result {
                                 Ok((result, child_usage)) => {
                                     usage.prompt_tokens += child_usage.prompt_tokens;usage.completion_tokens += child_usage.completion_tokens;usage.total_tokens += child_usage.total_tokens;
                                     running["status"] = serde_json::json!("completed");running["summary"] = serde_json::json!(truncate(&result,180));running["content"] = serde_json::json!(result);
@@ -240,22 +262,21 @@ impl Completion<'_> {
                                     serde_json::json!({"agent_id":agent_id,"result":result})
                                 }
                                 Err(error) => {
-                                    running["status"] = serde_json::json!("failed");running["summary"] = serde_json::json!(error);running["content"] = serde_json::json!(error);
+                                    running["status"] = serde_json::json!(if error=="agent_cancelled" {"cancelled"} else {"failed"});running["summary"] = serde_json::json!(error);if error!="agent_cancelled" {running["content"] = serde_json::json!(error);}
                                     running["finished_at"] = serde_json::json!(crate::data::now_millis());
                                     (self.agents)(running);serde_json::json!({"agent_id":agent_id,"error":error})
                                 }
                             }
                         }
-                    } else if let Some(files) = self.project.as_ref().filter(|_| matches!(name,"read_project_file"|"list_project_files")) {
+                    } else if let Some(files) = self.project.as_ref().filter(|_| matches!(name,"read_project_file"|"list_project_files"|"write_project_file"|"edit_project_file"|"execute_project_command"|"inspect_project_command")) {
                         let path = parsed["path"].as_str().unwrap_or(".");(self.activity)(name,path);
-                        if let Some(agent) = agent {
-                            let mut update = agent.clone();update["summary"] = serde_json::json!(format!("{name}: {path}"));(self.agents)(update);
-                        }
-                        let files = files.clone();let action = name.to_string();let arguments = arguments.to_string();
+                        let mut files = files.clone();
+                        if let (Some(agent),Some(execution))=(agent,files.execution.as_mut()) {execution.agent_id=agent["id"].as_str().map(String::from);execution.cancellation=execution.agent_id.as_ref().and_then(|id|{use tauri::Manager;execution.app.state::<crate::agent_runs::AgentRuns>().token(id)});}
+                        let action = name.to_string();let arguments = arguments.to_string();
                         tauri::async_runtime::spawn_blocking(move || files.execute(&action,&arguments)).await.map_err(|e|e.to_string())?
                     } else {serde_json::json!({"error":"Tool unavailable for this task"})};
                     tool_event["status"] = serde_json::json!(if result.get("error").is_some() {"failed"} else {"completed"});
-                    tool_event["output"] = serde_json::json!(result.to_string());(self.activity)("__activity",&tool_event.to_string());
+                    tool_event["output"] = serde_json::json!(result.to_string());tool_progress(&tool_event);
                     history.push(serde_json::json!({"role":"tool","tool_call_id":id,"content":result.to_string()}));
                 }
             }
@@ -266,6 +287,43 @@ impl Completion<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn delegated_agent_reads_real_files_and_preserves_reasoning_across_tool_rounds() {
+        use std::io::{Read,Write};
+        let root=std::env::temp_dir().join(format!("aurachat-agent-{}",crate::data::now_millis()));std::fs::create_dir(&root).unwrap();std::fs::write(root.join("note.txt"),"AGENT_FIXTURE").unwrap();
+        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let address=listener.local_addr().unwrap();
+        let server=std::thread::spawn(move || {
+            for round in 0..4 {
+                let (mut socket,_)=listener.accept().unwrap();socket.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+                let mut bytes=Vec::new();let mut buffer=[0;4096];
+                let body=loop {
+                    let count=socket.read(&mut buffer).unwrap();assert!(count>0);bytes.extend_from_slice(&buffer[..count]);
+                    if let Some(end)=bytes.windows(4).position(|w|w==b"\r\n\r\n"){
+                        let headers=String::from_utf8_lossy(&bytes[..end]).to_lowercase();let length:usize=headers.lines().find_map(|l|l.strip_prefix("content-length:")).unwrap().trim().parse().unwrap();
+                        if bytes.len()>=end+4+length {break serde_json::from_slice::<serde_json::Value>(&bytes[end+4..end+4+length]).unwrap();}
+                    }
+                };
+                if round==1 || round==2 {assert!(!body["tools"].as_array().unwrap().iter().any(|t|t["function"]["name"]=="create_subagent"));}
+                let message=match round {
+                    0=>serde_json::json!({"role":"assistant","content":null,"tool_calls":[{"id":"delegate","type":"function","function":{"name":"create_subagent","arguments":serde_json::json!({"title":"Inspect fixture","task":"Read note.txt and report its token."}).to_string()}}]}),
+                    1=>serde_json::json!({"role":"assistant","content":"Checking. ","reasoning_content":"First reasoning. ","tool_calls":[{"id":"read","type":"function","function":{"name":"read_project_file","arguments":"{\"root\":0,\"path\":\"note.txt\"}"}}]}),
+                    2=>{assert!(body["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("AGENT_FIXTURE"));serde_json::json!({"role":"assistant","reasoning_content":"Second reasoning.","content":"AGENT_FIXTURE verified"})},
+                    _=>{assert!(body["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("AGENT_FIXTURE verified"));serde_json::json!({"role":"assistant","content":"Delegation completed"})}
+                };
+                let response=serde_json::json!({"choices":[{"message":message}],"usage":{"total_tokens":1}}).to_string();
+                write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{response}",response.len()).unwrap();
+            }
+        });
+        let events=std::sync::Mutex::new(Vec::new());let tools=std::sync::Mutex::new(Vec::new());
+        let messages:Vec<ChatMessage>=serde_json::from_value(serde_json::json!([{"role":"user","content":"Create a subagent to read the fixture."}])).unwrap();
+        let result=tauri::async_runtime::block_on(chat_completion(&reqwest::Client::new(),&format!("http://{address}"),"test","test",&messages,Some(crate::project_files::ProjectFiles{name:"Test".into(),roots:vec![root.clone()],unavailable:vec![],execution:None}),None,
+            |kind,text|{if kind=="__activity"{tools.lock().unwrap().push(serde_json::from_str::<serde_json::Value>(text).unwrap());}},|event|events.lock().unwrap().push(event))).unwrap();
+        server.join().unwrap();assert_eq!(result.0,"Delegation completed");assert_eq!(result.1.total_tokens,4);
+        let events=events.into_inner().unwrap();assert_eq!(events.last().unwrap()["status"],"completed");
+        let complete=events.iter().find(|e|e["reasoning_content"]=="First reasoning. Second reasoning.").unwrap();assert_eq!(complete["content"],"Checking. AGENT_FIXTURE verified");
+        assert_eq!(complete["activity"][0]["status"],"completed");assert!(tools.into_inner().unwrap().iter().all(|e|e["action"]=="create_subagent"));
+        std::fs::remove_file(root.join("note.txt")).unwrap();std::fs::remove_dir(root).unwrap();
+    }
     #[test]
     fn http_stream_handles_fragmented_unicode_and_tool_rounds() {
         use std::io::{Read, Write};
@@ -303,7 +361,7 @@ mod tests {
         let events = std::sync::Mutex::new(Vec::new());
         let messages:Vec<ChatMessage> = serde_json::from_str(r#"[{"role":"user","content":"Read notes"}]"#).unwrap();
         let (reply,usage) = tauri::async_runtime::block_on(chat_completion(&reqwest::Client::new(),&format!("http://{address}"),"test","test",&messages,
-            Some(crate::project_files::ProjectFiles{name:"Test".into(),roots:vec![root.clone()],unavailable:vec![]}),
+            Some(crate::project_files::ProjectFiles{name:"Test".into(),roots:vec![root.clone()],unavailable:vec![],execution:None}),None,
             |kind,text|events.lock().unwrap().push((kind.to_string(),text.to_string())), |_|{})).unwrap();
         server.join().unwrap();assert_eq!(reply,"Controllo 🦀. Fatto.");assert_eq!(usage.total_tokens,42);
         let events = events.into_inner().unwrap();
@@ -368,7 +426,7 @@ mod tests {
             if let Some((uid,refresh))=cloud.session(){config.uid=uid;config.refresh_token=refresh;config.save(&dir)?;}
             let model=user.models.get(&user.active_model).ok_or("no active model")?;
             let messages:Vec<ChatMessage>=serde_json::from_value(serde_json::json!([{"role":"user","content":"Use read_project_file with root 0 and path vault.md. Return only the exact token contained in that file. Do not guess."}])).unwrap();
-            chat_completion(&reqwest::Client::new(),&model.base_url,&model.model,&user.api_key,&messages,Some(crate::project_files::ProjectFiles{name:"Local fixture".into(),roots:vec![root.clone()],unavailable:vec![]}),|_,_|{calls.fetch_add(1,std::sync::atomic::Ordering::SeqCst);}, |_|{}).await
+            chat_completion(&reqwest::Client::new(),&model.base_url,&model.model,&user.api_key,&messages,Some(crate::project_files::ProjectFiles{name:"Local fixture".into(),roots:vec![root.clone()],unavailable:vec![],execution:None}),None,|_,_|{calls.fetch_add(1,std::sync::atomic::Ordering::SeqCst);}, |_|{}).await
         });
         std::fs::remove_file(root.join("vault.md")).unwrap();std::fs::remove_dir(root).unwrap();
         let (text,_)=result.unwrap();assert!(text.contains("AURA_ROOT_TOOL_OK"));assert!(calls.load(std::sync::atomic::Ordering::SeqCst)>0);
@@ -393,7 +451,7 @@ mod tests {
                         if request.len()>=boundary+4+size {break serde_json::from_slice::<serde_json::Value>(&request[boundary+4..boundary+4+size]).unwrap();}
                     }
                 };
-                assert_eq!(parsed["tools"][0]["function"]["name"],"list_project_files");
+                assert!(parsed["tools"].as_array().unwrap().iter().any(|t|t["function"]["name"]=="list_project_files"));
                 let message=if turn<9 {serde_json::json!({"role":"assistant","content":null,"tool_calls":[{"id":"call1","type":"function","function":{"name":"read_project_file","arguments":"{\"root\":0,\"path\":\"vault.md\"}"}}]})}
                     else {assert!(parsed["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("REAL VAULT CONTENT"));serde_json::json!({"role":"assistant","content":"I read vault.md"})};
                 let response=serde_json::json!({"choices":[{"message":message}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}).to_string();
@@ -401,7 +459,7 @@ mod tests {
             }
         });
         let messages:Vec<ChatMessage>=serde_json::from_str(r#"[{"role":"user","content":"Read the vault"}]"#).unwrap();
-        let result=tauri::async_runtime::block_on(chat_completion(&reqwest::Client::new(),&format!("http://{address}"),"test","test",&messages,Some(crate::project_files::ProjectFiles{name:"Test".into(),roots:vec![root.clone()],unavailable:vec![]}),|_,_|{}, |_|{})).unwrap();
+        let result=tauri::async_runtime::block_on(chat_completion(&reqwest::Client::new(),&format!("http://{address}"),"test","test",&messages,Some(crate::project_files::ProjectFiles{name:"Test".into(),roots:vec![root.clone()],unavailable:vec![],execution:None}),None,|_,_|{}, |_|{})).unwrap();
         assert_eq!(result.0,"I read vault.md");assert_eq!(result.1.total_tokens,150);server.join().unwrap();
         std::fs::remove_file(root.join("vault.md")).unwrap();std::fs::remove_dir(root).unwrap();
     }

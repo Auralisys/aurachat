@@ -53,7 +53,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  await page.waitForFunction(()=>document.querySelector('.msg--stream .turn-text')?.textContent.length>0);
  const partial=await page.locator('.msg--stream .turn-text').innerText();
  assert.ok(partial.length<await page.evaluate(()=>window.__answer.length));
- const shots=resolve(__dirname,'../../artifacts/chat-progress');mkdirSync(shots,{recursive:true});
+ const shots=resolve(__dirname,'../../.artifact/chat-progress');mkdirSync(shots,{recursive:true});
  await page.screenshot({path:resolve(shots,'streaming-desktop.png')});
  await page.evaluate(()=>window.__finish());
  await page.waitForFunction(()=>!state.busy);

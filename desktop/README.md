@@ -18,7 +18,7 @@ Vedi `../AuraChat's vault/` per le decisioni: `Overview.md`,
   nella barra del titolo. La key non torna mai nella UI: il backend espone solo
   `api_key_set: true/false`.
 - **Chat**: invia la cronologia della conversazione attiva a `<base_url>/v1/chat/completions`
-  (formato OpenAI-compatible, non-streaming) e mostra la risposta.
+  (formato OpenAI-compatible, streaming SSE) e mostra la risposta.
 - **Logo Auralisys** come icona della finestra e del tray.
 
 La persistenza Firestore usa `users/{uid}`: `config`, `tree` e `window` sono mappe native,
@@ -29,7 +29,7 @@ vanno limitate al proprietario UID dalla console (vedi vault).
 
 ## Cosa NON fa (scope 3–4, non ancora implementati)
 
-Pairing (codice/QR), relay e push FCM. Scrittura dei file ed esecuzione comandi non sono abilitate. Le chat di progetto ricevono un contesto operativo con le sole root autorizzate.
+Pairing (codice/QR), relay e push FCM. Le chat di progetto possono leggere, creare e modificare file ed eseguire comandi attraverso i permessi locali descritti sotto.
 
 ## Struttura
 
@@ -72,9 +72,9 @@ degli snapshot impediscono che aggiornamenti tardivi ripristinino stati vecchi.
 Il registro conserva al massimo gli ultimi 128 KiB di log per processo e chiude
 le esecuzioni all'uscita dell'app.
 
-Il backend attuale non dispone ancora di un runner che avvii shell: questa modifica
-implementa monitoraggio e stop dei processi registrati, senza aggiungere strumenti
-di esecuzione al modello. I permessi di lettura delle cartelle restano di sola lettura.
+Il runner nativo avvia i comandi autorizzati e li registra nel pannello Shell.
+Le esecuzioni di un sub-agente sono associate al suo ID e vengono fermate quando
+l’utente interrompe l’agente.
 
 La UI degli Agenti ascolta l'evento Tauri `agent-activity`, con payload:
 
@@ -96,11 +96,13 @@ La UI degli Agenti ascolta l'evento Tauri `agent-activity`, con payload:
 `running`, `waiting`, `completed`, `failed`, `cancelled`; gli aggiornamenti parziali
 preservano gli altri campi. `content` sostituisce il dettaglio precedente, non è
 un delta. Gli agenti sono separati per conversazione e restano in memoria durante
-la sessione. Il backend attuale non avvia subagenti e non emette questo evento:
-la vista resta vuota finché non verrà collegato un orchestratore.
+la sessione. Il backend crea realmente i sub-agenti tramite il modello configurato,
+condivide il contesto e le root autorizzate e inoltra risultato, reasoning e
+strumenti eseguiti. Ogni chiamata attende il risultato; sono ammesse fino a
+quattro deleghe per turno e i figli non possono delegare a loro volta.
 
 Verifica: `node tests/activity-panel.cjs` con Playwright in `NODE_PATH` (servizi
-nativi simulati). Le immagini di verifica sono in `../artifacts/activity/`.
+nativi simulati). Le immagini di verifica sono in `../.artifact/activity/`.
 
 ```
 desktop/
@@ -232,7 +234,7 @@ La creazione apre il selettore del computer e chiede il consenso alla lettura;
 Modifica progetto permette di cambiare nome e collegamenti. Rimuovere un
 collegamento non elimina i file o le chat. I consensi restano locali, per utente
 e progetto; i percorsi su Firestore non autorizzano altri dispositivi.
-Il modello può esplorare le root autorizzate e leggere file UTF-8 pertinenti alla richiesta con strumenti nativi. Scrittura ed esecuzione non sono abilitate.
+Il modello può esplorare le root autorizzate e leggere file UTF-8 pertinenti alla richiesta con strumenti nativi. Scrittura ed esecuzione dipendono dalla modalità locale del progetto.
 I vecchi gruppi virtuali vengono appiattiti in chat dirette senza perderle.
 
 I pulsanti ellissi e nuova chat compaiono su hover/focus. Progetti e Recenti
@@ -266,8 +268,9 @@ Le chat di progetto espongono al modello `list_project_files` e
 su link/junction, limiti di dimensione per singolo file. L’esplorazione prosegue fino alla risposta del modello, senza soglie arbitrarie sul numero di passaggi o sul totale letto. Vengono consultati
 solo i consensi locali dell'utente/progetto e le cartelle ancora collegate.
 I file letti per la richiesta vengono inviati al provider LLM configurato;
-non avviene scansione o caricamento automatico dell'intera root. Niente shell,
-scritture o accesso fuori dalle root. Il provider deve supportare tool calling.
+non avviene scansione o caricamento automatico dell'intera root. Le modifiche verificano la revisione del file e i comandi passano dal controllo
+permessi. Solo Accesso completo abilita percorsi assoluti esterni. Il provider
+deve supportare tool calling.
 
 ## Cronologia Firestore v2
 
@@ -294,3 +297,65 @@ Verifiche: test Rust, test UI in `tests/` (inclusi `chat-tools.cjs`,
 provider reale con file fixture, migrazione e CRUD remoti. I test browser usano
 un microfono simulato ma AudioContext/AudioWorklet reali; il dispositivo fisico
 e il dialogo permessi nel WebView Windows richiedono prova manuale.
+
+## Permessi, sub-agenti e feedback operativo (17 ottobre 2026)
+
+Il selettore accanto al + degli allegati salva la modalità localmente per utente
+e progetto. Richiedi approvazione è il default: ogni scrittura e comando richiede
+Consenti una volta / Rifiuta nella chat, con percorso e anteprima di testo o argv.
+Le richieste sono associate ad account, conversazione, turno e agente, hanno
+revisioni monotone e scadono dopo dieci minuti. Una decisione non è riutilizzabile;
+un diniego non può essere ritentato identico nello stesso turno. Le chat in
+background mostrano lo stato di attesa nella sidebar.
+
+Approva per me consente le scritture nelle root autorizzate e pochi comandi Git
+verificati senza prompt. Gli altri comandi passano a una chiamata separata del
+modello configurato: solo una risposta JSON valida con decisione allow e rischio
+low consente l'azione. Azioni rischiose, ambigue o errori del reviewer richiedono
+consenso umano. I token della revisione vengono inclusi nel totale del turno.
+Accesso completo richiede una conferma iniziale e consente file e comandi senza
+prompt, anche fuori dal progetto. Il cambio modalità attende che le chat del
+progetto siano ferme. Le tre scelte sono effettive, ma **i comandi usano l'account
+Windows senza sandbox OS**: cwd non limita file e rete e il reviewer non sostituisce
+l'isolamento. Le descrizioni UI rendono esplicito questo limite.
+
+Gli strumenti write_project_file ed edit_project_file richiedono la revisione
+SHA-256 restituita dall'ultima lettura (oppure previous_content per compatibilità).
+Le sostituzioni puntuali devono corrispondere una sola volta. Il backend verifica
+nuovamente percorso e contenuto dopo l'approvazione e serializza le scritture
+interne, scrivendo le sostituzioni su un file temporaneo prima della rinomina.
+Gli artefatti file sono mostrati in Output e ricostruiti dalle attività salvate.
+
+I sub-agenti usano il modello e i permessi del progetto, senza nuove autorizzazioni.
+Il pannello conserva il testo progressivo, il reasoning effettivamente restituito
+dal provider, le operazioni e il loro esito. Interrompi agente annulla le richieste
+HTTP in attesa, impedisce nuove operazioni e arresta le sue shell registrate.
+Le attività terminali non vengono riattivate da eventi tardivi.
+
+Lo streaming aggiorna nodi stabili: i dettagli aperti e il focus non vengono
+ricreati a ogni frammento. Lo shimmer segnala soltanto lavoro attivo; l'attesa di
+consenso ha un segnale distinto. Le animazioni rispettano movimento ridotto e
+si fermano quando la finestra è nascosta. Sidebar, agenti e strumenti condividono
+icone Lucide e i colori del tema AuraChat.
+
+Verifiche: tests/operations-flow.cjs, permissions.cjs, chat-progress.cjs,
+activity-panel.cjs e suite di regressione UI. Questi test usano Edge reale e
+servizi nativi simulati. tests/run-native.ps1 compila ed esegue i test Rust,
+inserendo il manifest Common Controls v6 nel solo runner dei test (SDK Windows
+richiesto), risolvendo TaskDialogIndirect mancante nel runner non attivato.
+I test HTTP dei sub-agenti usano un provider locale simulato e file temporanei
+reali; quelli shell avviano e fermano processi reali. I test di account, provider
+esterno, migrazione e download del modello vocale rimangono esplicitamente opt-in.
+
+## Materiale locale di verifica
+
+La baseline di 171 icone SVG è in `ui/assets/icons/`, con nomi senza hash e
+provenienza in `provenance.json`. `new_chat_os_windows` è rinominata `new_chat.svg`.
+`ui/icons.js` incorpora i soli otto simboli usati nell'interfaccia (Home, Nuova
+chat, indietro, avanti, invio, chevron, spunta e agenti); gli altri SVG restano
+disponibili come asset. Le icone monocromatiche seguono il colore del tema.
+
+Screenshot, sessioni REA e output generati sono conservati nella cartella
+`../.artifact/`, ignorata da Git. I test creano direttamente le proprie sottocartelle
+in quella posizione; il vecchio percorso `../artifacts/` è ignorato per
+compatibilità con script precedenti. Nessuna cattura viene versionata.

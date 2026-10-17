@@ -2,82 +2,95 @@
 const progressMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 function progressIcon(item) {
-  const name = item?.kind === 'reasoning' ? 'Brain' : /search/.test(item?.action) ? 'Search' : /read/.test(item?.action) ? 'FileText' : /list/.test(item?.action) ? 'FolderSearch' : 'Terminal';
+  const name = item?.kind === 'approval' ? 'ShieldCheck' : item?.kind === 'agent' ? 'Bot' : item?.kind === 'reasoning' ? 'Brain' : /search/.test(item?.action) ? 'Search' : /write|edit/.test(item?.action) ? 'FilePenLine' : /read/.test(item?.action) ? 'FileText' : /list/.test(item?.action) ? 'FolderSearch' : 'Terminal';
   return lucide.createElement(lucide.icons[name], {class:'ui-icon', 'aria-hidden':'true'});
 }
 
 function progressLabel(item) {
+  if (item.kind === 'approval') return `${approvalLabel(item)}${item.action?.path ? ` · ${item.action.path}` : ''}`;
+  if (item.kind === 'agent') return item.title || t('activity.agent');
   if (item.kind === 'reasoning') return t('progress.reasoned');
   const key = `progress.${item.action}`;
   return `${t(key) === key ? item.action || t('progress.command') : t(key)}${item.path ? ` · ${item.path}` : ''}`;
 }
 
-function progressHistory(items, live = false) {
-  const details = document.createElement('details');details.className = 'turn-history';
-  const summary = document.createElement('summary');
-  summary.append(progressIcon(items.find(item => item.kind === 'tool') || items[0]), document.createTextNode(`${t('progress.history')} · ${items.length}`), icon('chevron'));
-  details.append(summary);
-  const list = document.createElement('div');list.className = 'turn-history__list';
-  for (const item of items) {
-    const row = document.createElement('details');row.className = 'turn-step';
-    const title = document.createElement('summary');
-    const label = document.createElement('span');label.textContent = progressLabel(item);
-    title.append(progressIcon(item), label);
-    if (item.status) {
-      const status = document.createElement('span');status.className = 'turn-step__status';status.textContent = t(`progress.${item.status}`);title.append(status);
-    }
-    row.append(title);
-    const content = document.createElement(item.kind === 'reasoning' ? 'p' : 'pre');
-    content.textContent = item.kind === 'reasoning' ? item.text || '' : [item.arguments && JSON.stringify(item.arguments, null, 2), item.output].filter(Boolean).join('\n\n');
-    row.append(content);list.append(row);
+function reconcileChildren(parent, nodes) {
+  nodes.forEach((node,index) => {if (parent.children[index] !== node) parent.insertBefore(node,parent.children[index] || null);});
+  while (parent.children.length > nodes.length) parent.lastElementChild.remove();
+}
+
+function progressHistory(items, live = false, existing = null) {
+  const details = existing || document.createElement('details');details.className = 'turn-history';
+  if (!existing) {
+    const summary = document.createElement('summary');summary.append(progressIcon(items.find(i => i.kind === 'tool') || items[0]), document.createElement('span'), icon('chevron'));
+    const list = document.createElement('div');list.className = 'turn-history__list';details.append(summary,list);
   }
-  details.append(list);
-  if (live) details.dataset.liveHistory = '';
-  return details;
+  details.querySelector(':scope > summary > span').textContent = `${t('progress.history')} · ${items.length}`;
+  const list = details.lastElementChild;
+  const rows = items.map((item,index) => {
+    const key = item.id || `reasoning-${index}`;
+    let row = [...list.children].find(el => el.dataset.stepId === key);
+    if (!row) {
+      row = document.createElement('details');row.className = 'turn-step';row.dataset.stepId = key;
+      const title = document.createElement('summary');
+      const label = document.createElement('span');label.className = 'turn-step__label';
+      const status = document.createElement('span');status.className = 'turn-step__status';title.append(progressIcon(item),label,status);row.append(title,document.createElement(item.kind === 'reasoning' ? 'p' : 'pre'));
+    }
+    row.querySelector('.turn-step__label').textContent = progressLabel(item);
+    const status = item.status || (live && index === items.length - 1 && item.kind === 'reasoning' ? 'running' : 'completed');
+    row.dataset.status = status;row.dataset.kind = item.kind;
+    row.querySelector('.turn-step__status').textContent = item.kind === 'approval' ? approvalLabel(item) : t(`progress.${status}`);
+    row.querySelector('.turn-step__label').classList.toggle('is-working-text',live && ['running','reviewing'].includes(status));
+    const text = item.kind === 'reasoning' ? item.text || '' : item.kind === 'approval' ? [item.reason && (item.reason === 'review_unavailable' ? t('permissions.review_unavailable') : item.reason),JSON.stringify(item.action,null,2)].filter(Boolean).join('\n\n') : [item.arguments && JSON.stringify(item.arguments,null,2),item.output].filter(Boolean).join('\n\n');
+    if (row.lastElementChild.textContent !== text) row.lastElementChild.textContent = text;
+    return row;
+  });
+  reconcileChildren(list,rows);details.toggleAttribute('data-live-history',live);return details;
 }
 
 function renderTurnBody(body, message, live = false) {
-  // Keep activity at the point where it happened, even between answer segments.
-  const open = new Set([...body.querySelectorAll('details[open]')].map(el => el.dataset.historyKey));
-  body.replaceChildren();
+  const existing = new Map([...body.children].map(el => [el.dataset.partKey,el]));
   let offset = 0, group = [], groupOffset = 0;
+  const nodes = [];
   const appendText = text => {
     if (!text) return;
-    const part = document.createElement('div');part.className = 'turn-text';part.innerHTML = markdownHTML(text);body.append(part);
+    const key = `text-${offset}`;
+    const part = existing.get(key) || document.createElement('div');part.className = 'turn-text';part.dataset.partKey = key;
+    if (part._raw !== text) {
+      part._raw = text;part.innerHTML = markdownHTML(text);
+      part.querySelectorAll('a').forEach(link => {
+        link.rel = 'noopener noreferrer';
+        link.onclick = async event => {event.preventDefault();if (!/^https?:$/.test(link.protocol)) return;
+          try {await invoke('open_external_url',{url:link.href});} catch (_) {composerStatus(t('chat.link_failed'));}};
+      });
+    }
+    nodes.push(part);
   };
   const flush = () => {
     if (!group.length) return;
-    const history = progressHistory(group, live);history.dataset.historyKey = `group-${groupOffset}`;
-    history.querySelectorAll('.turn-step').forEach((el, index) => el.dataset.historyKey = `${groupOffset}-${index}`);
-    body.append(history);group = [];
+    const key = `group-${groupOffset}`;
+    const history = progressHistory(group,live && message.content.length <= groupOffset,existing.get(key));history.dataset.partKey = key;
+    history.dataset.historyKey = key;nodes.push(history);group = [];
   };
   for (const item of message.activity || []) {
-    if (!['tool','reasoning'].includes(item.kind)) continue;
-    const position = Math.max(offset, Math.min(message.content.length, item.offset || 0));
-    if (position > offset) {flush();appendText(message.content.slice(offset, position));offset = position;}
+    if (!['tool','reasoning','approval'].includes(item.kind)) continue;
+    const position = Math.max(offset,Math.min(message.content.length,item.offset || 0));
+    if (position > offset) {flush();appendText(message.content.slice(offset,position));offset = position;}
     if (!group.length) groupOffset = position;
     group.push(item);
   }
-  flush();appendText(message.content.slice(offset));
-  body.querySelectorAll('details').forEach(el => {el.open = open.has(el.dataset.historyKey);});
-  body.querySelectorAll('a').forEach(link => {
-    link.rel = 'noopener noreferrer';
-    link.onclick = async event => {
-      event.preventDefault();
-      if (!/^https?:$/.test(link.protocol)) return;
-      try {await invoke('open_external_url', {url:link.href});} catch (_) {composerStatus(t('chat.link_failed'));}
-    };
-  });
+  flush();appendText(message.content.slice(offset));reconcileChildren(body,nodes);
 }
 
 function renderThinkingStatus() {
   let status = $('#thinking-status');
   if (!status) {status = document.createElement('div');status.id = 'thinking-status';status.className = 'thinking-status';$('.composer').prepend(status);}
+  renderPermissionRequests();
   const run = state.runs.get(state.activeConversationId);
   status.hidden = !run?.pending;
   if (!run?.pending) {status.replaceChildren();return;}
   const stream = run.stream, latest = stream?.activity.at(-1);
-  const label = latest?.status === 'running' ? progressLabel(latest) : latest?.kind === 'reasoning' ? latest.text.trim().slice(-180) : stream?.content ? t('progress.writing') : run.activity || t('chat.thinking');
+  const label = latest?.kind === 'approval' && ['pending','reviewing'].includes(latest.status) ? approvalLabel(latest) : latest?.status === 'running' ? progressLabel(latest) : latest?.kind === 'reasoning' ? latest.text.trim().slice(-180) : stream?.content ? t('progress.writing') : run.activity || t('chat.thinking');
   let line = status.querySelector('.thinking-status__line');
   if (!line) {
     line = document.createElement('div');line.className = 'thinking-status__line';
@@ -85,9 +98,11 @@ function renderThinkingStatus() {
     const timer = document.createElement('span');timer.className = 'thinking__timer';
     line.append(progressIcon(latest || {kind:'reasoning'}), text, timer);status.replaceChildren(line);
   }
-  const glyphKey = `${latest?.kind}:${latest?.action}`;
-  if (line.dataset.glyph !== glyphKey) {line.querySelector('.ui-icon').replaceWith(progressIcon(latest || {kind:'reasoning'}));line.dataset.glyph = glyphKey;}
-  const text = line.querySelector('.thinking__activity');text.textContent = label;text.title = label;
+  const activeItem = latest?.kind === 'approval' && !['pending','reviewing'].includes(latest.status) ? {kind:'reasoning'} : latest || {kind:'reasoning'};
+  const glyphKey = `${activeItem.kind}:${activeItem.action}`;
+  if (line.dataset.glyph !== glyphKey) {line.querySelector('.ui-icon').replaceWith(progressIcon(activeItem));line.dataset.glyph = glyphKey;}
+  line.dataset.phase = latest?.kind === 'approval' && latest.status === 'pending' ? 'waiting' : stream?.content ? 'writing' : 'working';
+  const text = line.querySelector('.thinking__activity');if (text.textContent !== label) text.textContent = label;text.title = label;
   updateThinkingTimer();
 }
 
@@ -112,7 +127,7 @@ function revealTurn(run) {
     // Do not render half of a surrogate pair.
     if (stream.shown < stream.content.length && /[\uD800-\uDBFF]/.test(stream.content[stream.shown - 1])) stream.shown++;
     previous = now;
-    if (state.runs.get(state.activeConversationId) === run) updateLiveTurn();
+    if (state.runs.get(state.activeConversationId) === run && (!stream.lastPaint || now - stream.lastPaint >= 40 || stream.shown === stream.content.length)) {updateLiveTurn();stream.lastPaint = now;}
     if (stream.shown < stream.content.length) stream.frame = requestAnimationFrame(tick);
     else {stream.resolve?.();stream.resolve = null;}
   };
@@ -127,6 +142,7 @@ async function finishLiveTurn(run) {
 
 async function setupChatProgress() {
   document.addEventListener('visibilitychange', () => {
+    document.documentElement.classList.toggle('is-backgrounded',document.hidden);
     if (!document.hidden) return;
     for (const run of state.runs.values()) {
       const stream = run.stream;if (!stream) continue;

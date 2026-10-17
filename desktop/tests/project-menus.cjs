@@ -41,7 +41,7 @@ const assert = require('node:assert/strict');
    }
   }}};
  },{locales});
- const shots=resolve(__dirname,'../../artifacts/project-model');mkdirSync(shots,{recursive:true});
+ const shots=resolve(__dirname,'../../.artifact/project-model');mkdirSync(shots,{recursive:true});
  const url=pathToFileURL(resolve(__dirname,'../ui/index.html')).href;
  await page.goto(url);await page.locator('#boot-splash').waitFor({state:'hidden'});
  assert.equal(await page.locator('.tree-folder').count(),0);

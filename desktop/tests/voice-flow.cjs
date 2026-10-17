@@ -57,7 +57,7 @@ const assert=require('node:assert/strict');
  assert.equal(await page.locator('#voice-error').textContent(),'');
  await page.click('#voice-download');await page.evaluate(()=>window.__finishDownload());await page.waitForFunction(()=>document.querySelector('#voice-download').hidden);
  assert.match(await page.locator('#voice-model-status').textContent(),/Installato/);
- const shots=resolve(__dirname,'../../artifacts/chat-alignment');mkdirSync(shots,{recursive:true});
+ const shots=resolve(__dirname,'../../.artifact/chat-alignment');mkdirSync(shots,{recursive:true});
  await page.screenshot({path:resolve(shots,'voice-settings.png')});await page.click('#modal-close');
  await page.fill('#composer-input','Testo già scritto');await page.click('#composer-attach');await page.locator('#composer-attachments .attachment-chip').waitFor();
  const record=async()=>{await page.click('#composer-mic');await page.locator('#voice-stop').waitFor({state:'visible'});await page.waitForFunction(()=>voice.recording?.count>4000);};

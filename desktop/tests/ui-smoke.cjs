@@ -26,6 +26,18 @@ const assert = require('node:assert/strict');
  await page.goto(pathToFileURL(resolve(__dirname,'../ui/index.html')).href);
  await page.locator('#sidebar').waitFor({state:'visible'});
  await page.locator('#boot-splash').waitFor({state:'hidden'});
+ const importedGlyphs = await page.evaluate(() => Object.keys(importedIcons).map(name => {
+  const svg = icon(name);
+  document.body.append(svg);
+  const result = {name, viewBox:svg.getAttribute('viewBox'), stroke:getComputedStyle(svg).stroke, hidden:svg.getAttribute('aria-hidden')};
+  svg.remove();
+  return result;
+ }));
+ assert.equal(importedGlyphs.length,8);
+ assert.ok(importedGlyphs.every(glyph => glyph.viewBox && glyph.hidden === 'true'));
+ assert.equal(importedGlyphs.find(glyph => glyph.name === 'compose').viewBox,'0 0 16 16');
+ assert.equal(importedGlyphs.find(glyph => glyph.name === 'home').stroke,'none');
+ assert.equal(await page.locator('#btn-new-chat svg').getAttribute('viewBox'),'0 0 16 16');
  assert.equal(await page.locator('#app-rail').isVisible(),true);
  assert.equal(await page.locator('#app-rail #account-button').count(),1);
  assert.equal(await page.locator('.workspace #sidebar').count(),1);
