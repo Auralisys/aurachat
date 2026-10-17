@@ -2,3 +2,4 @@
 /.artifact/
 # Keep the legacy folder local if an older script recreates it.
 /artifacts/
+*.lock
