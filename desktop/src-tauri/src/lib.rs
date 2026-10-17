@@ -77,6 +77,11 @@ async fn remove_speech_model(state: tauri::State<'_, AppState>) -> Result<speech
     tauri::async_runtime::spawn_blocking(move || speech.remove()).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
+async fn prepare_speech_model(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let speech = state.speech.clone();
+    tauri::async_runtime::spawn_blocking(move || speech.prepare()).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
 async fn transcribe_audio(state: tauri::State<'_, AppState>, samples: Vec<f32>, language: String) -> Result<String, String> {
     let speech = state.speech.clone();
     tauri::async_runtime::spawn_blocking(move || speech.transcribe(samples, language)).await.map_err(|e| e.to_string())?
@@ -143,7 +148,8 @@ async fn load_user_cached(
     if let Some(u) = state.user.lock().unwrap().clone() {
         return Ok(u);
     }
-    let u = state.firestore.load_user(uid, auth).await?;
+    let mut u = state.firestore.load_user(uid, auth).await?;
+    u.migrate_providers();
     *state.user.lock().unwrap() = Some(u.clone());
     Ok(u)
 }
@@ -219,7 +225,9 @@ async fn save_config(
     if let Some(k) = input.api_key {
         let k = clean(&k);
         if !k.is_empty() {
-            user.api_key = k;
+            if let Some(provider) = user.models.get(&user.active_model).and_then(|m| user.providers.get_mut(&m.provider_id)) {
+                provider.api_key = k;
+            } else { return Err("model_not_found".into()); }
         }
     }
     state.firestore.save_user(&uid, &auth, &user).await?;
@@ -244,6 +252,47 @@ async fn set_model(state: tauri::State<'_, AppState>, model: String) -> Result<P
 
     let cfg = state.config.lock().unwrap().clone();
     Ok(PublicConfig::from_parts(&cfg, &user))
+}
+
+#[tauri::command]
+async fn save_provider(state: tauri::State<'_, AppState>, input: config::SaveProviderInput) -> Result<PublicConfig, String> {
+    let auth = firebase_auth(&state)?;
+    let uid = ensure_uid(&state, &auth).await?;
+    let mut user = load_user_cached(&state, &auth, &uid).await?;
+    user.save_provider(input)?;
+    state.firestore.save_user(&uid, &auth, &user).await?;
+    *state.user.lock().unwrap() = Some(user.clone());
+    Ok(PublicConfig::from_parts(&state.config.lock().unwrap(), &user))
+}
+
+#[tauri::command]
+async fn remove_provider(state: tauri::State<'_, AppState>, id: String) -> Result<PublicConfig, String> {
+    let auth = firebase_auth(&state)?;
+    let uid = ensure_uid(&state, &auth).await?;
+    let mut user = load_user_cached(&state, &auth, &uid).await?;
+    if user.providers.remove(&id).is_none() { return Err("invalid_provider".into()); }
+    user.models.retain(|_, m| m.provider_id != id);
+    user.ensure_active_model();
+    state.firestore.save_user(&uid, &auth, &user).await?;
+    *state.user.lock().unwrap() = Some(user.clone());
+    Ok(PublicConfig::from_parts(&state.config.lock().unwrap(), &user))
+}
+
+#[tauri::command]
+fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    if !state.running_chats.lock().unwrap().is_empty() { return Err("account_busy".into()); }
+    let mut cfg = state.config.lock().unwrap().clone();
+    cfg.firebase_email.clear();
+    cfg.firebase_password.clear();
+    cfg.uid.clear();
+    cfg.refresh_token.clear();
+    cfg.save(&state.config_dir)?;
+    *state.config.lock().unwrap() = cfg;
+    state.firestore.logout();
+    *state.user.lock().unwrap() = None;
+    *state.data.lock().unwrap() = ChatData::default();
+    state.data_loaded.store(false, Ordering::SeqCst);
+    Ok(())
 }
 
 #[tauri::command]
@@ -340,13 +389,11 @@ async fn chat(
     let auth = firebase_auth(&state)?;
     let uid = ensure_uid(&state, &auth).await?;
     let user = load_user_cached(&state, &auth, &uid).await?;
-    if user.api_key.is_empty() {
-        return Err("no_api_key".to_string());
-    }
     let mc = user.models.get(&user.active_model).ok_or("model_not_found")?;
+    if user.model_key(mc).is_empty() { return Err("no_api_key".into()); }
     let base_url = mc.base_url.clone();
     let model = mc.model.clone();
-    let api_key = user.api_key.clone();
+    let api_key = user.model_key(mc).to_string();
 
     let needs_load=state.data.lock().unwrap().find_conversation(&conversation_id).is_some_and(|c| !c.messages_loaded);
     if needs_load {
@@ -736,6 +783,9 @@ pub fn run() {
             get_local_config,
             login,
             save_config,
+            save_provider,
+            remove_provider,
+            logout,
             set_model,
             get_data,
             get_conversation,
@@ -752,7 +802,7 @@ pub fn run() {
             choose_chat_files,
             open_external_url
             ,list_shells, stop_shell
-            ,speech_model_status, download_speech_model, cancel_speech_download, remove_speech_model, transcribe_audio
+            ,speech_model_status, download_speech_model, cancel_speech_download, remove_speech_model, prepare_speech_model, transcribe_audio
         ])
         .build(tauri::generate_context!())
         .expect("errore durante l'avvio di AuraChat")

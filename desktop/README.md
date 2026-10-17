@@ -14,9 +14,7 @@ Vedi `../AuraChat's vault/` per le decisioni: `Overview.md`,
   finestra nasconde nel tray, non termina. Si esce dal menu del tray.
 - **Onboarding dell'inferenza a preset**: *DeepSeek* (basta la key, endpoint e
   modello precompilati) o *Avanzato* (base_url + modello + key custom).
-- **Finestra settings** (`base_url`, `model`, `api_key`) riapribile dalla rotella
-  nella barra del titolo. La key non torna mai nella UI: il backend espone solo
-  `api_key_set: true/false`.
+- **Impostazioni** con navigazione laterale e ricerca: Generali, Account, Provider di modelli e Voce. Account mostra identità e disconnessione, senza parametri Firebase. I provider hanno una API key dedicata e uno o più modelli con URL base indipendenti. La key non torna mai nella UI: il backend espone solo `api_key_set: true/false`.
 - **Chat**: invia la cronologia della conversazione attiva a `<base_url>/v1/chat/completions`
   (formato OpenAI-compatible, streaming SSE) e mostra la risposta.
 - **Logo Auralisys** come icona della finestra e del tray.
@@ -171,7 +169,7 @@ Verificato su `api-docs.deepseek.com` (ottobre 2026):
 - `model` = `deepseek-flash` (default attuale; `deepseek-chat` è stato ritirato
   a luglio 2026). L'alternativa è `deepseek-v4-pro`.
 
-Questi valori vivono solo in `src-tauri/src/config.rs`, non nella UI.
+I valori iniziali sono definiti in `src-tauri/src/config.rs`; il preset dell’editor in `ui/settings.js` usa gli stessi valori. Endpoint e modelli diventano modificabili nella configurazione del provider.
 
 ## Icone
 
@@ -254,7 +252,7 @@ contesto. Il pulsante + sceglie fino a quattro file di testo (128 KiB ciascuno,
 Impostazioni → Voce gestisce Cohere Transcribe INT4 (~2 GB): download da una
 revisione immutabile, controllo SHA-256, interruzione/ripresa e rimozione locale.
 Il modello usa ONNX Runtime su CPU, senza Python, chiavi o servizi di trascrizione.
-Il primo uso carica i pesi in memoria; su CPU i tempi dipendono dall'hardware.
+Il primo uso verifica e carica i pesi prima di aprire il microfono, con stato di preparazione visibile; su CPU i tempi dipendono dall'hardware.
 Il registratore AudioWorklet cattura mono, ricampiona a 16 kHz e conserva l'audio
 solo in memoria. Limite due minuti, inferenza in blocchi fino a 30 secondi.
 La lingua segue italiano/inglese dell'interfaccia. Registrazione con forma
@@ -333,7 +331,11 @@ HTTP in attesa, impedisce nuove operazioni e arresta le sue shell registrate.
 Le attività terminali non vengono riattivate da eventi tardivi.
 
 Lo streaming aggiorna nodi stabili: i dettagli aperti e il focus non vengono
-ricreati a ogni frammento. Lo shimmer segnala soltanto lavoro attivo; l'attesa di
+ricreati a ogni frammento. Ragionamento e attività restano in un unico elenco
+espandibile dentro la chat: il cervello viola pulsa durante il turno e il tempo
+trascorso appare nella stessa intestazione. Non c’è una seconda riga di reasoning
+sopra il composer. Il testo dei messaggi e dell’input usa 13 px, con titoli
+proporzionati e codice invariato. Lo shimmer segnala soltanto lavoro attivo; l'attesa di
 consenso ha un segnale distinto. Le animazioni rispettano movimento ridotto e
 si fermano quando la finestra è nascosta. Sidebar, agenti e strumenti condividono
 icone Lucide e i colori del tema AuraChat.
@@ -361,3 +363,51 @@ Screenshot, sessioni REA e output generati sono conservati nella cartella
 `../.artifact/`, ignorata da Git. I test creano direttamente le proprie sottocartelle
 in quella posizione; il vecchio percorso `../artifacts/` è ignorato per
 compatibilità con script precedenti. Nessuna cattura viene versionata.
+
+## Impostazioni e provider (17 ottobre 2026)
+
+L’ingresso nella rail usa un ingranaggio Lucide. Il pannello ha una seconda
+sidebar con profilo, ricerca per sezione/parola chiave e quattro sezioni. Account
+mostra email, stato di accesso e disconnessione locale; non espone configurazioni
+Firebase. La disconnessione elimina la sessione salvata e la cache in memoria,
+conserva i dati remoti ed è bloccata durante le richieste in corso.
+
+Provider di modelli permette di aggiungere DeepSeek, OpenAI, OpenRouter o un
+provider personalizzato compatibile con OpenAI Chat Completions in streaming.
+DeepSeek precompila i modelli esistenti; per gli altri si inseriscono gli ID dei
+modelli disponibili sul proprio account. Ogni provider ha una chiave condivisa
+dai suoi modelli, ognuno con il proprio URL base. Gli URL ammettono HTTPS e HTTP
+su localhost; il percorso `/v1` non viene duplicato. I preset seguono le
+[API DeepSeek](https://api-docs.deepseek.com/en/),
+[OpenAI](https://developers.openai.com/api/reference/overview) e
+[OpenRouter](https://openrouter.ai/docs/api/api-reference/models/get-models).
+
+La configurazione resta in `users/{uid}.config`: `providers` contiene nome,
+tipo e chiave; `models` associa ID, modello, URL e provider. La configurazione
+precedente viene convertita in memoria conservando chiavi, ID e modello attivo,
+e salvata nel nuovo formato alla prima modifica. Le chiavi non sono restituite
+al frontend e lasciarle vuote nell’editor conserva quelle esistenti. Rimangono
+archiviate nella configurazione Firestore dell’account, come nella versione
+precedente: questo intervento non aggiunge un vault crittografico dedicato.
+Rimuovere un provider conserva le chat e seleziona un modello rimanente;
+se non ne rimangono, il menu modelli permette di aprire la configurazione.
+Chat, sub-agenti e revisione automatica usano la chiave del modello selezionato.
+
+Verifiche: `tests/settings-flow.cjs`, suite UI esistente e `tests/run-native.ps1`.
+I test browser simulano i servizi nativi e non chiamano provider reali.
+Le catture desktop e compatte sono in `../.artifact/settings/`.
+
+### Correzioni dettatura e selettore modelli
+
+Il modello occupato produce un messaggio nella chat e non apre le impostazioni:
+la sezione Voce si apre solo se il modello non è pronto. La preparazione nativa
+precede la cattura del microfono e riusa il modello caricato. Dopo un annullamento,
+la UI attende il completamento dell’operazione nativa prima di consentirne un’altra;
+il risultato annullato non viene inserito in alcuna bozza. Non si interrompe
+forzatamente un’inferenza ONNX già in corso. SHA-256 è compilato con ottimizzazioni
+anche nel profilo di sviluppo, mantenendo la verifica completa dei file.
+Il test reale locale esegue preparazione e due trascrizioni consecutive.
+
+Il selettore mostra il logo bianco del provider prima del modello quando disponibile
+(DeepSeek); altrimenti usa “Provider · modello”. Le etichette accessibili includono
+sempre il nome del provider.

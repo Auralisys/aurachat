@@ -62,7 +62,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   // Late running events cannot resurrect a cancelled agent.
   await page.evaluate(()=>__events['agent-activity']({payload:{conversation_id:'c',id:'a',status:'running',summary:'Late'}}));
   assert.equal(await page.locator('.agent-detail-status').innerText(),locales['activity.cancelled']);
-  await page.emulateMedia({reducedMotion:'reduce'});assert.equal(await page.locator('.thinking__activity').evaluate(el=>getComputedStyle(el).animationName),'none');
+  await page.emulateMedia({reducedMotion:'reduce'});assert.equal(await page.locator('.msg--stream .turn-history[data-live-history] > summary > svg').first().evaluate(el=>getComputedStyle(el).animationName),'none');
   await page.click('#activity-close');await page.click('#sidebar-collapse');await page.setViewportSize({width:700,height:820});
   await page.evaluate(()=>__emitApproval({id:'write-3',conversation_id:'c',turn_id:'t',status:'pending',reviewer:'user',action:{kind:'write',path:'C:/work/AuraChat/note.md',content:'Nuovo contenuto'},created_at:Date.now()}));
   await page.locator('.approval-card').waitFor();await page.screenshot({path:resolve(shots,'approval-compact.png')});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);

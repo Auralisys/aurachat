@@ -138,7 +138,7 @@ pub async fn chat_completion(
     let mut history = api_messages(messages);
     if let Some(files) = &project { history.insert(0, serde_json::json!({"role":"system","content":files.context()})); }
     history.insert(0, serde_json::json!({"role":"system","content":"You can delegate focused work using create_subagent. When the user explicitly asks for a subagent, call this tool instead of merely describing one. Subagents use the current model, inherit the user-provided conversation context and authorized project tools, and return a result to you. Do not claim an agent was started unless the tool succeeded."}));
-    let runner = Completion {client, url:format!("{base}/v1/chat/completions"), model, api_key, project, runtime, activity:&activity, agents:&agents};
+    let runner = Completion {client, url:crate::config::completions_url(base), model, api_key, project, runtime, activity:&activity, agents:&agents};
     runner.run(history, true, None).await
 }
 
@@ -426,7 +426,7 @@ mod tests {
             if let Some((uid,refresh))=cloud.session(){config.uid=uid;config.refresh_token=refresh;config.save(&dir)?;}
             let model=user.models.get(&user.active_model).ok_or("no active model")?;
             let messages:Vec<ChatMessage>=serde_json::from_value(serde_json::json!([{"role":"user","content":"Use read_project_file with root 0 and path vault.md. Return only the exact token contained in that file. Do not guess."}])).unwrap();
-            chat_completion(&reqwest::Client::new(),&model.base_url,&model.model,&user.api_key,&messages,Some(crate::project_files::ProjectFiles{name:"Local fixture".into(),roots:vec![root.clone()],unavailable:vec![],execution:None}),None,|_,_|{calls.fetch_add(1,std::sync::atomic::Ordering::SeqCst);}, |_|{}).await
+            chat_completion(&reqwest::Client::new(),&model.base_url,&model.model,user.model_key(model),&messages,Some(crate::project_files::ProjectFiles{name:"Local fixture".into(),roots:vec![root.clone()],unavailable:vec![],execution:None}),None,|_,_|{calls.fetch_add(1,std::sync::atomic::Ordering::SeqCst);}, |_|{}).await
         });
         std::fs::remove_file(root.join("vault.md")).unwrap();std::fs::remove_dir(root).unwrap();
         let (text,_)=result.unwrap();assert!(text.contains("AURA_ROOT_TOOL_OK"));assert!(calls.load(std::sync::atomic::Ordering::SeqCst)>0);

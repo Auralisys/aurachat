@@ -33,16 +33,21 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  await page.goto(pathToFileURL(resolve(__dirname,'../ui/index.html')).href);await page.locator('#boot-splash').waitFor({state:'hidden'});
 
  await page.evaluate(()=>{window.__send= requestChat({conversation_id:'c',content:'Leggi il file'});});
- await page.locator('#thinking-status').waitFor({state:'visible'});
- const geometry=await page.locator('#thinking-status').evaluate(el=>({bottom:el.getBoundingClientRect().bottom,composer:document.querySelector('.composer__box').getBoundingClientRect().top}));
- assert.ok(geometry.composer-geometry.bottom>=0 && geometry.composer-geometry.bottom<24);
- assert.equal(await page.locator('#thinking-status .thinking__activity').evaluate(el=>getComputedStyle(el).animationName),'reasoning-shimmer');
+ const liveHistory = page.locator('.msg--stream .turn-history');
+ await liveHistory.waitFor({state:'visible'});
+ assert.equal(await page.locator('#thinking-status,.thinking__activity').count(),0);
+ assert.equal(await liveHistory.count(),1);
+ assert.equal(await liveHistory.locator(':scope > summary > svg').first().evaluate(el=>getComputedStyle(el).animationName),'work-pulse');
+ assert.match(await liveHistory.locator('.thinking__timer').textContent(),/\d+s/);
  await page.evaluate(()=>{
    window.__emit=(kind,text)=>window.__listeners['chat-progress']({payload:{conversation_id:'c',kind,text}});
    __emit('__reasoning','Controllo i file del progetto.');
    __emit('__activity',JSON.stringify({kind:'tool',id:'one',action:'read_project_file',path:'notes.md',arguments:{path:'notes.md'},status:'running'}));
  });
- assert.match(await page.locator('#thinking-status').innerText(),/notes.md/);
+ await liveHistory.locator(':scope > summary').click();
+ assert.match(await liveHistory.innerText(),/notes.md/);
+ await liveHistory.locator('.turn-step').first().locator('summary').click();
+ await page.evaluate(()=>{window.__liveHistory=document.querySelector('.msg--stream .turn-history');window.__liveBrain=__liveHistory.querySelector('summary > svg');});
  await page.evaluate(()=>{
    const item={kind:'tool',id:'one',action:'read_project_file',path:'notes.md',arguments:{path:'notes.md'},status:'completed',output:'Contenuto verificato',offset:0};
    __emit('__activity',JSON.stringify(item));
@@ -53,11 +58,14 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  await page.waitForFunction(()=>document.querySelector('.msg--stream .turn-text')?.textContent.length>0);
  const partial=await page.locator('.msg--stream .turn-text').innerText();
  assert.ok(partial.length<await page.evaluate(()=>window.__answer.length));
+ assert.equal(await page.evaluate(()=>__liveHistory===document.querySelector('.msg--stream .turn-history') && __liveHistory.open && __liveHistory.querySelector('.turn-step').open && __liveBrain===__liveHistory.querySelector('summary > svg')),true);
+ assert.equal(await liveHistory.locator(':scope > summary > span').first().textContent(),locales['progress.history']+' · 2');
+ assert.equal(await page.locator('#thinking-status,.thinking__activity').count(),0);
  const shots=resolve(__dirname,'../../.artifact/chat-progress');mkdirSync(shots,{recursive:true});
  await page.screenshot({path:resolve(shots,'streaming-desktop.png')});
  await page.evaluate(()=>window.__finish());
  await page.waitForFunction(()=>!state.busy);
- assert.equal(await page.locator('#thinking-status').isHidden(),true);
+ assert.equal(await page.locator('.turn-history[data-live-history]').count(),0);
  const history=page.locator('#messages .turn-history').last();await history.locator(':scope > summary').click();
  await history.locator('.turn-step').last().locator('summary').click();
  assert.match(await history.innerText(),/Contenuto verificato/);
@@ -70,12 +78,12 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
  await page.emulateMedia({reducedMotion:'reduce'});
  await page.evaluate(()=>{window.__send=requestChat({conversation_id:'c',content:'Seconda verifica'});});
- assert.equal(await page.locator('#thinking-status .thinking__activity').evaluate(el=>getComputedStyle(el).animationName),'none');
+ assert.equal(await liveHistory.locator(':scope > summary > svg').first().evaluate(el=>getComputedStyle(el).animationName),'none');
  await page.evaluate(()=>{__emit('__delta','Risposta immediata.');});
  await page.waitForFunction(()=>document.querySelector('.msg--stream .turn-text')?.textContent.trim()==='Risposta immediata.');
  await page.evaluate(()=>{window.__answer='Risposta immediata.';window.__history=[];window.__finish();});
  await page.waitForFunction(()=>!state.busy);
  assert.deepEqual(errors,[]);
- console.log('PASS: actual progress events, bottom status, shimmering, paced text, saved tool output and reasoning, compact layout, reduced motion.');
+ console.log('PASS: single unified reasoning/activity history, stable header and expanded rows, pulsing brain, elapsed time, paced text, saved tool output, compact layout and reduced motion.');
  await browser.close();
 })().catch(error=>{console.error(error);process.exit(1);});

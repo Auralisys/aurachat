@@ -30,6 +30,10 @@ const assert=require('node:assert/strict');
    if(cmd==='get_data')return window.__store;
    if(cmd==='save_data'){window.__store=args.data;return args.data;}
    if(cmd==='speech_model_status')return {...window.__model};
+   if(cmd==='prepare_speech_model'){
+    if(window.__delayPrepare)return new Promise(resolve=>window.__finishPrepare=resolve);
+    return;
+   }
    if(cmd==='download_speech_model'){
     window.__model={...window.__model,busy:true,downloaded:1000000000};window.__listeners['speech-model-progress']?.({payload:window.__model});
     return new Promise((resolve,reject)=>{window.__finishDownload=()=>{window.__model={...window.__model,busy:false,ready:true,downloaded:window.__model.total};resolve(window.__model);};window.__cancelDownload=()=>{window.__model.busy=false;reject('speech_cancelled');};});
@@ -38,7 +42,8 @@ const assert=require('node:assert/strict');
    if(cmd==='remove_speech_model'){window.__model={ready:false,busy:false,downloaded:0,total:1994857346};return window.__model;}
    if(cmd==='choose_chat_files')return [{name:'notes.md',content:'Existing attachment'}];
    if(cmd==='transcribe_audio'){
-    if(window.__delayTranscript)return new Promise(resolve=>window.__finishTranscript=()=>resolve('test dettatura'));
+    if(window.__transcribeError){window.__transcribeError=false;throw 'speech_engine: test failure';}
+    if(window.__delayTranscript){window.__model.busy=true;return new Promise(resolve=>window.__finishTranscript=()=>{window.__model.busy=false;resolve('test dettatura');});}
     return 'test dettatura';
    }
    if(cmd==='chat'){
@@ -61,6 +66,21 @@ const assert=require('node:assert/strict');
  await page.screenshot({path:resolve(shots,'voice-settings.png')});await page.click('#modal-close');
  await page.fill('#composer-input','Testo già scritto');await page.click('#composer-attach');await page.locator('#composer-attachments .attachment-chip').waitFor();
  const record=async()=>{await page.click('#composer-mic');await page.locator('#voice-stop').waitFor({state:'visible'});await page.waitForFunction(()=>voice.recording?.count>4000);};
+ // An installed but busy engine must never be mistaken for a missing model.
+ await page.evaluate(()=>window.__model.busy=true);await page.click('#composer-mic');
+ await page.waitForFunction(()=>!voice.pending);
+ assert.equal(await page.locator('#settings-overlay').isVisible(),false);
+ assert.match(await page.locator('#composer-status').textContent(),/occupato/);
+ await page.evaluate(()=>{window.__model.busy=false;window.__delayPrepare=true;});
+ await page.click('#composer-mic');await page.waitForFunction(()=>window.__finishPrepare);
+ assert.match(await page.locator('#voice-recording-status').textContent(),/modello locale/);
+ assert.equal(await page.evaluate(()=>window.__tracks.length),0);
+ await page.click('#voice-recording-cancel');
+ assert.equal(await page.locator('#composer-mic').isVisible(),false);
+ assert.match(await page.locator('#voice-recording-status').textContent(),/annullata/);
+ await page.evaluate(()=>{window.__delayPrepare=false;window.__finishPrepare();});
+ await page.waitForFunction(()=>!voice.nativeOperation);
+ assert.equal(await page.evaluate(()=>window.__tracks.length),0);
  await record();
  await page.waitForFunction(()=>voice.waveform.some(value=>value>0.05));
  const waveTiming=await page.evaluate(()=>({bars:voice.waveform.length,seconds:voice.recording.count/voice.recording.context.sampleRate}));
@@ -94,8 +114,17 @@ const assert=require('node:assert/strict');
  assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='transcribe_audio').length),calls);
  // Late inference results cannot land in a different draft.
  await page.evaluate(()=>window.__delayTranscript=true);await record();await page.click('#voice-stop');await page.waitForFunction(()=>window.__finishTranscript);
- await page.click('#nav-home');await page.fill('#composer-input','Nuova bozza');await page.evaluate(()=>window.__finishTranscript());
- await page.waitForFunction(()=>!voice.transcribing);assert.equal(await page.locator('#composer-input').inputValue(),'Nuova bozza');
+ await page.click('#nav-home');await page.fill('#composer-input','Nuova bozza');
+ assert.equal(await page.locator('#composer-mic').isVisible(),false);
+ assert.match(await page.locator('#voice-recording-status').textContent(),/annullata/);
+ await page.evaluate(()=>window.__finishTranscript());
+ await page.waitForFunction(()=>!voice.nativeOperation && !voice.transcribing);assert.equal(await page.locator('#composer-input').inputValue(),'Nuova bozza');
+ await page.evaluate(()=>{window.__delayTranscript=false;window.__transcribeError=true;});
+ await record();await page.click('#voice-stop');await page.waitForFunction(()=>!voice.transcribing);
+ assert.equal(await page.locator('#composer-input').inputValue(),'Nuova bozza');
+ assert.equal(await page.locator('#composer-mic').isEnabled(),true);
+ await record();await page.click('#voice-stop');await page.waitForFunction(()=>!voice.transcribing);
+ assert.equal(await page.locator('#composer-input').inputValue(),'Nuova bozza test dettatura');
  await page.evaluate(()=>window.__denyMedia=true);await page.click('#composer-mic');await page.locator('#composer-status').waitFor({state:'visible'});
  assert.match(await page.locator('#composer-status').textContent(),/negato/);assert.equal(await page.locator('#composer-mic').isEnabled(),true);
  assert.equal(await page.evaluate(()=>window.__tracks.every(t=>t.readyState==='ended')),true);

@@ -80,23 +80,6 @@ function formHTML(submitLabel) {
   return `
     <form class="form" data-form novalidate>
       <label class="field">
-        <span class="field__label">${t('form.firebase_project_id')}</span>
-        <input class="field__input" name="firebase_project_id" type="text" readonly placeholder="auralisys-chat" spellcheck="false" autocomplete="off" />
-      </label>
-      <label class="field">
-        <span class="field__label">${t('form.firebase_api_key')}</span>
-        <input class="field__input" name="firebase_api_key" type="text" readonly placeholder="AIza…" spellcheck="false" autocomplete="off" />
-      </label>
-      <label class="field">
-        <span class="field__label">${t('form.firebase_email')}</span>
-        <input class="field__input" name="firebase_email" type="email" readonly placeholder="you@example.com" spellcheck="false" autocomplete="off" />
-      </label>
-      <label class="field">
-        <span class="field__label">${t('form.firebase_password')}</span>
-        <input class="field__input" name="firebase_password" type="password" placeholder="••••••••" autocomplete="off" />
-        <span class="field__note">${t('form.firebase_password_note')}</span>
-      </label>
-      <label class="field">
         <span class="field__label">${t('form.api_key')}</span>
         <input class="field__input" name="api_key" type="password" placeholder="••••••••" autocomplete="off" spellcheck="false" />
         <span class="field__note">${t('form.api_key_note')}</span>
@@ -109,19 +92,14 @@ function formHTML(submitLabel) {
 }
 
 function fillForm(form) {
-  form.elements.firebase_project_id.value = state.config.firebase_project_id;
-  form.elements.firebase_api_key.value = state.config.firebase_api_key;
-  form.elements.firebase_email.value = state.config.firebase_email;
-  form.elements.firebase_password.value = '';
   form.elements.api_key.value = '';
-  form.elements.firebase_password.closest('.field').hidden = true;
 }
 
 async function handleSubmit(form) {
   const payload = {
-    firebase_project_id: form.elements.firebase_project_id.value,
-    firebase_api_key: form.elements.firebase_api_key.value,
-    firebase_email: form.elements.firebase_email.value,
+    firebase_project_id: state.config.firebase_project_id,
+    firebase_api_key: state.config.firebase_api_key,
+    firebase_email: state.config.firebase_email,
     firebase_password: null,
     api_key: form.elements.api_key.value.trim() || null,
   };
@@ -277,7 +255,7 @@ function icon(name) {
     }
     return svg;
   }
-  const glyph = {compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown'}[name];
+  const glyph = {gear:'Settings', person:'UserRound', cpu:'Cpu', microphone:'Mic', search:'Search', back:'ArrowLeft', trash:'Trash2', compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown'}[name];
   if (glyph && lucide.icons[glyph]) return lucide.createElement(lucide.icons[glyph], {class:'ui-icon','aria-hidden':'true'});
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
@@ -946,7 +924,7 @@ function startTimer() {
 }
 
 function updateThinkingTimer() {
-  const el = $('.thinking__timer'), run = state.runs.get(state.activeConversationId);
+  const el = $('#messages .turn-history[data-live-history] .thinking__timer'), run = state.runs.get(state.activeConversationId);
   if (!el || !run?.pending) return;
   const secs = Math.floor((Date.now() - run.since) / 1000);
   el.textContent = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
@@ -961,7 +939,7 @@ function stopTimer() {
 
 async function requestChat(payload) {
   const id = payload.conversation_id;
-  if (state.runs.get(id)?.pending || voice.pending || voice.recording || voice.transcribing) return false;
+  if (state.runs.get(id)?.pending || voice.pending || voice.recording || voice.transcribing || voice.nativeOperation) return false;
   const run = {pending:true, since:Date.now(), messages:structuredClone(state.messages), usage:null, failedSend:null};
   state.runs.set(id, run);state.messages = run.messages;state.failedSend = null;state.unread.delete(id);
   closeChoiceMenus();startTimer();renderMessages();renderSidebar();
@@ -999,7 +977,7 @@ async function regenerateReply() {
 
 async function send() {
   if (voice.recording) return stopVoice(true);
-  if (state.busy || state.preparing || state.loadingConversation || activeConversation()?.conversation.messages_loaded === false || state.changingModel || voice.pending || voice.recording || voice.transcribing) return;
+  if (state.busy || state.preparing || state.loadingConversation || activeConversation()?.conversation.messages_loaded === false || state.changingModel || voice.pending || voice.recording || voice.transcribing || voice.nativeOperation) return;
   const input = $('#composer-input'), text = input.value.trim();
   const attachments = structuredClone(state.attachments), editIndex = state.editingMessageIndex;
   if (!text && !attachments.length) return;
@@ -1065,13 +1043,34 @@ function autoGrow(ta) {
 // ===== Modello =====
 function populateModelSelect() {
   const cur = state.config.active_model;
-  $('#model-name').textContent = cur || t('chat.model');
-  $('#model-select').title = `${t('chat.model')}: ${cur}`;
+  const models = new Map((state.config.providers || []).flatMap(provider => provider.models.map(model => [model.id, { provider, model }])));
+  const label = id => models.has(id) ? `${models.get(id).provider.name} · ${models.get(id).model.model}` : id || t('chat.model');
+  const contents = id => {
+    const info = models.get(id);
+    const text = document.createElement('span');
+    text.textContent = info?.provider.kind === 'deepseek' ? info.model.model : label(id);
+    if (info?.provider.kind !== 'deepseek') return [text];
+    const logo = document.createElement('img');
+    logo.src = 'assets/providers/deepseek.svg'; logo.alt = ''; logo.className = 'model-provider-logo';
+    return [logo, text];
+  };
+  $('#model-name').replaceChildren(...contents(cur));
+  $('#model-select').title = `${t('chat.model')}: ${label(cur)}`;
+  $('#model-select').setAttribute('aria-label', `${t('chat.model')}: ${label(cur)}`);
   const menu = $('#model-menu');
   menu.replaceChildren();
   for (const m of state.config.models) {
-    menu.appendChild(choiceOption(m, m === cur, () => onModelChange(m)));
+    const option = choiceOption(label(m), m === cur, () => onModelChange(m));
+    option.firstElementChild.replaceChildren(...contents(m));
+    option.setAttribute('aria-label', label(m));
+    menu.appendChild(option);
   }
+  const manage = document.createElement('button');
+  manage.className = 'model-menu__option';
+  manage.setAttribute('role', 'menuitem');
+  manage.textContent = t('settings.manage_providers');
+  manage.onclick = () => { closeChoiceMenus(); openSettings(); selectSettingsTab('inference'); };
+  menu.append(manage);
 }
 
 async function onModelChange(model) {
@@ -1223,13 +1222,17 @@ function openSettings() {
   $('.app').inert = true;
   $('#account-menu').hidden = true;
   $('#account-button').setAttribute('aria-expanded', 'false');
+  renderSettingsAccount();
+  $('#settings-search').value = '';
+  filterSettings();
   selectSettingsTab('general');
   $('#modal-close').focus();
 }
 function closeSettings() {
+  if (!discardProviderEditor()) return;
   $('#settings-overlay').hidden = true;
   $('.app').inert = false;
-  $('#account-button').focus();
+  $('#btn-settings').focus();
 }
 
 // ===== Utility =====
@@ -1302,7 +1305,7 @@ async function init() {
 
   // Form
   $('#onboarding-form-slot').innerHTML = formHTML(t('form.submit_onboarding'));
-  $('#settings-form-slot').innerHTML = formHTML(t('form.submit_settings'));
+  setupSettings();
 
   // Sidebar
   $('#btn-new-project').addEventListener('click', newProject);
@@ -1374,11 +1377,11 @@ async function routeAccount() {
   await prepareWindow(state.config.firebase_auth_set);
   updateAccount();
   populateModelSelect();
-  for (const slot of [$('#onboarding-form-slot'), $('#settings-form-slot')]) fillForm(slot.querySelector('form'));
+  fillForm($('#onboarding-form-slot form'));
   if (!state.config.firebase_auth_set) { showLogin(); return; }
   $('#login-form').hidden = true;
   $('#restore-error').hidden = true;
-  if (state.config.api_key_set) {
+  if (state.config.api_key_set || state.config.providers?.length === 0) {
     $('#onboarding-form-slot').hidden = true;
     await enterChat();
   } else {
@@ -1443,26 +1446,6 @@ function updateAccount() {
   $('#account-email').textContent = email;
   $('.avatar').textContent = email.split('@')[0].slice(0, 2).toUpperCase();
   $('#account-button').title = email;
-}
-function selectSettingsTab(tab) {
-  const general = tab === 'general';
-  $('#settings-general').hidden = !general;
-  $('#settings-voice').hidden = tab !== 'voice';
-  if (tab === 'voice') refreshSpeechModel();
-  $('#settings-title').textContent = t('ui.' + tab);
-  $('#settings-language').textContent = lang === 'it' ? 'Italiano' : 'English';
-  const form = $('#settings-form-slot form');
-  if (form) {
-    form.hidden = general || tab === 'voice';
-    for (const field of form.querySelectorAll('.field')) {
-      const isInference = field.querySelector('[name="api_key"]') !== null;
-      field.hidden = field.querySelector('[name="firebase_password"]') !== null || (tab === 'inference' ? !isInference : isInference);
-    }
-  }
-  document.querySelectorAll('.settings-nav button').forEach(b => {
-    b.classList.toggle('is-active', b.dataset.settingsTab === tab);
-    b.setAttribute('aria-pressed', String(b.dataset.settingsTab === tab));
-  });
 }
 function setupAppMenus() {
   let editTarget = null;
@@ -1606,7 +1589,7 @@ function setupShell() {
       }
     }
     if (e.key === 'Tab' && !$('#settings-overlay').hidden) {
-      const items = [...$('.modal').querySelectorAll('button,input,select,textarea')].filter(el => el.getClientRects().length && !el.disabled);
+      const items = [...$('.modal').querySelectorAll('button,input,select,textarea,a[href]')].filter(el => el.getClientRects().length && !el.disabled);
       const first = items[0], last = items[items.length-1];
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
       if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }

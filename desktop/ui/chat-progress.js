@@ -22,10 +22,15 @@ function reconcileChildren(parent, nodes) {
 function progressHistory(items, live = false, existing = null) {
   const details = existing || document.createElement('details');details.className = 'turn-history';
   if (!existing) {
-    const summary = document.createElement('summary');summary.append(progressIcon(items.find(i => i.kind === 'tool') || items[0]), document.createElement('span'), icon('chevron'));
+    const summary = document.createElement('summary');
+    const timer = document.createElement('span');timer.className = 'thinking__timer';timer.hidden = true;
+    summary.append(progressIcon({kind:'reasoning'}), document.createElement('span'), timer, icon('chevron'));
+    summary.onclick = event => {if (!details.lastElementChild.children.length) event.preventDefault();};
     const list = document.createElement('div');list.className = 'turn-history__list';details.append(summary,list);
   }
-  details.querySelector(':scope > summary > span').textContent = `${t('progress.history')} · ${items.length}`;
+  details.querySelector(':scope > summary > span').textContent = t('progress.history') + (items.length ? ` · ${items.length}` : '');
+  details.querySelector(':scope > summary').setAttribute('aria-disabled', String(!items.length));
+  details.querySelector('.thinking__timer').hidden = true;
   const list = details.lastElementChild;
   const rows = items.map((item,index) => {
     const key = item.id || `reasoning-${index}`;
@@ -79,35 +84,31 @@ function renderTurnBody(body, message, live = false) {
     if (!group.length) groupOffset = position;
     group.push(item);
   }
-  flush();appendText(message.content.slice(offset));reconcileChildren(body,nodes);
+  flush();appendText(message.content.slice(offset));
+  if (live) {
+    let history = nodes.findLast(node => node.classList.contains('turn-history'));
+    if (!history) {
+      history = progressHistory([], true, existing.get('group-0'));history.dataset.partKey = 'group-0';
+      nodes.unshift(history);
+    }
+    history.toggleAttribute('data-live-history', true);
+    const latest = message.activity?.at(-1);
+    history.dataset.phase = latest?.kind === 'approval' && latest.status === 'pending' ? 'waiting' : 'working';
+    history.querySelector('.thinking__timer').hidden = false;
+  }
+  reconcileChildren(body,nodes);
+  if (live) updateThinkingTimer();
 }
 
 function renderThinkingStatus() {
-  let status = $('#thinking-status');
-  if (!status) {status = document.createElement('div');status.id = 'thinking-status';status.className = 'thinking-status';$('.composer').prepend(status);}
   renderPermissionRequests();
-  const run = state.runs.get(state.activeConversationId);
-  status.hidden = !run?.pending;
-  if (!run?.pending) {status.replaceChildren();return;}
-  const stream = run.stream, latest = stream?.activity.at(-1);
-  const label = latest?.kind === 'approval' && ['pending','reviewing'].includes(latest.status) ? approvalLabel(latest) : latest?.status === 'running' ? progressLabel(latest) : latest?.kind === 'reasoning' ? latest.text.trim().slice(-180) : stream?.content ? t('progress.writing') : run.activity || t('chat.thinking');
-  let line = status.querySelector('.thinking-status__line');
-  if (!line) {
-    line = document.createElement('div');line.className = 'thinking-status__line';
-    const text = document.createElement('span');text.className = 'thinking__activity';
-    const timer = document.createElement('span');timer.className = 'thinking__timer';
-    line.append(progressIcon(latest || {kind:'reasoning'}), text, timer);status.replaceChildren(line);
-  }
-  const activeItem = latest?.kind === 'approval' && !['pending','reviewing'].includes(latest.status) ? {kind:'reasoning'} : latest || {kind:'reasoning'};
-  const glyphKey = `${activeItem.kind}:${activeItem.action}`;
-  if (line.dataset.glyph !== glyphKey) {line.querySelector('.ui-icon').replaceWith(progressIcon(activeItem));line.dataset.glyph = glyphKey;}
-  line.dataset.phase = latest?.kind === 'approval' && latest.status === 'pending' ? 'waiting' : stream?.content ? 'writing' : 'working';
-  const text = line.querySelector('.thinking__activity');if (text.textContent !== label) text.textContent = label;text.title = label;
   updateThinkingTimer();
 }
 
 function updateLiveTurn() {
-  const stream = state.runs.get(state.activeConversationId)?.stream;
+  const run = state.runs.get(state.activeConversationId);
+  if (!run?.pending) return;
+  const stream = run.stream ||= {content:'', shown:0, activity:[], frame:null};
   const body = $('#messages .msg--stream .msg__text');
   if (!stream || !body) return;
   const box = $('#messages'), follow = box.scrollHeight - box.scrollTop - box.clientHeight < 90;

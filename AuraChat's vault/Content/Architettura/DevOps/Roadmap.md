@@ -124,3 +124,16 @@ della forma d'onda (ora una barretta ogni 100 ms).
 Stato puntuale, prove e limiti: [[Desktop gateway - Tauri]],
 [[Firebase - trasporto e push]], [[UI desktop - Refactor flat]] e [[Problemi noti]].
 Mobile, relay/pairing, push e strumenti di scrittura/esecuzione restano da realizzare.
+
+## Aggiornamento finale — impostazioni e conversazione (17 ottobre 2026)
+
+Completati dialogo impostazioni compatto con ricerca e sidebar, account senza
+parametri Firebase, logout e gestione di provider preset/custom con più modelli,
+endpoint e chiavi indipendenti. Migrazione compatibile della configurazione
+precedente. Dettagli: [[Impostazioni e provider di modelli]].
+
+Corretti il falso modello vocale mancante e la preparazione al primo utilizzo;
+verificate due trascrizioni locali consecutive. Ragionamento e attività unificati
+nella chat con cervello viola animato, testo della conversazione ridotto a 13 px.
+Verifiche e limiti: [[Desktop gateway - Tauri]], [[UI desktop - Refactor flat]]
+e [[Problemi noti]]. Mobile, relay/pairing e push restano pianificati.

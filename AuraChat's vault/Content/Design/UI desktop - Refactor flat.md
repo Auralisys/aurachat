@@ -308,3 +308,29 @@ mouse/tastiera, chat senza icone, ripristino degli stati e colore di icona/label
 Screenshot controllati in `.artifact/sidebar-selection/` e
 `.artifact/permissions/full-access.png`. Eseguibile desktop non ricompilato;
 le 13 suite e i 32 test nativi citati sopra sono la verifica completa precedente.
+
+## Impostazioni, reasoning e tipografia — aggiornamento finale 17 ottobre 2026
+
+Questa sezione aggiorna i riferimenti precedenti alle impostazioni e al reasoning.
+Il dialogo è compatto e centrato (massimo 860 × 600 px), con sidebar e ricerca;
+Account è separato da Provider di modelli. Flusso, migrazione, storage e limiti in
+[[Impostazioni e provider di modelli]]. In chat, logo DeepSeek bianco + modello;
+senza logo specifico: Provider · modello.
+
+Un solo “Ragionamento e attività” espandibile dentro il messaggio assistente,
+nella posizione della precedente riga con cervello bianco. Durante il turno
+il cervello diventa viola e pulsa; tempo trascorso e conteggio sono nella stessa
+intestazione. Rimossa la riga separata sopra il composer che alternava estratti
+di reasoning e attività. L’elenco conserva passaggi e contenuti, dettagli aperti
+e nodi stabili durante lo streaming; a turno terminato il cervello è statico.
+L’attesa di consenso non pulsa; movimento ridotto e finestra nascosta sono rispettati.
+
+Messaggi e input a 13 px (--fs-chat), titoli Markdown riproporzionati, codice
+invariato a 13 px. Lo stack attuale è Segoe UI Variable → Segoe UI → Arial → sans-serif.
+Codice: desktop/ui/chat-progress.js:22 (elenco), :56 (composizione messaggio),
+desktop/ui/styles.css:50 (dimensione chat), :538 (cervello animato).
+
+Verifiche aggiornate: chat-progress.cjs, operations-flow.cjs, background-chats.cjs,
+chat-tools.cjs, activity-panel.cjs e ui-smoke.cjs passati. Servizi nativi simulati;
+controllati elenco unico, timer, nodi/dettagli stabili, cronologia, layout compatto,
+movimento ridotto e assenza della riga duplicata. Catture locali in .artifact/chat-progress/.

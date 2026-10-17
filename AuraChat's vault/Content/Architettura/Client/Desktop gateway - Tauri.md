@@ -143,3 +143,31 @@ microfono (circa 12,5 volte più lenta della versione iniziale a 16 kHz).
 Dettagli UI in [[UI desktop - Refactor flat]]. Test browser con AudioWorklet
 reale e microfono simulato; trascrizione CPU di un campione pubblico verificata.
 Il microfono fisico e il dialogo permessi del WebView restano da provare manualmente.
+
+## Provider e correzione dettatura — 17 ottobre 2026
+
+La configurazione supporta più provider, chiavi indipendenti e modelli/endpoint
+modificabili; dettagli e migrazione in [[Impostazioni e provider di modelli]].
+
+Risolta l’apertura delle impostazioni al secondo tentativo di dettatura quando
+il modello era occupato: busy produce un messaggio in chat, non viene confuso
+con il modello mancante. Prima del microfono, prepare_speech_model verifica e
+carica il modello, mostrando uno stato di preparazione; poi l’istanza è riusata.
+SHA-256 è ottimizzato anche nelle build di sviluppo, mantenendo la verifica
+completa. Prima la prima trascrizione eseguiva la verifica dei 2 GB dopo Stop,
+senza distinguerla dal riconoscimento.
+
+La UI conserva l’operazione nativa pendente anche quando si annulla o si cambia
+chat: scarta il risultato tardivo e impedisce una seconda acquisizione finché
+l’elaborazione termina. Un blocco ONNX già in corso non viene interrotto a forza.
+Codice: desktop/src-tauri/src/speech.rs:123 e :132;
+desktop/src-tauri/src/lib.rs:80; desktop/ui/voice.js:3, :109 e :166.
+
+Verifica reale locale con campione pubblico JFK: preparazione circa 2,95 s,
+prima trascrizione 1,98 s, seconda 1,96 s, stesso testo atteso e modello ancora
+ready/non busy. Tempi del campione sul computer di prova, non una garanzia per
+qualsiasi registrazione. Test voice-flow.cjs passato con AudioWorklet reale e
+microfono simulato, inclusi modello occupato, annullamento della preparazione,
+errore di inferenza, recupero e risultati tardivi. Microfono fisico non verificato.
+Suite nativa: 35 test passati, quattro verifiche reali escluse dal comando
+predefinito; la verifica vocale è stata eseguita separatamente con esito positivo.

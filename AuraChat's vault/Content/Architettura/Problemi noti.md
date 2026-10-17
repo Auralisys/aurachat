@@ -42,3 +42,18 @@ Regressione oltre entrambe le soglie verificata. Il modello può continuare
 l'esplorazione fino alla risposta; il provider conserva i propri limiti di
 contesto e servizio. Non è stata ripetuta dall'agente la lettura completa del
 vault Centro cinofilo dopo il fix. Dettagli in [[Desktop gateway - Tauri]].
+
+## Stato dopo impostazioni e dettatura — 17 ottobre 2026
+
+Corretti: modello vocale occupato scambiato per assente; attesa opaca dopo Stop
+al primo uso; richieste vocali sovrapposte dopo annullamento; doppia riga di
+reasoning con estratti intermittenti. Dettagli in [[Desktop gateway - Tauri]]
+e [[UI desktop - Refactor flat]]. Verificate due trascrizioni CPU consecutive
+sul campione locale e regressioni browser con microfono simulato.
+
+Restano da verificare microfono fisico e permessi nel WebView nativo. Annullare
+una trascrizione scarta il risultato ma attende il blocco ONNX in corso. Provider
+esterni non richiamati in questo intervento. Chiavi provider e refresh token
+conservano i limiti di storage già documentati; nessuna nuova cifratura dedicata
+o modifica delle regole remote. Vedi [[Impostazioni e provider di modelli]] e
+[[Account - Login e ripristino sessione]].

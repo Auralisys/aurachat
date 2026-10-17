@@ -120,6 +120,23 @@ impl Speech {
         drop(guard); Ok(self.status())
     }
 
+    fn load_model(&self, model: &mut Option<CohereModel>) -> Result<(), String> {
+        if model.is_none() {
+            for &(name, _, hash) in FILES { self.verify(&self.root.join(name), hash)?; }
+            self.check_cancel()?;
+            *model = Some(CohereModel::load(&self.root, &Quantization::Int4).map_err(|e| format!("speech_engine: {e}"))?);
+        }
+        Ok(())
+    }
+
+    pub fn prepare(&self) -> Result<(), String> {
+        let _guard = self.operation()?;
+        if !self.status().ready { return Err("speech_model_missing".into()); }
+        self.cancel.store(false, Ordering::SeqCst);
+        let mut model = self.model.lock().map_err(|_| "speech_engine")?;
+        self.load_model(&mut model)
+    }
+
     pub fn transcribe(&self, samples: Vec<f32>, language: String) -> Result<String, String> {
         let _guard = self.operation()?;
         validate_audio(&samples, &language)?;
@@ -127,10 +144,7 @@ impl Speech {
         if samples.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / (samples.len() as f64) < 0.000001 { return Err("speech_silence".into()); }
         self.cancel.store(false, Ordering::SeqCst);
         let mut model = self.model.lock().map_err(|_| "speech_engine")?;
-        if model.is_none() {
-            for &(name, _, hash) in FILES { self.verify(&self.root.join(name), hash)?; }
-            *model = Some(CohereModel::load(&self.root, &Quantization::Int4).map_err(|e| format!("speech_engine: {e}"))?);
-        }
+        self.load_model(&mut model)?;
         let params = CohereParams { language: Some(language), max_new_tokens: Some(512), ..Default::default() };
         let mut text = Vec::new();
         let mut offset = 0;
@@ -180,6 +194,7 @@ mod tests {
         fs::create_dir_all(&service.root).unwrap();
         fs::write(service.root.join("tokens.txt.part"), "partial").unwrap();
         assert!(!service.status().ready); assert_eq!(service.status().downloaded, 7);
+        assert_eq!(service.prepare().unwrap_err(), "speech_model_missing");
         assert!(service.verify(&service.root.join("tokens.txt.part"), "wrong").is_err());
         let guard = service.operation().unwrap(); assert!(service.remove().is_err()); drop(guard);
         service.remove().unwrap(); fs::remove_dir(&service.root).unwrap(); fs::remove_dir(root.join("models")).unwrap(); fs::remove_dir(root).unwrap();
@@ -188,10 +203,19 @@ mod tests {
     fn real_download_and_transcription() {
         let config = std::env::var("APPDATA").unwrap();
         let service = Speech::new(&PathBuf::from(config).join("dev.aurachat.desktop"));
-        tauri::async_runtime::block_on(service.download(|s| eprintln!("Model {} / {}", s.downloaded, s.total))).unwrap();
+        if !service.status().ready {
+            tauri::async_runtime::block_on(service.download(|s| eprintln!("Model {} / {}", s.downloaded, s.total))).unwrap();
+        }
         let samples = transcribe_rs::audio::read_wav_samples(&PathBuf::from(std::env::var("AURACHAT_TEST_WAV").unwrap())).unwrap();
-        let text = service.transcribe(samples, "en".into()).unwrap();
-        eprintln!("Transcript: {text}");
-        assert!(text.to_lowercase().contains("country"));
+        let started = std::time::Instant::now();
+        service.prepare().unwrap();
+        eprintln!("Model preparation: {:?}", started.elapsed());
+        for attempt in 1..=2 {
+            let started = std::time::Instant::now();
+            let text = service.transcribe(samples.clone(), "en".into()).unwrap();
+            eprintln!("Transcription {attempt} ({:?}): {text}", started.elapsed());
+            assert!(text.to_lowercase().contains("country"));
+            assert!(service.status().ready && !service.status().busy);
+        }
     }
 }

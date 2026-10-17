@@ -1,0 +1,1 @@
+DeepSeek logo from [Simple Icons](https://github.com/simple-icons/simple-icons/blob/develop/icons/deepseek.svg), distributed under [CC0 1.0](https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md). Brand names and logos belong to their respective owners.

@@ -82,3 +82,10 @@ linkare con `[[...]]`.
 Quando cambia un comportamento, aggiornare insieme codice e nota. Quando si
 trova un difetto, aggiungerlo a [[Problemi noti]] con il rimando alla nota dove
 è descritto.
+
+## Ultimo aggiornamento — 17 ottobre 2026
+
+[[Impostazioni e provider di modelli]] documenta il nuovo dialogo compatto,
+provider preset/custom, modelli e API key indipendenti. Correzione della dettatura
+in [[Desktop gateway - Tauri]]; reasoning unificato e chat a 13 px in
+[[UI desktop - Refactor flat]]. Limiti e verifiche in [[Problemi noti]].

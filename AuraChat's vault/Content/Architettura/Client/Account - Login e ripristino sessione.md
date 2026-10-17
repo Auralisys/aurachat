@@ -84,3 +84,16 @@ La finestra torna alla posizione/dimensione precedente, incluso lo stato
 massimizzato, con correzione per monitor non piu disponibili. Login ed errori
 usano la finestra standard se non si puo ancora ripristinare l'account.
 La geometria della splash non viene salvata. Dettagli in [[Firebase - trasporto e push]].
+
+## Account nelle impostazioni — 17 ottobre 2026
+
+La sezione Account mostra identità, email, stato e disconnessione, senza parametri
+Firebase. Logout elimina email/sessione persistita e cache locali, conservando
+conversazioni e provider remoti; è rifiutato durante una richiesta chat attiva.
+La UI attende la coda dei salvataggi finestra prima di uscire e ricarica il login.
+Codice: desktop/src-tauri/src/lib.rs:282; desktop/ui/settings.js:203.
+
+La configurazione LLM ora contiene provider indipendenti, con chiave dedicata e
+modelli/endpoint modificabili: [[Impostazioni e provider di modelli]]. Un account
+senza provider dopo la rimozione dell’ultimo può aprire la chat e riconfigurarli
+dal selettore. Restano invariati bootstrap pubblico e ripristino con refresh token.

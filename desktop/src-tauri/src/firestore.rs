@@ -41,6 +41,10 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 impl Firestore {
+    pub fn logout(&self) {
+        *self.token.lock().unwrap() = None;
+        self.trees.lock().unwrap().clear();
+    }
     pub fn new() -> Self {
         Self {
             http: reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build().expect("HTTP client"),

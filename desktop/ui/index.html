@@ -40,7 +40,7 @@
           <button id="nav-home" class="rail-button is-active" data-i18n-aria-label="ui.home" data-i18n-title="ui.home" aria-current="page"><svg data-icon="home" aria-hidden="true"></svg></button>
           <div class="rail__bottom">
           <button id="btn-settings" class="rail-button" data-i18n-aria-label="titlebar.settings" data-i18n-title="titlebar.settings" aria-label="" title="">
-            <svg data-icon="settings" aria-hidden="true"></svg>
+            <svg data-icon="gear" aria-hidden="true"></svg>
           </button>
           <footer class="rail__footer"><div id="account-menu" class="account-menu" hidden><p id="account-email"></p><button data-settings-tab="account" data-i18n="ui.account"></button><button data-settings-tab="inference" data-i18n="ui.inference"></button><button data-settings-tab="voice" data-i18n="ui.voice"></button><button data-settings-tab="general" data-i18n="ui.general"></button></div><button id="account-button" class="account-button" aria-expanded="false" aria-controls="account-menu"><span class="avatar" aria-hidden="true">AU</span><span class="account-name sr-only">Account</span></button></footer>
           </div>
@@ -152,14 +152,35 @@
         <button id="modal-close" class="modal__close" data-i18n-aria-label="modal.close" data-i18n-title="modal.close" aria-label="" title="">
           <svg data-icon="close" aria-hidden="true"></svg>
         </button>
-        <nav class="settings-nav"><h2 data-i18n="titlebar.settings"></h2><button data-settings-tab="general" data-i18n="ui.general"></button><button data-settings-tab="account" data-i18n="ui.account"></button><button data-settings-tab="inference" data-i18n="ui.inference"></button><button data-settings-tab="voice" data-i18n="ui.voice"></button></nav><div class="settings-content"><div class="modal__head">
+        <nav class="settings-nav" data-i18n-aria-label="titlebar.settings">
+          <div class="settings-profile"><span class="avatar settings-avatar" aria-hidden="true">AU</span><div><strong id="settings-profile-name"></strong><span id="settings-profile-email"></span></div></div>
+          <label class="settings-search"><svg data-icon="search" aria-hidden="true"></svg><input id="settings-search" type="search" data-i18n-placeholder="settings.search" data-i18n-aria-label="settings.search" autocomplete="off" /></label>
+          <div class="settings-nav-items">
+            <button data-settings-tab="general"><svg data-icon="gear" aria-hidden="true"></svg><span data-i18n="ui.general"></span></button>
+            <button data-settings-tab="account"><svg data-icon="person" aria-hidden="true"></svg><span data-i18n="ui.account"></span></button>
+            <button data-settings-tab="inference"><svg data-icon="cpu" aria-hidden="true"></svg><span data-i18n="ui.inference"></span></button>
+            <button data-settings-tab="voice"><svg data-icon="microphone" aria-hidden="true"></svg><span data-i18n="ui.voice"></span></button>
+          </div>
+          <p id="settings-no-results" class="settings-hint" data-i18n="settings.no_results" role="status" hidden></p>
+          <span class="settings-brand">AuraChat</span>
+        </nav><div class="settings-content"><div class="modal__head">
           <h2 id="settings-title" class="modal__title" data-i18n="settings.title"></h2>
         </div>
         <section id="settings-general" hidden><h3 data-i18n="ui.appearance"></h3><p data-i18n="ui.appearance_note"></p><div class="preference-row"><span data-i18n="ui.theme"></span><span data-i18n="ui.dark"></span></div><div class="preference-row"><span data-i18n="ui.language"></span><span id="settings-language"></span></div><div class="preference-row"><span data-i18n="ui.motion"></span><span data-i18n="ui.static"></span></div></section><section id="settings-voice" hidden>
 <h3 data-i18n="voice.title"></h3><p data-i18n="voice.note"></p>
 <div class="voice-model-card"><strong>Cohere Transcribe</strong><span class="voice-model-detail" data-i18n="voice.model_detail"></span><p id="voice-model-status" role="status"></p>
 <progress id="voice-model-progress" hidden></progress><div class="voice-model-actions"><button id="voice-download" class="primary" data-i18n="voice.download"></button><button id="voice-download-cancel" hidden data-i18n="voice.pause"></button><button id="voice-remove" hidden data-i18n="voice.remove"></button></div><p id="voice-error" class="form-error" role="alert"></p></div>
-<p class="voice-privacy" data-i18n="voice.privacy"></p><a class="voice-source" href="https://huggingface.co/cstr/cohere-transcribe-onnx-int4" target="_blank" rel="noopener" data-i18n="voice.source"></a></section><div id="settings-form-slot"></div></div>
+<p class="voice-privacy" data-i18n="voice.privacy"></p><a class="voice-source" href="https://huggingface.co/cstr/cohere-transcribe-onnx-int4" target="_blank" rel="noopener" data-i18n="voice.source"></a></section><section id="settings-account" hidden>
+          <div class="settings-section-head"><div><h3 data-i18n="settings.connected_account"></h3><p data-i18n="settings.account_note"></p></div></div>
+          <div class="connected-account"><span class="avatar settings-avatar" id="settings-account-avatar" aria-hidden="true"></span><div><strong id="settings-account-name"></strong><span id="settings-account-email"></span></div><span class="settings-status"><svg data-icon="check" aria-hidden="true"></svg><span data-i18n="settings.signed_in"></span></span></div>
+          <div class="settings-signout"><div><strong data-i18n="settings.session"></strong><p data-i18n="settings.session_note"></p></div><button id="settings-signout" class="btn" data-i18n="settings.sign_out"></button></div>
+          <p id="settings-account-error" class="form__error" role="alert" hidden></p>
+        </section>
+        <section id="settings-inference" hidden>
+          <div id="providers-overview"><div class="settings-section-head"><div><h3 data-i18n="settings.configured_providers"></h3><p data-i18n="settings.providers_note"></p></div><button id="add-provider" class="btn settings-add"><svg data-icon="plus" aria-hidden="true"></svg><span data-i18n="settings.add_provider"></span></button></div><div id="provider-list"></div><p class="settings-hint" data-i18n="settings.compatibility"></p></div>
+          <div id="provider-editor" hidden></div>
+          <p id="provider-feedback" class="form__error" role="alert" hidden></p>
+        </section></div>
       </div>
     </div>
 
@@ -172,6 +193,7 @@
     <script src="activity.js"></script>
     <script src="chat-progress.js"></script>
     <script src="icons.js"></script>
+    <script src="settings.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
