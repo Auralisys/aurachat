@@ -226,3 +226,20 @@ una notifica a fine turno di chat (risposta pronta, errore bloccante o
 interruzione), la richiesta di approvazione quando serve una decisione umana, e
 le operazioni esplicite dell'utente (download del modello vocale, trascrizione).
 La stessa regola vale per il banner Windows e per FCM.
+
+## iOS — crash all'avvio e inizializzazione (18 ottobre 2026)
+
+L'app iOS terminava subito all'avvio perché `Firebase.initializeApp` riceveva
+le stesse opzioni dell'app Android (`appId: 1:...:android:...`). Firebase iOS
+considera invalido un GOOGLE_APP_ID di un'altra piattaforma e lancia
+un'eccezione nativa: `Configuration fails. It may be caused by an invalid
+GOOGLE_APP_ID`. Ora le opzioni esplicite sono usate solo su Android; su iOS
+Firebase legge `ios/Runner/GoogleService-Info.plist` (stesso comportamento
+nell'isolate di background). Il 18 ottobre 2026 l'app iOS
+`com.ridney.aurachat` è stata creata via `firebase apps:create IOS` e il plist
+scaricato con `firebase apps:sdkconfig IOS`, poi aggiunto al target Runner.
+Restano da caricare la chiave APNs in Cloud Messaging e abilitare Push
+Notifications per l'App ID. Abilitati `UIBackgroundModes`
+(`remote-notification`), Darwin initialization per le notifiche locali e il
+delegate `UNUserNotificationCenter` in AppDelegate. Il token APNs viene atteso
+prima di `register()`; il permesso viene chiesto dopo il login.

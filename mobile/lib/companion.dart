@@ -9,7 +9,9 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
-const firebaseOptions = FirebaseOptions(
+/// Opzioni dell'app Android. Non usarle su iOS: un appId `:android:` è
+/// invalido per Firebase iOS e fa terminare l'app all'avvio.
+const androidFirebaseOptions = FirebaseOptions(
   apiKey: 'AIzaSyB-fMMzxv-83F3s-1uY0wtUk4SCv3QmT44',
   appId: '1:840348621130:android:7b61fb11b72a72b25e09b3',
   messagingSenderId: '840348621130',
@@ -18,10 +20,21 @@ const firebaseOptions = FirebaseOptions(
 
 @pragma('vm:entry-point')
 Future<void> backgroundMessage(RemoteMessage message) async {
-  await Firebase.initializeApp(options: firebaseOptions);
+  if (Firebase.apps.isNotEmpty) {
+    return;
+  }
+  // Vedi startAuraChat: le opzioni esplicite valgono solo per Android.
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    await Firebase.initializeApp(options: androidFirebaseOptions);
+  } else {
+    await Firebase.initializeApp();
+  }
 }
 
 String friendlyError(Object error) {
+  if (error.toString().contains('GoogleService-Info.plist')) {
+    return 'Configurazione iOS mancante: aggiungi GoogleService-Info.plist al target Runner.';
+  }
   if (error is FirebaseException) {
     return switch (error.code) {
       'invalid-credential' ||
@@ -156,6 +169,12 @@ class PushNotifications {
     await local.initialize(
       settings: const InitializationSettings(
         android: AndroidInitializationSettings('ic_notification'),
+        // Il permesso viene chiesto solo dopo il login, in bind().
+        iOS: DarwinInitializationSettings(
+          requestAlertPermission: false,
+          requestSoundPermission: false,
+          requestBadgePermission: false,
+        ),
       ),
       onDidReceiveNotificationResponse: (response) =>
           target.value = response.payload,
@@ -188,6 +207,7 @@ class PushNotifications {
               importance: Importance.high,
               priority: Priority.high,
             ),
+            iOS: DarwinNotificationDetails(),
           ),
           payload: message.data['conversation_id'],
         );
@@ -221,11 +241,25 @@ class PushNotifications {
       final prefs = await SharedPreferences.getInstance();
       _installation = prefs.getString('installation_id') ?? const Uuid().v4();
       await prefs.setString('installation_id', _installation!);
-      final permission = await FirebaseMessaging.instance.requestPermission();
+      final permission = await FirebaseMessaging.instance.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
       if (permission.authorizationStatus == AuthorizationStatus.denied) {
         warning.value =
-            'Notifiche disattivate. Abilitale nelle impostazioni Android di AuraChat.';
+            'Notifiche disattivate. Abilitale nelle impostazioni di sistema di AuraChat.';
         return;
+      }
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        // FCM non può registrare l'installazione senza il token APNs. Il primo
+        // token può arrivare qualche istante dopo il consenso.
+        for (var attempt = 0; attempt < 10; attempt++) {
+          if (await FirebaseMessaging.instance.getAPNSToken() != null) {
+            break;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+        }
       }
       await FirebaseMessaging.instance.register();
       warning.value = null;

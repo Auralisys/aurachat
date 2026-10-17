@@ -143,6 +143,23 @@ FCM amministrativa viene distribuita nei client.
 La visualizzazione delle notifiche Windows va verificata con l'app installata;
 Tauri non la garantisce con il solo eseguibile di sviluppo.
 
+## iOS — configurazione necessaria
+
+`androidFirebaseOptions` vale solo per Android. Su iOS Firebase si inizializza
+dal file `ios/Runner/GoogleService-Info.plist`; senza quel file l'app mostra un
+errore di configurazione all'avvio. Un appId Android su iOS provoca invece la
+chiusura immediata dell'app (`Configuration fails ... invalid GOOGLE_APP_ID`).
+
+L'app iOS Firebase (`com.ridney.aurachat`) è stata creata via CLI il 18 ottobre
+2026 e `ios/Runner/GoogleService-Info.plist` è nel target Runner. Restano da
+fare una volta, dalla console e da macOS:
+
+1. In Cloud Messaging caricare la chiave APNs e abilitare Push Notifications per
+   l'App ID: l'entitlement `aps-environment` è già in `Runner.entitlements`.
+2. Su macOS: `flutter clean`, `flutter pub get`, `pod install` in `ios/`, poi
+   `flutter run` su un dispositivo reale. Il simulatore non fornisce un token
+   APNs, quindi le push FCM non sono verificabili lì.
+
 ## Esito delle prove reali del 17 ottobre 2026
 
 - Accesso email/password Android riuscito; ripristino della sessione verificato.

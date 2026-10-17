@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -33,7 +34,13 @@ class _AuraChatState extends State<AuraChat> {
 
   Future<void> initialize() async {
     if (Firebase.apps.isEmpty) {
-      await Firebase.initializeApp(options: firebaseOptions);
+      // androidFirebaseOptions contiene l'app Android: su iOS è invalida e
+      // Firebase termina il processo. Su iOS si usa GoogleService-Info.plist.
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        await Firebase.initializeApp(options: androidFirebaseOptions);
+      } else {
+        await Firebase.initializeApp();
+      }
     }
     FirebaseFirestore.instance.settings = const Settings(
       persistenceEnabled: false,
