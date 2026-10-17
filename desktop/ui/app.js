@@ -1457,6 +1457,7 @@ async function init() {
   setupComposerExtras();
   setupSidebarSections();
   await setupActivity();
+  await appWindow.listen('companion-permissions', () => refreshPermissions());
   await appWindow.listen('companion-started', async ({payload}) => {
     const id = payload?.conversation_id;if (!id || state.runs.get(id)?.pending) return;
     const run = {pending:true, external:true, since:Date.now(), messages:[], usage:null};

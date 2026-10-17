@@ -6,7 +6,7 @@ selezionato tramite Firestore. Solo il gateway chiama i modelli ed esegue gli
 strumenti, con i permessi già presenti. Il nome Windows identifica il PC.
 
 ## Platform
-Android prioritario per sviluppo e verifica; Flutter con scaffold iOS.
+android
 
 ## Stack
 Flutter mobile, Tauri/Rust desktop, Firebase Auth/Firestore/FCM e Cloud Functions.

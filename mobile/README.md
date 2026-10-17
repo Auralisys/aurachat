@@ -55,6 +55,29 @@ piano il client usa lo stesso canale locale. Il tap apre la conversazione.
 Le impostazioni del sistema (permesso negato, Non disturbare o arresto forzato)
 possono impedire la visualizzazione. Il logout rimuove la registrazione push.
 
+## Interfaccia mobile — 18 ottobre 2026
+
+Home con progetti espandibili e recenti, ricerca e campo compatto in basso,
+ispirata ai riferimenti iOS forniti dall'utente. Palette del desktop e bolle
+utente viola. Menu laterale per navigazione e account; controlli circolari da
+48 dp, PC/progetto allineati a sinistra. Durante la scrittura la barra del campo
+espone modello e permessi; testo fino a quattro righe, poi scorrimento interno.
+Le transizioni rispettano l'impostazione di riduzione delle animazioni.
+
+Protocollo desktop 2: il dispositivo pubblica `project_permissions` per i progetti
+dell'account. La nuova azione `permission` usa lo stesso comando del desktop,
+verifica appartenenza e blocco durante i turni attivi; il passaggio a `full`
+richiede conferma esplicita nell'app e `confirm_full_access: true` nel backend.
+I permessi rimangono locali al PC selezionato. Le chat libere spiegano il legame
+con i progetti. L'interfaccia desktop si aggiorna anche dopo una modifica remota.
+
+Verifica: analisi Flutter senza problemi, sei test widget/unitari, test Rust del
+vincolo di conferma accesso completo e test desktop di chat in background.
+Build Android e installer Windows aggiornati e installati. Controllo visivo su
+emulatore Android di home, chat, ricerca, composer e selettori; prova widget
+su larghezza 320 con testo al 130% e tastiera simulata. Nessuna build iOS
+verificata da Windows; le configurazioni iOS recuperate da origin sono conservate.
+
 Il servizio push usa Firebase Admin 14 e le registrazioni FID di FlutterFire 17.
 Non contiene credenziali amministrative: usa l'identità della Cloud Function.
 Gli eventi hanno una ricevuta per dispositivo e un tag Android stabile sui retry.

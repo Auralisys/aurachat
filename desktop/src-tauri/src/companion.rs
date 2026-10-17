@@ -148,10 +148,15 @@ async fn heartbeat_once(app:&tauri::AppHandle)->Result<(),String>{
     let state=app.state::<AppState>();
     let user=crate::load_user_cached(&state,&auth,&uid).await?;
     let models:Vec<Value>=user.models.iter().map(|(id,m)|json!({"id":id,"name":m.model})).collect();
+    if !state.data_loaded.load(std::sync::atomic::Ordering::SeqCst){crate::get_data(app.state::<AppState>()).await?;}
+    let project_ids:Vec<String>=state.data.lock().unwrap().projects.iter().map(|p|p.id.clone()).collect();
+    let project_permissions:serde_json::Map<String,Value>={
+        let permissions=state.permissions.lock().unwrap();
+        project_ids.into_iter().map(|id|{let mode=permissions.get(&uid,&id);(id,json!(mode))}).collect()
+    };
     let isolated=state.firestore.companion_isolated(&auth).await?;
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/devices/{id}"),
-        &json!({"name":name,"platform":"windows","last_seen":data::now_millis(),"protocol":1,"remote_enabled":isolated,"models":models,"active_model":user.active_model})).await?;
-    if !state.data_loaded.load(std::sync::atomic::Ordering::SeqCst){crate::get_data(app.state::<AppState>()).await?;}
+        &json!({"name":name,"platform":"windows","last_seen":data::now_millis(),"protocol":2,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"project_permissions":project_permissions})).await?;
     let tree=state.data.lock().unwrap().storage_tree()?;
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/companion/state"),&json!({"tree":tree})).await?;
     let outbox=state.config_dir.join("notification-outbox").join(&uid);
@@ -215,6 +220,13 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
         "stop"=>return state.chat_runs.stop(uid,id),
         "approve"=>return app.state::<crate::approvals::Approvals>().resolve(uid,id,request["approval_id"].as_str().ok_or("invalid_approval")?,request["allow"].as_bool().ok_or("invalid_decision")?),
         "model"=>return crate::set_conversation_model(app.state::<AppState>(),id.into(),request["model"].as_str().ok_or("invalid_model")?.into()).await.map(|_|()),
+        "permission"=>{
+            let mode=remote_permission_mode(request)?;
+            let project=request["project_id"].as_str().ok_or("project_not_found")?;
+            crate::project_permission_mode(app.state::<AppState>(),project.into(),Some(mode)).await?;
+            let _=app.emit("companion-permissions",json!({"project_id":project}));
+            return Ok(());
+        },
         "chat"=>(),
         _=>return Err("unsupported_remote_action".into())
     }
@@ -247,8 +259,22 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
     crate::run_chat(app.clone(),app.state::<AppState>(),id.into(),content.into(),None,None,None,Some(uid.into())).await.map(|_|())
 }
 
+fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,String>{
+    let mode:crate::permissions::Mode=serde_json::from_value(request["mode"].clone()).map_err(|_|"invalid_permission_mode")?;
+    if mode==crate::permissions::Mode::Full && request["confirm_full_access"]!=true {return Err("full_access_confirmation_required".into());}
+    Ok(mode)
+}
+
 #[cfg(test)]mod tests{
     use super::*;
+    #[test]fn remote_permissions_require_explicit_full_access_confirmation(){
+        use crate::permissions::Mode;
+        assert_eq!(remote_permission_mode(&json!({"mode":"ask"})).unwrap(),Mode::Ask);
+        assert_eq!(remote_permission_mode(&json!({"mode":"auto"})).unwrap(),Mode::Auto);
+        assert!(remote_permission_mode(&json!({"mode":"full"})).is_err());
+        assert!(remote_permission_mode(&json!({"mode":"invalid"})).is_err());
+        assert_eq!(remote_permission_mode(&json!({"mode":"full","confirm_full_access":true})).unwrap(),Mode::Full);
+    }
     #[test]fn notification_preview_keeps_the_beginning_and_unicode(){
         assert_eq!(notification_preview("  Prima\nriga  seconda ", 10), "Prima riga…");
         assert_eq!(notification_preview("Ciao 🌍!", 6), "Ciao 🌍…");

@@ -9,14 +9,9 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'companion.dart';
+import 'ui.dart';
 
 final push = PushNotifications();
-const ink = Color(0xff0d081f),
-    panel = Color(0xff15102a),
-    violet = Color(0xff8b3fe0),
-    orchid = Color(0xffbb93fb),
-    textColor = Color(0xfff5f0ff),
-    muted = Color(0xffb79fde);
 void startAuraChat() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const AuraChat());
@@ -54,42 +49,7 @@ class _AuraChatState extends State<AuraChat> {
   Widget build(BuildContext context) => MaterialApp(
     title: 'AuraChat',
     debugShowCheckedModeBanner: false,
-    theme: ThemeData(
-      useMaterial3: true,
-      brightness: Brightness.dark,
-      scaffoldBackgroundColor: ink,
-      colorScheme: const ColorScheme.dark(
-        primary: orchid,
-        secondary: violet,
-        surface: panel,
-        onSurface: textColor,
-      ),
-      appBarTheme: const AppBarTheme(
-        backgroundColor: ink,
-        foregroundColor: textColor,
-        centerTitle: false,
-      ),
-      dividerColor: orchid.withValues(alpha: .16),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: panel,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide.none,
-        ),
-        contentPadding: const EdgeInsets.all(18),
-      ),
-      filledButtonTheme: FilledButtonThemeData(
-        style: FilledButton.styleFrom(
-          backgroundColor: violet,
-          foregroundColor: Colors.white,
-          minimumSize: const Size(48, 52),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
-        ),
-      ),
-    ),
+    theme: auraTheme(),
     home: FutureBuilder<void>(
       future: startup,
       builder: (context, snapshot) {
@@ -287,6 +247,11 @@ class Workspace extends StatefulWidget {
 class _WorkspaceState extends State<Workspace> {
   late final Companion api;
   final composer = TextEditingController();
+  final composerFocus = FocusNode();
+  final scaffoldKey = GlobalKey<ScaffoldState>();
+  final modelMenuKey = GlobalKey<PopupMenuButtonState<String>>();
+  bool libraryVisible = true;
+  bool changingPermission = false;
   final scroll = ScrollController();
   late final StreamSubscription<QuerySnapshot<Map<String, dynamic>>>
   deviceSubscription;
@@ -319,6 +284,11 @@ class _WorkspaceState extends State<Workspace> {
   @override
   void initState() {
     super.initState();
+    composerFocus.addListener(() {
+      if (composerFocus.hasFocus && libraryVisible) {
+        setState(() => libraryVisible = false);
+      }
+    });
     api = Companion(widget.user.uid);
     push.bind(widget.user.uid);
     push.target.addListener(openNotification);
@@ -377,6 +347,7 @@ class _WorkspaceState extends State<Workspace> {
     approvalSubscription?.cancel();
     requestSubscription?.cancel();
     push.target.removeListener(openNotification);
+    composerFocus.dispose();
     composer.dispose();
     scroll.dispose();
     super.dispose();
@@ -480,6 +451,7 @@ class _WorkspaceState extends State<Workspace> {
     final version = ++loadVersion;
     messageSubscription?.cancel();
     setState(() {
+      libraryVisible = false;
       conversationId = chat?['id'];
       projectId = chat?['project_id'];
       messages = [];
@@ -497,15 +469,21 @@ class _WorkspaceState extends State<Workspace> {
         if (!mounted || version != loadVersion) {
           return;
         }
+        final follow =
+            loadingMessages ||
+            !scroll.hasClients ||
+            scroll.positions.length == 1 && scroll.position.extentAfter < 100;
         setState(() {
           messages = decoded;
           loadingMessages = false;
         });
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (scroll.hasClients) {
+          if (follow && scroll.hasClients && scroll.positions.length == 1) {
             scroll.animateTo(
               scroll.position.maxScrollExtent,
-              duration: const Duration(milliseconds: 200),
+              duration: MediaQuery.disableAnimationsOf(context)
+                  ? Duration.zero
+                  : const Duration(milliseconds: 200),
               curve: Curves.easeOut,
             );
           }
@@ -567,7 +545,11 @@ class _WorkspaceState extends State<Workspace> {
     String action, {
     Map<String, dynamic> extra = const {},
   }) async {
-    final id = action == 'stop' ? requestConversation : conversationId;
+    final id = action == 'stop'
+        ? requestConversation
+        : action == 'permission'
+        ? conversationId ?? const Uuid().v4()
+        : conversationId;
     if (deviceId == null || id == null) {
       return;
     }
@@ -657,49 +639,411 @@ class _WorkspaceState extends State<Workspace> {
       ),
     ),
   );
+  void openLibrary() {
+    composerFocus.unfocus();
+    selectChat(null);
+    setState(() => libraryVisible = true);
+  }
+
+  void newChat([String? project]) {
+    selectChat(null);
+    setState(() => projectId = project);
+    composerFocus.requestFocus();
+  }
+
+  Map<String, dynamic> get projects =>
+      Map<String, dynamic>.from(tree['projects'] ?? {});
+
+  String? get permissionMode =>
+      (device?['project_permissions'] as Map?)?[projectId] as String?;
+  String get permissionLabel => switch (permissionMode) {
+    'ask' => 'Richiedi approvazione',
+    'auto' => 'Approva per me',
+    'full' => 'Accesso completo',
+    _ => 'Permessi progetto',
+  };
+  String get modelName {
+    final chat = chats.where((c) => c['id'] == conversationId).firstOrNull;
+    final id = chat?['model'] ?? chosenModel ?? device?['active_model'];
+    return ((device?['models'] as List?) ?? [])
+                .where((m) => m['id'] == id)
+                .firstOrNull?['name']
+            as String? ??
+        'Scegli modello';
+  }
+
+  Future<void> chooseModel() => showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (sheetContext) => SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(sheetContext).height * .7,
+        ),
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(24, 8, 24, 16),
+              child: Text(
+                'Modello',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+              ),
+            ),
+            ...((device?['models'] as List?) ?? []).map(
+              (m) => ListTile(
+                title: Text(m['name'] as String),
+                trailing: m['name'] == modelName
+                    ? const Icon(Icons.check_rounded, color: orchid)
+                    : null,
+                onTap: () {
+                  setState(() => chosenModel = m['id']);
+                  Navigator.pop(sheetContext);
+                  if (conversationId != null) {
+                    action('model', extra: {'model': m['id']});
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  Future<void> choosePermissions() async {
+    final project = projectId;
+    final mode = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(24, 8, 24, 16),
+              child: Text(
+                'Permessi',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+              ),
+            ),
+            if (project == null) ...[
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                child: Text(
+                  'I permessi di file e comandi si gestiscono nelle chat di progetto.',
+                  style: TextStyle(color: muted),
+                ),
+              ),
+              if (conversationId == null)
+                ListTile(
+                  leading: const Icon(Icons.folder_outlined),
+                  title: const Text('Scegli progetto'),
+                  onTap: () {
+                    Navigator.pop(sheetContext, 'project');
+                  },
+                ),
+            ] else ...[
+              if (permissionMode == null)
+                const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'Collega un desktop aggiornato per modificare i permessi.',
+                    style: TextStyle(color: muted),
+                  ),
+                ),
+              ...const [
+                (
+                  'ask',
+                  'Richiedi approvazione',
+                  'Chiede conferma prima di scrivere file o eseguire comandi.',
+                ),
+                (
+                  'auto',
+                  'Approva per me',
+                  'Revisiona automaticamente i comandi e chiede conferma per azioni rischiose o incerte.',
+                ),
+                (
+                  'full',
+                  'Accesso completo',
+                  'File e comandi senza conferme, anche fuori dal progetto.',
+                ),
+              ].map(
+                (m) => ListTile(
+                  title: Text(m.$2),
+                  subtitle: Text(m.$3),
+                  enabled:
+                      online &&
+                      !busy &&
+                      !changingPermission &&
+                      permissionMode != null,
+                  trailing: permissionMode == m.$1
+                      ? const Icon(Icons.check_rounded, color: orchid)
+                      : null,
+                  onTap: () => Navigator.pop(sheetContext, m.$1),
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || mode == null) return;
+    if (mode == 'project') {
+      await chooseProject();
+      return;
+    }
+    if (mode == permissionMode) return;
+    var confirmed = false;
+    if (mode == 'full') {
+      confirmed =
+          await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Consentire accesso completo?'),
+              content: Text(
+                'Per ${projects[project]?['name'] ?? 'questo progetto'}, AuraChat potrà modificare file ed eseguire comandi senza conferme, anche fuori dal progetto, con accesso alla rete e i permessi del tuo account Windows.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Annulla'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Consenti accesso completo'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!confirmed || !mounted) return;
+    }
+    setState(() => changingPermission = true);
+    await action(
+      'permission',
+      extra: {
+        'project_id': project,
+        'mode': mode,
+        'confirm_full_access': confirmed,
+      },
+    );
+    if (mounted) setState(() => changingPermission = false);
+  }
+
+  Widget library({bool inDrawer = false, String query = ''}) => ChatLibrary(
+    projects: projects,
+    chats: chats,
+    selectedId: conversationId,
+    query: query,
+    onSelect: (chat) {
+      if (inDrawer) Navigator.pop(context);
+      composerFocus.unfocus();
+      selectChat(chat);
+    },
+    onNew: (project) {
+      if (inDrawer) Navigator.pop(context);
+      newChat(project);
+    },
+  );
+
+  Future<void> searchChats() {
+    var query = '';
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (sheetContext, update) => Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.viewInsetsOf(sheetContext).bottom,
+            ),
+            child: SizedBox(
+              height:
+                  (MediaQuery.sizeOf(sheetContext).height -
+                      MediaQuery.viewInsetsOf(sheetContext).bottom) *
+                  .82,
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                      child: TextField(
+                        autofocus: true,
+                        decoration: const InputDecoration(
+                          hintText: 'Cerca nelle chat',
+                          prefixIcon: Icon(Icons.search_rounded),
+                        ),
+                        onChanged: (value) => update(() => query = value),
+                      ),
+                    ),
+                    Expanded(
+                      child: ChatLibrary(
+                        projects: projects,
+                        chats: chats,
+                        query: query,
+                        onSelect: (chat) {
+                          Navigator.pop(sheetContext);
+                          selectChat(chat);
+                        },
+                        onNew: (project) {
+                          Navigator.pop(sheetContext);
+                          newChat(project);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> chooseProject() => showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetContext) => SafeArea(
+      child: ListView(
+        shrinkWrap: true,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(24, 8, 24, 16),
+            child: Text(
+              'Progetto',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.chat_bubble_outline_rounded),
+            title: const Text('Chat libera'),
+            trailing: projectId == null
+                ? const Icon(Icons.check_rounded, color: orchid)
+                : null,
+            onTap: () {
+              setState(() => projectId = null);
+              Navigator.pop(sheetContext);
+            },
+          ),
+          ...projects.entries.map(
+            (p) => ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: Text(p.value['name'] ?? 'Progetto'),
+              trailing: projectId == p.key
+                  ? const Icon(Icons.check_rounded, color: orchid)
+                  : null,
+              onTap: () {
+                setState(() => projectId = p.key);
+                Navigator.pop(sheetContext);
+              },
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Future<void> composerOptions() => showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetContext) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.laptop_mac_outlined),
+            title: const Text('Scegli PC'),
+            subtitle: Text(device?['name'] ?? 'Nessun PC selezionato'),
+            enabled: !busy,
+            onTap: () {
+              Navigator.pop(sheetContext);
+              chooseDevice();
+            },
+          ),
+          if (conversationId == null)
+            ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: const Text('Scegli progetto'),
+              subtitle: Text(projects[projectId]?['name'] ?? 'Chat libera'),
+              enabled: !busy,
+              onTap: () {
+                Navigator.pop(sheetContext);
+                chooseProject();
+              },
+            ),
+          ListTile(
+            leading: const Icon(Icons.tune_rounded),
+            title: const Text('Scegli modello'),
+            enabled: online && !busy,
+            onTap: () {
+              Navigator.pop(sheetContext);
+              modelMenuKey.currentState?.showButtonMenu();
+            },
+          ),
+          const SizedBox(height: 12),
+        ],
+      ),
+    ),
+  );
+
+  Widget notice(String message, String action, VoidCallback onTap) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+    child: Row(
+      children: [
+        const Icon(Icons.info_outline_rounded, size: 18, color: muted),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            message,
+            style: const TextStyle(color: muted, fontSize: 13),
+          ),
+        ),
+        TextButton(onPressed: onTap, child: Text(action)),
+      ],
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     final activeChat = chats
         .where((c) => c['id'] == conversationId)
         .firstOrNull;
     final activeRequest = busy && requestConversation == conversationId;
-    return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 0,
-        title: InkWell(
-          onTap: chooseDevice,
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  device?['name'] ?? 'Scegli un PC',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                Text(
-                  device?['remote_enabled'] == false
-                      ? 'Collegamento da abilitare'
-                      : online
-                      ? 'Collegato al desktop'
-                      : 'Desktop non raggiungibile',
-                  style: const TextStyle(color: muted, fontSize: 12),
-                ),
-              ],
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom > 0;
+    return PopScope(
+      canPop: libraryVisible,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) openLibrary();
+      },
+      child: Scaffold(
+        key: scaffoldKey,
+        appBar: AppBar(
+          toolbarHeight: 72,
+          leadingWidth: 76,
+          leading: Padding(
+            padding: const EdgeInsets.only(left: 16, top: 12, bottom: 12),
+            child: RoundButton(
+              icon: libraryVisible
+                  ? Icons.menu_rounded
+                  : Icons.arrow_back_rounded,
+              label: libraryVisible ? 'Apri menu' : 'Torna alle chat',
+              onPressed: libraryVisible
+                  ? () => scaffoldKey.currentState?.openDrawer()
+                  : openLibrary,
             ),
           ),
-        ),
-        actions: [
-          PopupMenuButton<String>(
+          title: PopupMenuButton<String>(
+            key: modelMenuKey,
             tooltip: 'Scegli modello',
             enabled: online && !busy,
-            icon: const Icon(Icons.tune_rounded),
+            position: PopupMenuPosition.under,
             onSelected: (value) {
               setState(() => chosenModel = value);
               if (conversationId != null) {
@@ -719,346 +1063,393 @@ class _WorkspaceState extends State<Workspace> {
                   ),
                 )
                 .toList(),
-          ),
-          IconButton(
-            tooltip: 'Nuova chat',
-            onPressed: busy ? null : () => selectChat(null),
-            icon: const Icon(Icons.edit_square),
-          ),
-        ],
-      ),
-      drawer: Drawer(
-        backgroundColor: panel,
-        child: SafeArea(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(24),
-                child: Row(
-                  children: [
-                    SvgPicture.asset('assets/logo.svg', width: 28),
-                    const SizedBox(width: 12),
-                    const Text(
-                      'AuraChat',
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      libraryVisible
+                          ? 'AuraChat'
+                          : activeChat?['title'] ?? 'Nuova chat',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 22,
+                        fontSize: libraryVisible ? 20 : 17,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    size: 18,
+                    color: muted,
+                  ),
+                ],
               ),
-              ListTile(
-                leading: const Icon(Icons.add),
-                title: const Text('Nuova chat'),
-                onTap: () {
-                  Navigator.pop(context);
-                  selectChat(null);
-                },
-              ),
-              Expanded(
-                child: chats.isEmpty
-                    ? const Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Text(
-                          'Le tue conversazioni appariranno qui.',
-                          style: TextStyle(color: muted),
-                        ),
-                      )
-                    : ListView.builder(
-                        itemCount: chats.length,
-                        itemBuilder: (context, i) {
-                          final chat = chats[i];
-                          return ListTile(
-                            selected: chat['id'] == conversationId,
-                            selectedColor: orchid,
-                            title: Text(
-                              chat['title'] ?? 'Chat',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: chat['project_name'] == null
-                                ? null
-                                : Text(chat['project_name']),
-                            onTap: () {
-                              Navigator.pop(context);
-                              selectChat(chat);
-                            },
-                          );
-                        },
-                      ),
-              ),
-              const Divider(),
-              ListTile(
-                title: Text(
-                  widget.user.email ?? '',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: IconButton(
-                  tooltip: 'Esci dall’account',
-                  icon: const Icon(Icons.logout),
-                  onPressed: () async {
-                    try {
-                      await push.signOut();
-                    } catch (e) {
-                      fail(e);
-                    }
-                  },
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
-      body: SafeArea(
-        top: false,
-        child: Column(
-          children: [
-            ValueListenableBuilder<String?>(
-              valueListenable: push.warning,
-              builder: (context, warning, _) => warning == null
-                  ? const SizedBox.shrink()
-                  : MaterialBanner(
-                      content: Text(warning),
-                      actions: [
-                        TextButton(
-                          onPressed: () => push.bind(widget.user.uid),
-                          child: const Text('Riprova'),
-                        ),
-                      ],
-                    ),
-            ),
-            if (!online && !loading)
-              MaterialBanner(
-                content: Text(
-                  device?['remote_enabled'] == false
-                      ? 'Aggiorna le regole Firebase per abilitare il collegamento remoto.'
-                      : 'Apri AuraChat sul PC per inviare messaggi.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: chooseDevice,
-                    child: const Text('Scegli PC'),
-                  ),
-                ],
-              ),
-            if (error != null)
-              MaterialBanner(
-                content: Text(error!),
-                actions: [
-                  TextButton(
-                    onPressed: () => setState(() => error = null),
-                    child: const Text('Chiudi'),
-                  ),
-                ],
-              ),
-            Expanded(
-              child: loading || loadingMessages
-                  ? const Center(child: CircularProgressIndicator())
-                  : messages.isEmpty && !activeRequest
-                  ? Center(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.all(32),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SvgPicture.asset(
-                              'assets/logo.svg',
-                              width: 52,
-                              height: 52,
-                            ),
-                            const SizedBox(height: 24),
-                            const Text(
-                              'Da dove cominciamo?',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 26,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            const Text(
-                              'Scrivi qui. Il tuo PC si occupa del resto.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: muted, height: 1.5),
-                            ),
-                            if (conversationId == null &&
-                                (tree['projects'] as Map?)?.isNotEmpty == true)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 24),
-                                child: DropdownButton<String?>(
-                                  value: projectId,
-                                  hint: const Text('Chat libera o progetto'),
-                                  isExpanded: true,
-                                  items: [
-                                    const DropdownMenuItem<String?>(
-                                      value: null,
-                                      child: Text('Chat libera'),
-                                    ),
-                                    ...(tree['projects'] as Map).entries.map(
-                                      (p) => DropdownMenuItem<String?>(
-                                        value: p.key as String,
-                                        child: Text(p.value['name'] as String),
-                                      ),
-                                    ),
-                                  ],
-                                  onChanged: (value) =>
-                                      setState(() => projectId = value),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    )
-                  : ListView(
-                      controller: scroll,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 24,
-                      ),
-                      children: [
-                        if (activeChat != null)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 24),
-                            child: Text(
-                              activeChat['title'] ?? 'Chat',
-                              style: const TextStyle(
-                                color: muted,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ),
-                        ...messages.map(
-                          (message) => MessageView(message: message),
-                        ),
-                        if (activeRequest && pendingText != null)
-                          MessageView(
-                            message: {'role': 'user', 'content': pendingText},
-                          ),
-                        if (activeRequest)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            child: Row(
-                              children: [
-                                const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    requestStatus == 'pending'
-                                        ? 'In attesa del desktop…'
-                                        : 'Il desktop sta lavorando…',
-                                    style: const TextStyle(color: muted),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                      ],
-                    ),
-            ),
-            ...approvals
-                .where((a) => a['conversation_id'] == conversationId)
-                .map(
-                  (approval) => Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        const Text(
-                          'Il desktop richiede la tua approvazione',
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 8),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxHeight: 140),
-                          child: SingleChildScrollView(
-                            child: SelectableText(
-                              const JsonEncoder.withIndent(
-                                '  ',
-                              ).convert(approval['action']),
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ),
-                        ),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            TextButton(
-                              onPressed: () => action(
-                                'approve',
-                                extra: {
-                                  'approval_id': approval['id'],
-                                  'allow': false,
-                                },
-                              ),
-                              child: const Text('Rifiuta'),
-                            ),
-                            FilledButton(
-                              onPressed: () => action(
-                                'approve',
-                                extra: {
-                                  'approval_id': approval['id'],
-                                  'allow': true,
-                                },
-                              ),
-                              child: const Text('Consenti una volta'),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+          actions: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: composer,
-                      minLines: 1,
-                      maxLines: 6,
-                      maxLength: 25000,
-                      textCapitalization: TextCapitalization.sentences,
-                      decoration: const InputDecoration(
-                        hintText: 'Scrivi un messaggio',
-                        counterText: '',
-                      ),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 52,
-                    height: 52,
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(padding: EdgeInsets.zero),
-                      onPressed: busy
-                          ? () => action('stop')
-                          : online && composer.text.trim().isNotEmpty
-                          ? send
-                          : null,
-                      child: Icon(
-                        busy ? Icons.stop_rounded : Icons.arrow_upward_rounded,
-                        semanticLabel: busy
-                            ? 'Interrompi risposta'
-                            : 'Invia messaggio',
-                      ),
-                    ),
-                  ),
-                ],
+              padding: const EdgeInsets.only(right: 16),
+              child: RoundButton(
+                icon: libraryVisible
+                    ? Icons.search_rounded
+                    : Icons.edit_outlined,
+                label: libraryVisible ? 'Cerca chat' : 'Nuova chat',
+                onPressed: libraryVisible
+                    ? searchChats
+                    : busy
+                    ? null
+                    : () => newChat(),
               ),
             ),
           ],
+        ),
+        drawer: Drawer(
+          width: MediaQuery.sizeOf(context).width * .87,
+          backgroundColor: sidebar,
+          surfaceTintColor: Colors.transparent,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.horizontal(right: Radius.circular(28)),
+          ),
+          child: SafeArea(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 20, 16, 12),
+                  child: Row(
+                    children: [
+                      SvgPicture.asset(
+                        'assets/logo.svg',
+                        width: 26,
+                        height: 26,
+                      ),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'AuraChat',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      RoundButton(
+                        icon: Icons.search_rounded,
+                        label: 'Cerca chat',
+                        onPressed: () {
+                          Navigator.pop(context);
+                          searchChats();
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(child: library(inDrawer: true)),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          FilledButton.icon(
+                            onPressed: busy
+                                ? null
+                                : () {
+                                    Navigator.pop(context);
+                                    newChat();
+                                  },
+                            icon: const Icon(Icons.edit_outlined, size: 20),
+                            label: const Text('Nuova chat'),
+                          ),
+                          const Spacer(),
+                          RoundButton(
+                            icon: Icons.logout_rounded,
+                            label: 'Esci dall’account',
+                            onPressed: () async {
+                              try {
+                                await push.signOut();
+                              } catch (e) {
+                                fail(e);
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        widget.user.email ?? '',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: muted, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        body: SafeArea(
+          top: false,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (libraryVisible)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                        child: DeviceLabel(
+                          name: device?['name'] ?? 'Scegli un PC',
+                          online: online,
+                          onTap: busy ? null : chooseDevice,
+                        ),
+                      ),
+                    ),
+                  ValueListenableBuilder<String?>(
+                    valueListenable: push.warning,
+                    builder: (context, warning, _) => warning == null
+                        ? const SizedBox.shrink()
+                        : notice(
+                            warning,
+                            'Riprova',
+                            () => push.bind(widget.user.uid),
+                          ),
+                  ),
+                  if (!online && !loading)
+                    notice(
+                      device?['remote_enabled'] == false
+                          ? 'Collegamento remoto da abilitare sul PC.'
+                          : 'Apri AuraChat sul PC per inviare messaggi.',
+                      'Scegli PC',
+                      chooseDevice,
+                    ),
+                  if (error != null)
+                    notice(
+                      error!,
+                      'Chiudi',
+                      () => setState(() => error = null),
+                    ),
+                  Expanded(
+                    child: AnimatedSwitcher(
+                      duration: reduceMotion
+                          ? Duration.zero
+                          : const Duration(milliseconds: 180),
+                      switchInCurve: Curves.easeOutCubic,
+                      child: loading || loadingMessages
+                          ? const Center(
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : libraryVisible
+                          ? library()
+                          : messages.isEmpty && !activeRequest
+                          ? const SizedBox.expand()
+                          : ListView(
+                              key: const ValueKey('conversation-messages'),
+                              controller: scroll,
+                              keyboardDismissBehavior:
+                                  ScrollViewKeyboardDismissBehavior.onDrag,
+                              padding: const EdgeInsets.fromLTRB(
+                                20,
+                                20,
+                                20,
+                                16,
+                              ),
+                              children: [
+                                ...messages.map(
+                                  (message) => MessageView(message: message),
+                                ),
+                                if (activeRequest &&
+                                    pendingText != null &&
+                                    !messages.any(
+                                      (m) =>
+                                          m['role'] == 'user' &&
+                                          m['content'] == pendingText &&
+                                          m == messages.last,
+                                    ))
+                                  MessageView(
+                                    message: {
+                                      'role': 'user',
+                                      'content': pendingText,
+                                    },
+                                  ),
+                                if (activeRequest)
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 16,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const SizedBox(
+                                          width: 12,
+                                          height: 12,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 1.5,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Text(
+                                            requestStatus == 'pending'
+                                                ? 'In attesa del PC…'
+                                                : 'AuraChat sta lavorando…',
+                                            style: const TextStyle(
+                                              color: muted,
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            ),
+                    ),
+                  ),
+                  if (approvals.any(
+                    (a) => a['conversation_id'] == conversationId,
+                  ))
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: MediaQuery.sizeOf(context).height * .35,
+                      ),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          children: approvals
+                              .where(
+                                (a) => a['conversation_id'] == conversationId,
+                              )
+                              .map(
+                                (approval) => Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 20,
+                                    vertical: 8,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      const Text(
+                                        'È richiesta la tua approvazione',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      ExpansionTile(
+                                        tilePadding: EdgeInsets.zero,
+                                        title: const Text(
+                                          'Dettagli operazione',
+                                        ),
+                                        children: [
+                                          SelectableText(
+                                            const JsonEncoder.withIndent(
+                                              '  ',
+                                            ).convert(approval['action']),
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      Wrap(
+                                        alignment: WrapAlignment.end,
+                                        spacing: 8,
+                                        children: [
+                                          TextButton(
+                                            onPressed: () => action(
+                                              'approve',
+                                              extra: {
+                                                'approval_id': approval['id'],
+                                                'allow': false,
+                                              },
+                                            ),
+                                            child: const Text('Rifiuta'),
+                                          ),
+                                          FilledButton(
+                                            onPressed: () => action(
+                                              'approve',
+                                              extra: {
+                                                'approval_id': approval['id'],
+                                                'allow': true,
+                                              },
+                                            ),
+                                            child: const Text(
+                                              'Consenti una volta',
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      ),
+                    ),
+                  if (!libraryVisible)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          DeviceLabel(
+                            name: device?['name'] ?? 'Scegli un PC',
+                            online: online,
+                            onTap: busy ? null : chooseDevice,
+                          ),
+                          if (conversationId == null || projectId != null)
+                            TextButton.icon(
+                              style: TextButton.styleFrom(
+                                foregroundColor: muted,
+                                minimumSize: const Size(48, 48),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                ),
+                              ),
+                              onPressed: busy || conversationId != null
+                                  ? null
+                                  : chooseProject,
+                              icon: const Icon(Icons.folder_outlined, size: 20),
+                              label: Text(
+                                projects[projectId]?['name'] ?? 'Chat libera',
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  Padding(
+                    key: const ValueKey('composer-area'),
+                    padding: EdgeInsets.fromLTRB(16, 8, 16, keyboard ? 8 : 12),
+                    child: AuraComposer(
+                      controller: composer,
+                      focusNode: composerFocus,
+                      online: online,
+                      busy: busy,
+                      onSend: send,
+                      onStop: () => action('stop'),
+                      onOptions: composerOptions,
+                      modelName: modelName,
+                      permissionLabel: permissionLabel,
+                      onModel: chooseModel,
+                      onPermissions: changingPermission
+                          ? null
+                          : choosePermissions,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -1066,6 +1457,10 @@ class _WorkspaceState extends State<Workspace> {
 }
 
 String remoteError(String? error) => switch (error) {
+  'permissions_in_use' =>
+    'Attendi che le chat del progetto abbiano terminato prima di cambiare i permessi.',
+  'full_access_confirmation_required' =>
+    'Conferma esplicitamente l’accesso completo prima di abilitarlo.',
   'desktop_restarted' =>
     'Il PC si è riavviato durante la richiesta. Controlla la chat prima di inviarla di nuovo.',
   'request_expired' =>
@@ -1099,8 +1494,11 @@ class MessageView extends StatelessWidget {
           if (activity.isNotEmpty)
             ExpansionTile(
               tilePadding: EdgeInsets.zero,
+              dense: true,
+              shape: const Border(),
+              collapsedShape: const Border(),
               title: Text(
-                '${activity.length} attività del desktop',
+                '${activity.length} attività',
                 style: const TextStyle(color: muted, fontSize: 13),
               ),
               children: activity
@@ -1123,26 +1521,44 @@ class MessageView extends StatelessWidget {
                   )
                   .toList(),
             ),
-          Container(
-            padding: user
-                ? const EdgeInsets.symmetric(horizontal: 18, vertical: 14)
-                : EdgeInsets.zero,
-            decoration: user
-                ? BoxDecoration(
-                    color: panel,
-                    borderRadius: BorderRadius.circular(16),
-                  )
-                : null,
-            child: MarkdownBody(
-              data: message['content'] as String? ?? '',
-              selectable: true,
-              styleSheet: MarkdownStyleSheet(
-                p: const TextStyle(
-                  fontSize: 15,
-                  height: 1.55,
-                  color: textColor,
+          LayoutBuilder(
+            builder: (context, constraints) => Align(
+              alignment: user ? Alignment.centerRight : Alignment.centerLeft,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: constraints.maxWidth * (user ? .88 : 1),
                 ),
-                code: const TextStyle(color: orchid, fontSize: 13),
+                child: Container(
+                  padding: user
+                      ? const EdgeInsets.symmetric(horizontal: 18, vertical: 13)
+                      : EdgeInsets.zero,
+                  decoration: user
+                      ? BoxDecoration(
+                          color: bubble,
+                          borderRadius: BorderRadius.circular(24),
+                        )
+                      : null,
+                  child: MarkdownBody(
+                    data: message['content'] as String? ?? '',
+                    selectable: true,
+                    styleSheet: MarkdownStyleSheet(
+                      p: const TextStyle(
+                        fontSize: 16,
+                        height: 1.6,
+                        color: textColor,
+                      ),
+                      code: const TextStyle(color: orchid, fontSize: 14),
+                      blockquoteDecoration: BoxDecoration(
+                        color: panel,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      codeblockDecoration: BoxDecoration(
+                        color: sidebar,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
