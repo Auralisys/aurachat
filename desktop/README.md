@@ -457,7 +457,10 @@ webview è nascosto, senza dipendere dal rendering della chat. Coprono un solo
 esito per turno (risposta pronta, errore o interruzione), le approvazioni in
 attesa e le operazioni esplicite dell'utente (trascrizione, download voce). I
 completamenti intermedi di agenti, shell e strumenti restano nell'app e non
-generano push. Gli eventi Firestore sono inoltrati a FCM da
+generano push. La notifica di fine turno viene omessa quando la chat è quella
+aperta nella finestra principale **e** la finestra è a fuoco: l'utente sta già
+vedendo la risposta. In tray, minimizzata o su un'altra chat la notifica arriva
+normalmente. Gli eventi Firestore sono inoltrati a FCM da
 `../functions/completionPush`. Le approvazioni in attesa producono una notifica
 con apertura della conversazione sul telefono.
 

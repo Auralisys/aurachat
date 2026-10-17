@@ -50,6 +50,9 @@ pub struct AppState {
     account_lock: tauri::async_runtime::Mutex<()>,
     running_chats: Mutex<std::collections::HashSet<String>>,
     chat_runs: chat_runs::ChatRuns,
+    /// Chat currently shown in the focused main window; completion notices are
+    /// redundant while the user is looking at it.
+    viewing_chat: Mutex<Option<String>>,
 }
 
 struct ConversationRun<'a> { active: &'a Mutex<std::collections::HashSet<String>>, id: String }
@@ -311,6 +314,7 @@ async fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
     state.firestore.logout();
     *state.user.lock().unwrap() = None;
     *state.data.lock().unwrap() = ChatData::default();
+    *state.viewing_chat.lock().unwrap() = None;
     state.data_loaded.store(false, Ordering::SeqCst);
     Ok(())
 }
@@ -443,7 +447,8 @@ async fn run_chat(
         Ok(_) => ("Risposta pronta", "AuraChat ha terminato la risposta."),
         Err(_) => ("Chat terminata con errore", "Apri AuraChat per controllare il problema."),
     };
-    if state.firestore.uid().as_deref()==Some(notification_owner.as_str()) {
+    if state.firestore.uid().as_deref()==Some(notification_owner.as_str())
+        && !companion::chat_visible(&app,&state,&conversation_id) {
         let chat_title=state.data.lock().unwrap().find_conversation(&conversation_id)
             .map(|chat|chat.title.clone()).filter(|name|!name.trim().is_empty()).unwrap_or_else(||title.into());
         let preview=match &result {
@@ -592,6 +597,13 @@ async fn chat_inner(
         data: tree,
         cancelled,
     })
+}
+
+/// Reports which chat the UI is showing. The window focus is checked when a
+/// notification is about to be sent, so minimize/tray/blur still notify.
+#[tauri::command(rename_all = "snake_case")]
+fn set_viewing_chat(state: tauri::State<'_, AppState>, conversation_id: Option<String>) {
+    *state.viewing_chat.lock().unwrap() = conversation_id.filter(|id| data::valid_id(id).is_ok());
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -871,6 +883,7 @@ pub fn run() {
                 account_lock: tauri::async_runtime::Mutex::new(()),
                 running_chats: Mutex::new(std::collections::HashSet::new()),
                 chat_runs: chat_runs::ChatRuns::default(),
+                viewing_chat: Mutex::new(None),
             });
 
             if let Some(window) = app.get_webview_window("main") {
@@ -912,6 +925,7 @@ pub fn run() {
             get_conversation,
             save_data,
             chat,
+            set_viewing_chat,
             stop_chat,
             get_locale,
             restore_window,

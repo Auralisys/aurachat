@@ -4,6 +4,12 @@
 const { invoke } = window.__TAURI__.core;
 const appWindow = window.__TAURI__.window.getCurrentWindow();
 
+// Il backend sopprime le notifiche di fine turno solo se questa chat è aperta
+// e la finestra è a fuoco; in tray/minimizzata la notifica arriva comunque.
+function reportViewingChat(id) {
+  invoke('set_viewing_chat', { conversation_id: id ?? null }).catch(() => {});
+}
+
 const DEFAULT_CONFIG = {
   firebase_project_id: '',
   firebase_api_key: '',
@@ -693,6 +699,7 @@ function clearChat() {
   state.attachments=[];state.editingMessageIndex=null;state.failedSend=null;renderDraft();composerStatus();
   window.speechSynthesis?.cancel();
   state.activeConversationId = null;
+  reportViewingChat(null);
   state.activeConversationSection = null;
   state.pendingProjectId = null;
   state.messages = [];
@@ -714,6 +721,7 @@ async function openConversation(id, refresh = true, section = null) {
   cancelVoice();
   state.attachments=[];state.editingMessageIndex=null;renderDraft();composerStatus();window.speechSynthesis?.cancel();
   state.activeConversationId = id;
+  reportViewingChat(id);
   state.unread.delete(id);
   const run = state.runs.get(id);
   const found = findConversation(id);

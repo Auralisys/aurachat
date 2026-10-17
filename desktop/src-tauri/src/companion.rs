@@ -133,6 +133,17 @@ fn sanitize_activity(event: &Value) -> Value {
     Value::Object(value)
 }
 
+fn viewing_match(viewing: Option<&str>, focused: bool, conversation: &str) -> bool {
+    focused && viewing == Some(conversation)
+}
+
+/// A completion notice is redundant only while the user is looking at that chat
+/// in the focused window. A background window, minimize or tray still notifies.
+pub fn chat_visible(app: &tauri::AppHandle, state: &AppState, conversation: &str) -> bool {
+    let focused = app.get_webview_window("main").and_then(|window| window.is_focused().ok()).unwrap_or(false);
+    viewing_match(state.viewing_chat.lock().unwrap().as_deref(), focused, conversation)
+}
+
 pub fn notify(app: &tauri::AppHandle, kind: &str, id: &str, conversation: &str, title: &str, body: &str) {
     let state=app.state::<AppState>();
     let Some(uid)=state.firestore.uid() else { return; };
@@ -446,6 +457,12 @@ fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,Strin
         assert_eq!(notification_preview("Breve", 200), "Breve");
     }
     #[test]fn identity_stays_stable(){let (id,name)=identity();assert!(data::valid_id(&id).is_ok());assert!(!name.is_empty());assert_eq!(identity().0,id);}
+    #[test]fn completion_notice_skips_only_the_focused_open_chat(){
+        assert!(viewing_match(Some("c"),true,"c"));
+        assert!(!viewing_match(Some("c"),false,"c"));
+        assert!(!viewing_match(Some("other"),true,"c"));
+        assert!(!viewing_match(None,true,"c"));
+    }
     #[test]fn live_turn_tracks_streams_and_upserts_activity(){
         let mut turn=LiveTurn::running(1,Some("u".into()),"t1","Domanda");
         turn.apply_progress("__delta","Ciao",2);

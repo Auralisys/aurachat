@@ -225,7 +225,10 @@ generano più push: restano visibili nell'app desktop. Vengono inviate soltanto:
 una notifica a fine turno di chat (risposta pronta, errore bloccante o
 interruzione), la richiesta di approvazione quando serve una decisione umana, e
 le operazioni esplicite dell'utente (download del modello vocale, trascrizione).
-La stessa regola vale per il banner Windows e per FCM.
+La stessa regola vale per il banner Windows e per FCM. La notifica di fine
+turno viene inoltre soppressa se la chat conclusa è quella aperta nella
+finestra principale e la finestra è a fuoco; il controllo avviene al momento
+dell'invio, quindi tray, minimizzato o un'altra chat notificano comunque.
 
 ## Turni live sul telefono — 18 ottobre 2026
 
