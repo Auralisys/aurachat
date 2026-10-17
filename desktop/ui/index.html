@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AuraChat</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="activity.css" />
+  </head>
+  <body>
+    <div class="backdrop" aria-hidden="true"></div>
+
+    <div id="boot-splash" class="boot-splash" role="status"><img src="assets/logo-auralisys.svg" alt="AuraChat" /><span data-i18n="ui.loading">AuraChat</span></div>
+    <div class="app">
+      <header class="titlebar">
+        <nav class="titlebar__navigation" data-i18n-aria-label="ui.navigation">
+          <button id="nav-back" class="icon-button" data-i18n-aria-label="ui.back" data-i18n-title="ui.back" disabled><svg data-icon="back" aria-hidden="true"></svg></button>
+          <button id="nav-forward" class="icon-button" data-i18n-aria-label="ui.forward" data-i18n-title="ui.forward" disabled><svg data-icon="forward" aria-hidden="true"></svg></button>
+          <button id="sidebar-collapse" class="icon-button" aria-expanded="true" data-i18n-aria-label="ui.collapse" data-i18n-title="ui.collapse"><svg data-icon="sidebar" aria-hidden="true"></svg></button>
+        </nav>
+        <nav class="app-menus" data-i18n-aria-label="ui.app_menu">
+          <div class="app-menu"><button id="menu-file" class="app-menu__trigger" data-app-menu="file" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-file-panel" data-i18n="menu.file"></button><div id="menu-file-panel" class="app-menu__panel" role="menu" data-i18n-aria-label="menu.file" hidden></div></div>
+          <div class="app-menu"><button id="menu-edit" class="app-menu__trigger" data-app-menu="edit" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-edit-panel" data-i18n="menu.edit"></button><div id="menu-edit-panel" class="app-menu__panel" role="menu" data-i18n-aria-label="menu.edit" hidden></div></div>
+          <div class="app-menu"><button id="menu-view" class="app-menu__trigger" data-app-menu="view" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-view-panel" data-i18n="menu.view"></button><div id="menu-view-panel" class="app-menu__panel" role="menu" data-i18n-aria-label="menu.view" hidden></div></div>
+          <div class="app-menu"><button id="menu-help" class="app-menu__trigger" data-app-menu="help" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-help-panel" data-i18n="menu.help"></button><div id="menu-help-panel" class="app-menu__panel" role="menu" data-i18n-aria-label="menu.help" hidden></div></div>
+        </nav>
+        <div class="titlebar__drag" data-tauri-drag-region></div>
+        <div class="titlebar__controls">
+          <button id="btn-minimize" class="win-btn" data-i18n-aria-label="titlebar.minimize" data-i18n-title="titlebar.minimize" aria-label="" title="">
+            <svg data-icon="minimize" aria-hidden="true"></svg>
+          </button>
+          <button id="btn-close" class="win-btn win-btn--close" data-i18n-aria-label="titlebar.close" data-i18n-title="titlebar.close" aria-label="" title="">
+            <svg data-icon="close" aria-hidden="true"></svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="content">
+        <nav id="app-rail" class="app-rail" data-i18n-aria-label="ui.navigation" hidden>
+          <button id="nav-home" class="rail-button is-active" data-i18n-aria-label="ui.home" data-i18n-title="ui.home" aria-current="page"><svg data-icon="home" aria-hidden="true"></svg></button>
+          <div class="rail__bottom">
+          <button id="btn-settings" class="rail-button" data-i18n-aria-label="titlebar.settings" data-i18n-title="titlebar.settings" aria-label="" title="">
+            <svg data-icon="settings" aria-hidden="true"></svg>
+          </button>
+          <footer class="rail__footer"><div id="account-menu" class="account-menu" hidden><p id="account-email"></p><button data-settings-tab="account" data-i18n="ui.account"></button><button data-settings-tab="inference" data-i18n="ui.inference"></button><button data-settings-tab="voice" data-i18n="ui.voice"></button><button data-settings-tab="general" data-i18n="ui.general"></button></div><button id="account-button" class="account-button" aria-expanded="false" aria-controls="account-menu"><span class="avatar" aria-hidden="true">AU</span><span class="account-name sr-only">Account</span></button></footer>
+          </div>
+        </nav>
+        <div class="workspace">
+        <aside id="sidebar" class="sidebar" hidden>
+          <div class="sidebar__brand"><img src="assets/logo-auralisys.svg" alt="" /><strong>AuraChat</strong></div><div class="sidebar__actions">
+            <button id="btn-new-chat" class="sidebar__btn" data-i18n-title="sidebar.new_chat"><svg data-icon="compose" aria-hidden="true"></svg><span data-i18n="sidebar.new_chat"></span></button>
+          </div>
+          <div class="sidebar__scroll">
+            <details id="projects-section" class="sidebar-section" open>
+              <summary class="sidebar__section-head">
+                <span class="section-label"><span data-i18n="ui.projects"></span><svg data-icon="chevron" aria-hidden="true"></svg></span>
+                <span class="section-actions"><button id="projects-options" class="icon-button" data-i18n-aria-label="sidebar.options"><svg data-icon="more" aria-hidden="true"></svg></button><button id="btn-new-project" class="icon-button" data-i18n-aria-label="sidebar.new_project" data-i18n-title="sidebar.new_project"><svg data-icon="plus" aria-hidden="true"></svg></button></span>
+              </summary>
+              <nav id="sidebar-tree" class="sidebar__tree" data-i18n-aria-label="ui.projects"></nav>
+            </details>
+            <details id="recents-section" class="sidebar-section" open>
+              <summary class="sidebar__section-head">
+                <span class="section-label"><span data-i18n="ui.recents"></span><svg data-icon="chevron" aria-hidden="true"></svg></span>
+                <span class="section-actions"><button id="recents-options" class="icon-button" data-i18n-aria-label="sidebar.options"><svg data-icon="more" aria-hidden="true"></svg></button><button id="btn-new-recent-chat" class="icon-button" data-i18n-aria-label="sidebar.new_chat" data-i18n-title="sidebar.new_chat"><svg data-icon="plus" aria-hidden="true"></svg></button></span>
+              </summary>
+              <nav id="recent-chats" data-i18n-aria-label="ui.recents"></nav>
+            </details>
+          </div>
+        </aside>
+
+        <main class="main">
+          <section id="view-onboarding" class="view view--onboarding" hidden>
+            <div class="onboarding">
+              <div class="onboarding__card">
+                <div class="onboarding__head">
+                  <img class="onboarding__logo" src="assets/logo-auralisys.svg" alt="Auralisys" />
+                  <h1 class="onboarding__title" data-i18n="onboarding.title"></h1>
+                  <p class="onboarding__sub" data-i18n="onboarding.sub"></p>
+                </div>
+                <form id="login-form" class="form" hidden>
+                  <label class="field"><span data-i18n="auth.email"></span><input class="field__input" name="email" type="email" autocomplete="username" required /></label>
+                  <label class="field"><span data-i18n="auth.password"></span><input class="field__input" name="password" type="password" autocomplete="current-password" required /></label>
+                  <p id="login-error" class="form__error" role="alert" hidden></p>
+                  <button class="btn btn--primary" type="submit" data-i18n="auth.login"></button>
+                </form>
+                <div id="restore-error" hidden><p id="restore-error-text" role="alert"></p><button id="retry-session" class="btn btn--primary" data-i18n="auth.retry"></button></div>
+                <div id="onboarding-form-slot" hidden></div>
+              </div>
+            </div>
+          </section>
+
+          <section id="view-chat" class="view view--chat" hidden>
+            <div class="chat-header"><span id="conversation-title" class="conversation-title">AuraChat</span>
+              <details id="context-info" class="context-info" hidden><summary><svg data-icon="usage" aria-hidden="true"></svg><span id="context-summary"></span></summary><div id="context-details"></div></details><button id="conversation-options" class="icon-button" data-i18n-aria-label="chat.conversation_options" data-i18n-title="chat.conversation_options" disabled><svg data-icon="more" aria-hidden="true"></svg></button>
+              <button id="activity-toggle" class="icon-button" aria-expanded="true" aria-controls="activity-dock" data-i18n-aria-label="activity.toggle" data-i18n-title="activity.toggle"><svg data-icon="settings" aria-hidden="true"></svg></button>
+            </div>
+            <div id="messages" class="messages"></div>
+            <div class="composer">
+              <div id="editing-message" class="editing-message" hidden><span data-i18n="chat.editing"></span><button id="cancel-edit" class="icon-button" data-i18n-aria-label="project.cancel"><svg data-icon="close" aria-hidden="true"></svg></button></div>
+              <div class="composer__box">
+                <div id="composer-attachments" class="composer-attachments" hidden></div>
+                <textarea id="composer-input" class="composer__input" rows="1" data-i18n-aria-label="chat.placeholder" data-i18n-placeholder="chat.placeholder" placeholder=""></textarea>
+                <div class="composer__toolbar"><button id="composer-attach" class="icon-button composer__attach" data-i18n-aria-label="chat.attach" data-i18n-title="chat.attach"><svg data-icon="plus" aria-hidden="true"></svg></button><div id="voice-recording" class="voice-recording" hidden><button id="voice-recording-cancel" type="button" class="icon-button" data-i18n-aria-label="voice.cancel" data-i18n-title="voice.cancel"><svg data-icon="close" aria-hidden="true"></svg></button><span id="voice-recording-status" class="sr-only" role="status"></span><canvas id="voice-waveform" height="32" aria-hidden="true"></canvas><button id="voice-stop" type="button" class="icon-button" data-i18n-aria-label="voice.stop" data-i18n-title="voice.stop"><svg data-icon="stop" aria-hidden="true"></svg></button></div><div class="model-select">
+                  <button id="model-select" class="model-select__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="model-menu" data-i18n-aria-label="chat.model"><span id="model-name"></span><svg data-icon="chevron" aria-hidden="true"></svg></button>
+                  <div id="model-menu" class="model-menu" role="menu" data-i18n-aria-label="chat.model" hidden></div>
+                </div>
+<button id="composer-mic" class="icon-button" aria-pressed="false" data-i18n-aria-label="chat.dictate" data-i18n-title="chat.dictate" hidden><svg data-icon="mic" aria-hidden="true"></svg></button><button id="composer-send" class="composer__send" data-i18n-aria-label="titlebar.send" data-i18n-title="titlebar.send" aria-label="" title="">
+                  <svg data-icon="send" aria-hidden="true"></svg>
+                </button>
+                </div>
+              </div>
+              <div class="composer__project"><button id="project-select" class="model-select__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="project-menu" data-i18n-aria-label="chat.project"><svg data-icon="project" aria-hidden="true"></svg><span id="project-name"></span><svg data-icon="chevron" aria-hidden="true"></svg></button><div id="project-menu" class="model-menu" role="menu" data-i18n-aria-label="chat.project" hidden></div></div>
+              <p id="attachment-note" class="composer-note" data-i18n="chat.attachment_note" hidden></p><p id="composer-status" class="composer-note" role="status" hidden></p>
+              <p class="composer__hint" data-i18n="chat.hint"></p>
+            </div>
+          </section>
+        </main>
+        <aside id="activity-dock" class="activity-dock" data-i18n-aria-label="activity.title" hidden>
+          <div id="activity-card" class="activity-card"></div>
+          <section id="activity-panel" class="activity-panel" hidden>
+            <header class="activity-panel__header"><button id="activity-back" class="icon-button" data-i18n-aria-label="ui.back"><svg data-icon="back" aria-hidden="true"></svg></button><h2 id="activity-panel-title" tabindex="-1"></h2><button id="activity-close" class="icon-button" data-i18n-aria-label="modal.close"><svg data-icon="close" aria-hidden="true"></svg></button></header>
+            <nav id="activity-tabs" class="activity-tabs" data-i18n-aria-label="activity.title"></nav>
+            <div id="activity-panel-content" class="activity-panel__content"></div>
+          </section>
+        </aside>
+        </div>
+      </div>
+    </div>
+
+    <div id="project-preview" class="project-preview" role="tooltip" hidden></div>
+    <div id="tree-menu" class="tree-menu" role="menu" hidden></div>
+
+    <dialog id="project-dialog" class="project-dialog" aria-labelledby="project-editor-title">
+      <form id="project-form">
+        <header class="project-dialog__header"><h2 id="project-editor-title"></h2><button id="project-dialog-close" type="button" class="icon-button" data-i18n-aria-label="modal.close"><svg data-icon="close" aria-hidden="true"></svg></button></header>
+        <label class="field"><span class="field__label" data-i18n="project.name"></span><input id="project-name-input" class="field__input" name="name" required maxlength="120" autocomplete="off" data-i18n-placeholder="project.name_placeholder" /></label>
+        <section class="project-origins" aria-labelledby="project-sources-label"><h3 id="project-sources-label" data-i18n="project.sources"></h3><div id="project-sources"></div><p id="project-source-empty" class="project-source-empty" data-i18n="project.choose_main"></p><button id="project-add-source" type="button" class="project-add-source"><svg data-icon="folderPlus" aria-hidden="true"></svg><span data-i18n="project.add_source"></span></button></section>
+        <p class="project-permission-note" data-i18n="project.permission_note"></p>
+        <p id="project-error" class="form__error" role="alert" hidden></p>
+        <footer class="project-dialog__footer"><button id="project-cancel" type="button" class="btn" data-i18n="project.cancel"></button><button id="project-save" type="submit" class="btn btn--primary" disabled></button></footer>
+      </form>
+    </dialog>
+
+    <dialog id="help-dialog" class="help-dialog" aria-labelledby="help-title">
+      <h2 id="help-title" data-i18n="menu.help"></h2>
+      <p data-i18n="help.intro"></p>
+      <dl><div><dt data-i18n="sidebar.new_chat"></dt><dd><kbd>Ctrl + N</kbd></dd></div><div><dt data-i18n="ui.collapse"></dt><dd><kbd>Ctrl + B</kbd></dd></div><div><dt data-i18n="titlebar.settings"></dt><dd><kbd>Ctrl + ,</kbd></dd></div><div><dt data-i18n="help.send"></dt><dd><kbd>Enter</kbd></dd></div><div><dt data-i18n="help.new_line"></dt><dd><kbd>Shift + Enter</kbd></dd></div></dl>
+      <form method="dialog"><button class="btn btn--primary" data-i18n="modal.close"></button></form>
+    </dialog>
+    <div id="settings-overlay" class="overlay" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <button id="modal-close" class="modal__close" data-i18n-aria-label="modal.close" data-i18n-title="modal.close" aria-label="" title="">
+          <svg data-icon="close" aria-hidden="true"></svg>
+        </button>
+        <nav class="settings-nav"><h2 data-i18n="titlebar.settings"></h2><button data-settings-tab="general" data-i18n="ui.general"></button><button data-settings-tab="account" data-i18n="ui.account"></button><button data-settings-tab="inference" data-i18n="ui.inference"></button><button data-settings-tab="voice" data-i18n="ui.voice"></button></nav><div class="settings-content"><div class="modal__head">
+          <h2 id="settings-title" class="modal__title" data-i18n="settings.title"></h2>
+        </div>
+        <section id="settings-general" hidden><h3 data-i18n="ui.appearance"></h3><p data-i18n="ui.appearance_note"></p><div class="preference-row"><span data-i18n="ui.theme"></span><span data-i18n="ui.dark"></span></div><div class="preference-row"><span data-i18n="ui.language"></span><span id="settings-language"></span></div><div class="preference-row"><span data-i18n="ui.motion"></span><span data-i18n="ui.static"></span></div></section><section id="settings-voice" hidden>
+<h3 data-i18n="voice.title"></h3><p data-i18n="voice.note"></p>
+<div class="voice-model-card"><strong>Cohere Transcribe</strong><span class="voice-model-detail" data-i18n="voice.model_detail"></span><p id="voice-model-status" role="status"></p>
+<progress id="voice-model-progress" hidden></progress><div class="voice-model-actions"><button id="voice-download" class="primary" data-i18n="voice.download"></button><button id="voice-download-cancel" hidden data-i18n="voice.pause"></button><button id="voice-remove" hidden data-i18n="voice.remove"></button></div><p id="voice-error" class="form-error" role="alert"></p></div>
+<p class="voice-privacy" data-i18n="voice.privacy"></p><a class="voice-source" href="https://huggingface.co/cstr/cohere-transcribe-onnx-int4" target="_blank" rel="noopener" data-i18n="voice.source"></a></section><div id="settings-form-slot"></div></div>
+      </div>
+    </div>
+
+    <script src="vendor/lucide.min.js"></script>
+    <script src="vendor/marked.js"></script>
+    <script src="vendor/purify.min.js"></script>
+    <script src="voice.js"></script>
+    <script src="activity.js"></script>
+    <script src="chat-progress.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

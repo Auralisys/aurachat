@@ -1,0 +1,62 @@
+const { chromium } = require('playwright');
+const { readFileSync, mkdirSync } = require('node:fs');
+const { resolve } = require('node:path');
+const { pathToFileURL } = require('node:url');
+const assert = require('node:assert/strict');
+(async () => {
+  const browser = await chromium.launch({channel:'msedge',headless:true});
+  const page = await browser.newPage({viewport:{width:1080,height:880}});
+  const errors = [];page.on('pageerror', e => errors.push(e.message));
+  const locales = JSON.parse(readFileSync(resolve(__dirname,'../ui/locales/it.json'),'utf8'));
+  await page.addInitScript(({locales}) => {
+    const conversation = {id:'c',title:'Correggi la struttura Firestore',updated_at:1,messages:[]};
+    const data = {projects:[{id:'p',name:'AuraChat',source_folders:[],conversations:[conversation]}],conversations:[]};
+    const config = {firebase_auth_set:true,api_key_set:true,models:['demo'],active_model:'demo'};
+    window.__TAURI__ = {window:{getCurrentWindow:()=>({async listen(){return ()=>{};}})},core:{invoke:async (cmd,args) => {
+      if(cmd === 'get_locale') return JSON.stringify(locales);
+      if(['get_config','get_local_config'].includes(cmd)) return config;
+      if(cmd === 'get_data') return data;
+      if(cmd === 'chat') {
+        await new Promise((resolve,reject) => {window.__finishChat = () => window.__failChat ? reject(new Error('Test failure')) : resolve();});
+        conversation.messages.push({role:'user',content:args.content},{role:'assistant',content:'Fatto'});
+        return {data,messages:conversation.messages,usage:{}};
+      }
+    }}};
+  },{locales});
+  await page.goto(pathToFileURL(resolve(__dirname,'../ui/index.html')).href);
+  await page.locator('#boot-splash').waitFor({state:'hidden'});
+  const project = page.locator('#sidebar-tree .tree-conv');
+  const recent = page.locator('#recent-chats .tree-conv');
+  const selected = async section => {
+    assert.equal(await page.locator('.tree-conv.is-active').count(),1);
+    assert.equal(await page.locator(`${section} .tree-conv.is-active`).count(),1);
+    assert.equal(await page.locator('.tree-conv [aria-current="page"]').count(),1);
+  };
+  await project.click();await selected('#sidebar-tree');
+  await recent.click();await selected('#recent-chats');
+  await page.click('#nav-back');await selected('#sidebar-tree');
+  await page.click('#nav-forward');await selected('#recent-chats');
+  await project.locator('.tree-conv__title').focus();await page.keyboard.press('Enter');await selected('#sidebar-tree');
+  await page.fill('#composer-input','Controlla');await page.click('#composer-send');
+  await page.waitForFunction(()=>typeof window.__finishChat === 'function');
+  assert.equal(await page.locator('.tree-conv__spinner').count(),2);
+  await selected('#sidebar-tree');
+  await page.locator('#composer-input').hover();
+  const shots=resolve(__dirname,'../../artifacts/sidebar-selection');mkdirSync(shots,{recursive:true});
+  await page.locator('#sidebar').screenshot({path:resolve(shots,'sidebar-loading.png')});
+  await page.evaluate(()=>window.__finishChat());
+  await page.waitForFunction(()=>!document.querySelector('.tree-conv__spinner'));
+  await selected('#sidebar-tree');
+  await page.fill('#composer-input','Errore');await page.click('#composer-send');
+  await page.waitForFunction(()=>!!document.querySelector('.tree-conv__spinner'));
+  await page.evaluate(()=>{window.__failChat=true;window.__finishChat();});
+  await page.waitForFunction(()=>!document.querySelector('.tree-conv__spinner'));
+  await page.click('#btn-new-chat');assert.equal(await page.locator('.tree-conv.is-active').count(),0);
+  await page.click('#nav-back');await selected('#sidebar-tree');
+  await page.setViewportSize({width:560,height:760});
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await page.locator('#sidebar').screenshot({path:resolve(shots,'sidebar-compact.png')});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  assert.deepEqual(errors,[]);
+  await browser.close();console.log('PASS: single contextual selection, history, keyboard, real request spinner lifecycle, error cleanup and compact sidebar.');
+})().catch(e=>{console.error(e);process.exit(1);});

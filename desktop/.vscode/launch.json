@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "AuraChat: debug",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": [
+          "build",
+          "--manifest-path",
+          "src-tauri/Cargo.toml",
+          "--bin",
+          "aurachat"
+        ],
+        "filter": {
+          "name": "aurachat",
+          "kind": "bin"
+        }
+      },
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1"
+      },
+      "terminal": "integrated"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+[package]
+name = "aurachat"
+version = "0.1.0"
+description = "AuraChat desktop gateway (tray + inferenza OpenAI-compatible)"
+edition = "2021"
+
+[lib]
+name = "aurachat_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+transcribe-rs = { version = "=0.3.12", default-features = false, features = ["onnx"] }
+sha2 = "0.10"
+ort = "=2.0.0-rc.12"

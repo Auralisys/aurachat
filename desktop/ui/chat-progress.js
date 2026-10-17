@@ -1,0 +1,161 @@
+// Native progress is scoped to each conversation, including background turns.
+const progressMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+function progressIcon(item) {
+  const name = item?.kind === 'reasoning' ? 'Brain' : /search/.test(item?.action) ? 'Search' : /read/.test(item?.action) ? 'FileText' : /list/.test(item?.action) ? 'FolderSearch' : 'Terminal';
+  return lucide.createElement(lucide.icons[name], {class:'ui-icon', 'aria-hidden':'true'});
+}
+
+function progressLabel(item) {
+  if (item.kind === 'reasoning') return t('progress.reasoned');
+  const key = `progress.${item.action}`;
+  return `${t(key) === key ? item.action || t('progress.command') : t(key)}${item.path ? ` · ${item.path}` : ''}`;
+}
+
+function progressHistory(items, live = false) {
+  const details = document.createElement('details');details.className = 'turn-history';
+  const summary = document.createElement('summary');
+  summary.append(progressIcon(items.find(item => item.kind === 'tool') || items[0]), document.createTextNode(`${t('progress.history')} · ${items.length}`), icon('chevron'));
+  details.append(summary);
+  const list = document.createElement('div');list.className = 'turn-history__list';
+  for (const item of items) {
+    const row = document.createElement('details');row.className = 'turn-step';
+    const title = document.createElement('summary');
+    const label = document.createElement('span');label.textContent = progressLabel(item);
+    title.append(progressIcon(item), label);
+    if (item.status) {
+      const status = document.createElement('span');status.className = 'turn-step__status';status.textContent = t(`progress.${item.status}`);title.append(status);
+    }
+    row.append(title);
+    const content = document.createElement(item.kind === 'reasoning' ? 'p' : 'pre');
+    content.textContent = item.kind === 'reasoning' ? item.text || '' : [item.arguments && JSON.stringify(item.arguments, null, 2), item.output].filter(Boolean).join('\n\n');
+    row.append(content);list.append(row);
+  }
+  details.append(list);
+  if (live) details.dataset.liveHistory = '';
+  return details;
+}
+
+function renderTurnBody(body, message, live = false) {
+  // Keep activity at the point where it happened, even between answer segments.
+  const open = new Set([...body.querySelectorAll('details[open]')].map(el => el.dataset.historyKey));
+  body.replaceChildren();
+  let offset = 0, group = [], groupOffset = 0;
+  const appendText = text => {
+    if (!text) return;
+    const part = document.createElement('div');part.className = 'turn-text';part.innerHTML = markdownHTML(text);body.append(part);
+  };
+  const flush = () => {
+    if (!group.length) return;
+    const history = progressHistory(group, live);history.dataset.historyKey = `group-${groupOffset}`;
+    history.querySelectorAll('.turn-step').forEach((el, index) => el.dataset.historyKey = `${groupOffset}-${index}`);
+    body.append(history);group = [];
+  };
+  for (const item of message.activity || []) {
+    if (!['tool','reasoning'].includes(item.kind)) continue;
+    const position = Math.max(offset, Math.min(message.content.length, item.offset || 0));
+    if (position > offset) {flush();appendText(message.content.slice(offset, position));offset = position;}
+    if (!group.length) groupOffset = position;
+    group.push(item);
+  }
+  flush();appendText(message.content.slice(offset));
+  body.querySelectorAll('details').forEach(el => {el.open = open.has(el.dataset.historyKey);});
+  body.querySelectorAll('a').forEach(link => {
+    link.rel = 'noopener noreferrer';
+    link.onclick = async event => {
+      event.preventDefault();
+      if (!/^https?:$/.test(link.protocol)) return;
+      try {await invoke('open_external_url', {url:link.href});} catch (_) {composerStatus(t('chat.link_failed'));}
+    };
+  });
+}
+
+function renderThinkingStatus() {
+  let status = $('#thinking-status');
+  if (!status) {status = document.createElement('div');status.id = 'thinking-status';status.className = 'thinking-status';$('.composer').prepend(status);}
+  const run = state.runs.get(state.activeConversationId);
+  status.hidden = !run?.pending;
+  if (!run?.pending) {status.replaceChildren();return;}
+  const stream = run.stream, latest = stream?.activity.at(-1);
+  const label = latest?.status === 'running' ? progressLabel(latest) : latest?.kind === 'reasoning' ? latest.text.trim().slice(-180) : stream?.content ? t('progress.writing') : run.activity || t('chat.thinking');
+  let line = status.querySelector('.thinking-status__line');
+  if (!line) {
+    line = document.createElement('div');line.className = 'thinking-status__line';
+    const text = document.createElement('span');text.className = 'thinking__activity';
+    const timer = document.createElement('span');timer.className = 'thinking__timer';
+    line.append(progressIcon(latest || {kind:'reasoning'}), text, timer);status.replaceChildren(line);
+  }
+  const glyphKey = `${latest?.kind}:${latest?.action}`;
+  if (line.dataset.glyph !== glyphKey) {line.querySelector('.ui-icon').replaceWith(progressIcon(latest || {kind:'reasoning'}));line.dataset.glyph = glyphKey;}
+  const text = line.querySelector('.thinking__activity');text.textContent = label;text.title = label;
+  updateThinkingTimer();
+}
+
+function updateLiveTurn() {
+  const stream = state.runs.get(state.activeConversationId)?.stream;
+  const body = $('#messages .msg--stream .msg__text');
+  if (!stream || !body) return;
+  const box = $('#messages'), follow = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
+  renderTurnBody(body, {content:stream.content.slice(0, stream.shown), activity:stream.activity.filter(item => (item.offset || 0) <= stream.shown)}, true);
+  if (follow) box.scrollTop = box.scrollHeight;
+}
+
+function revealTurn(run) {
+  const stream = run.stream;
+  if (!stream || stream.frame) return;
+  let previous = performance.now();
+  const tick = now => {
+    stream.frame = null;
+    const remaining = stream.content.length - stream.shown;
+    const step = progressMotion.matches ? remaining : Math.max(1, Math.ceil(Math.min(now - previous, 64) * Math.max(0.12, remaining / 700)));
+    stream.shown = Math.min(stream.content.length, stream.shown + step);
+    // Do not render half of a surrogate pair.
+    if (stream.shown < stream.content.length && /[\uD800-\uDBFF]/.test(stream.content[stream.shown - 1])) stream.shown++;
+    previous = now;
+    if (state.runs.get(state.activeConversationId) === run) updateLiveTurn();
+    if (stream.shown < stream.content.length) stream.frame = requestAnimationFrame(tick);
+    else {stream.resolve?.();stream.resolve = null;}
+  };
+  stream.frame = requestAnimationFrame(tick);
+}
+
+async function finishLiveTurn(run) {
+  if (!run.stream || run.stream.shown >= run.stream.content.length) return;
+  if (document.hidden) {cancelAnimationFrame(run.stream.frame);run.stream.frame = null;run.stream.shown = run.stream.content.length;return;}
+  await new Promise(resolve => {run.stream.resolve = resolve;revealTurn(run);});
+}
+
+async function setupChatProgress() {
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) return;
+    for (const run of state.runs.values()) {
+      const stream = run.stream;if (!stream) continue;
+      cancelAnimationFrame(stream.frame);stream.frame = null;stream.shown = stream.content.length;
+      stream.resolve?.();stream.resolve = null;
+    }
+  });
+  await appWindow.listen('chat-progress', ({payload}) => {
+    if (!payload || typeof payload.text !== 'string') return;
+    const run = state.runs.get(payload.conversation_id);if (!run?.pending) return;
+    const stream = run.stream ||= {content:'', shown:0, activity:[], frame:null};
+    if (payload.kind === '__delta') {stream.content += payload.text;revealTurn(run);}
+    else if (payload.kind === '__reasoning') {
+      let item = stream.activity.at(-1);
+      if (item?.kind !== 'reasoning' || item.offset !== stream.content.length) {item = {kind:'reasoning', text:'', offset:stream.content.length};stream.activity.push(item);}
+      item.text += payload.text;
+    } else if (payload.kind === '__activity') {
+      try {
+        const item = JSON.parse(payload.text);if (item.kind !== 'tool' || typeof item.id !== 'string') return;
+        const previous = stream.activity.find(entry => entry.kind === 'tool' && entry.id === item.id);
+        if (previous) Object.assign(previous, item);else stream.activity.push({...item, offset:stream.content.length});
+      } catch (_) {return;}
+    }
+    if (state.activeConversationId === payload.conversation_id) {renderThinkingStatus();if (payload.kind !== '__delta') updateLiveTurn();}
+  });
+  // Retain compatibility with native project events emitted by older builds.
+  await appWindow.listen('project-tool-activity', ({payload}) => {
+    const run = state.runs.get(payload?.conversation_id);if (!run?.pending) return;
+    run.activity = `${t(payload.action === 'read_project_file' ? 'chat.reading_file' : 'chat.listing_folder')}: ${payload.path}`;
+    if (state.activeConversationId === payload.conversation_id) renderThinkingStatus();
+  });
+}

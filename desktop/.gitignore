@@ -1,0 +1,15 @@
+# Build
+/target
+/src-tauri/target
+/src-tauri/gen/schemas
+
+# Node (non usato: il frontend è statico, senza bundler)
+node_modules/
+dist/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# La configurazione locale (con la API key) vive fuori dal repo,
+# nella cartella config dell'app: non va MAI versionata.

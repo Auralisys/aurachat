@@ -1,0 +1,135 @@
+// Mocked native events; no provider or Firebase calls.
+const {chromium} = require('playwright');
+const {readFileSync, mkdirSync} = require('node:fs');
+const {resolve} = require('node:path');
+const {pathToFileURL} = require('node:url');
+const assert = require('node:assert/strict');
+(async () => {
+  const browser = await chromium.launch({channel:'msedge', headless:true});
+  const page = await browser.newPage({viewport:{width:1440,height:960}});
+  const errors=[];page.on('pageerror', e=>errors.push(e.message));
+  const locales=JSON.parse(readFileSync(resolve(__dirname,'../ui/locales/it.json'),'utf8'));
+  await page.addInitScript(({locales})=>{
+    window.__events={};window.__calls=[];window.__shells={};
+    const data={projects:[],conversations:[{id:'c',title:'Analisi conversazioni',created_at:1,updated_at:1,messages:[
+      {role:'user',content:'Analizza questi appunti e https://example.com/reference',attachments:[{name:'appunti.md',content:'# Appunti\nContenuto originale <script>window.__unsafe=true</script>'}]},
+      {role:'assistant',content:'## Analisi delle conversazioni\n\nConservare gli **ID esistenti**.\n\n- Separare i messaggi\n- Caricare progressivamente\n\nLink del modello: https://example.com/model-reference\n\n<img src=x onerror="window.__unsafe=true">'}]}]};
+    const config={firebase_email:'demo@example.com',firebase_project_id:'demo',firebase_api_key:'demo',firebase_auth_set:true,api_key_set:true,models:['deepseek-flash'],active_model:'deepseek-flash'};
+    window.__TAURI__={window:{getCurrentWindow:()=>({minimize(){},close(){},async listen(name,fn){window.__events[name]=fn;return()=>{};}})},core:{invoke:async(cmd,args)=>{
+      window.__calls.push({cmd,args});
+      if(cmd==='list_shells')return Object.values(window.__shells).filter(s=>s.conversation_id===args.conversation_id);
+      if(cmd==='stop_shell') {
+        if(window.__stopFail){window.__stopFail=false;throw new Error('Stop refused by runner');}
+        const shell={...window.__shells[args.id],status:'cancelled',exit_code:1};window.__shells[args.id]=shell;
+        window.__events['shell-activity']({payload:shell});return shell;
+      }
+      if(cmd==='get_locale')return JSON.stringify(locales);
+      if(['get_local_config','get_config'].includes(cmd))return config;
+      if(cmd==='get_data')return structuredClone(data);
+      if(cmd==='save_data')return args.data;
+      if(cmd==='choose_chat_files')return [{name:'bozza.txt',content:'Da inviare'}];
+      if(cmd==='speech_model_status')return {ready:false,busy:false,downloaded:0,total:1};
+    }}};
+  },{locales});
+  await page.goto(pathToFileURL(resolve(__dirname,'../ui/index.html')).href);
+  await page.locator('#boot-splash').waitFor({state:'hidden'});
+  await page.getByRole('button',{name:'Analisi conversazioni',exact:true}).click();
+  await page.locator('#activity-card .activity-row').first().waitFor();
+  assert.equal(await page.locator('#activity-card .activity-group').count(),3);
+  assert.equal(await page.locator('#activity-card [data-activity-focus="group:outputs"]').innerText(),'Output\n0');
+  await page.locator('#activity-dock').evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished)));
+  const scrollRight = await page.locator('#messages').evaluate(el=>el.getBoundingClientRect().right);
+  const workspaceRight = await page.locator('.workspace').evaluate(el=>el.getBoundingClientRect().right);
+  assert.ok(Math.abs(scrollRight - (workspaceRight - 1)) < 2, 'Conversation scrollbar reaches the outer right edge behind the card');
+  const narrowChat = (await page.locator('.main').boundingBox()).width;
+  await page.getByRole('button',{name:'Nascondi card',exact:true}).click();
+  await page.locator('#activity-dock').waitFor({state:'hidden'});
+  assert.equal(await page.locator('#activity-dock').isVisible(),false);
+  assert.ok((await page.locator('.main').boundingBox()).width > narrowChat + 200);
+  await page.click('#activity-toggle');
+  await page.locator('#activity-card').getByRole('button',{name:'appunti.md',exact:true}).click();
+  assert.match(await page.locator('.activity-source-content').innerText(),/Contenuto originale/);
+  assert.equal(await page.evaluate(()=>!!window.__unsafe),false);
+  await page.click('#activity-back');
+  assert.equal(await page.locator('#activity-tabs').isVisible(),true);
+  await page.locator('#activity-tabs button').first().click();
+  assert.equal(await page.locator('#activity-panel-content .activity-row').count(),0, 'Ordinary assistant replies are not artifacts');
+  await page.evaluate(()=>window.__events['artifact-created']({payload:{conversation_id:'c',id:'document',title:'report.md',kind:'document',content:'## Report generato\n\nConservare gli **ID esistenti**.\n\n<img src=x onerror="window.__unsafe=true">'}}));
+  await page.locator('#activity-panel-content .activity-row').click();
+  assert.equal(await page.locator('#activity-panel-content .markdown strong').innerText(),'ID esistenti');
+  assert.equal(await page.locator('#activity-panel-content img,#activity-panel-content script').count(),0);
+  await page.click('#activity-close');
+  await page.evaluate(()=>{
+    const emit = payload=>window.__events['agent-activity']({payload});
+    emit({conversation_id:'other',id:'hidden',title:'Altra chat',status:'running'});
+    emit({conversation_id:'c',id:'a',title:'Firestore conversation analysis',status:'running',summary:'Verifica della struttura e degli allegati',task:'Analizza il modello dati',model:'deepseek-flash',content:'### Progresso\n\nLettura degli appunti.'});
+    emit({conversation_id:'c',id:'b',title:'Controllo fonti',status:'completed',summary:'Verificate le fonti disponibili',content:'Fonti coerenti.'});
+    window.__events['project-tool-activity']({payload:{conversation_id:'c',action:'read_project_file',path:'schema.md'}});
+  });
+  const shots=resolve(__dirname,'../../artifacts/activity');mkdirSync(shots,{recursive:true});
+  await page.locator('#activity-dock').evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished)));
+  await page.screenshot({path:resolve(shots,'card-desktop.png')});
+  await page.locator('.activity-agents-summary').click();
+  assert.equal(await page.locator('#activity-panel-content .activity-row').count(),2);
+  await page.locator('#activity-dock').evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished)));
+  await page.screenshot({path:resolve(shots,'agents-desktop.png')});
+  await page.getByRole('button',{name:/Firestore conversation analysis/}).click();
+  assert.match(await page.locator('#activity-panel-content').innerText(),/Analizza il modello dati/);
+  await page.evaluate(()=>window.__events['agent-activity']({payload:{conversation_id:'c',id:'a',status:'completed',summary:'Analisi completata',content:'## Risultato\n\nUsare una subcollection.'}}));
+  assert.match(await page.locator('#activity-panel-content').innerText(),/Analisi completata/);
+  await page.screenshot({path:resolve(shots,'agent-detail-desktop.png')});
+  await page.locator('#activity-panel-title').focus();await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#activity-tabs').isVisible(),true);
+  await page.locator('#activity-tabs button').last().click();
+  assert.equal(await page.locator('#activity-panel-content .activity-row').count(),2);
+  assert.equal(await page.getByRole('button',{name:/schema.md/}).count(),0, 'Project reads are not user sources');
+  await page.getByRole('button',{name:/https:\/\/example.com\/reference/}).click();
+  await page.getByRole('button',{name:'Apri link',exact:true}).click();
+  assert.equal(await page.evaluate(()=>window.__calls.find(c=>c.cmd==='open_external_url').args.url),'https://example.com/reference');
+  await page.evaluate(()=>{
+    const url='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
+    window.__events['user-source']({payload:{conversation_id:'c',id:'screenshot',title:'screenshot.png',kind:'image',url}});
+    window.__events['artifact-created']({payload:{conversation_id:'c',id:'generated-image',title:'immagine.png',kind:'image',url}});
+    window.__events['artifact-created']({payload:{conversation_id:'c',id:'debug',title:'debug.log',kind:'log',path:'artifacts/debug.log',content:'<script>window.__unsafe=true</script>\nDebug completo'}});
+  });
+  await page.click('#activity-back');
+  await page.getByRole('button',{name:/screenshot.png/}).click();
+  assert.equal(await page.locator('#activity-panel-content img').count(),1);
+  await page.setViewportSize({width:720,height:680});
+  await page.screenshot({path:resolve(shots,'detail-compact.png')});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.click('#activity-close');
+  await page.evaluate(()=>{
+    const shell={conversation_id:'c',id:'shell-1',title:'Verifica locale',command:'test-runner --watch',cwd:'C:/fixture',status:'running',output:'Avvio verifica\n<script>window.__unsafe=true</script>'};
+    window.__shells[shell.id]=shell;window.__events['shell-activity']({payload:shell});
+    window.__events['shell-activity']({payload:{...shell,conversation_id:'other',id:'unrelated'}});
+  });
+  await page.locator('[data-activity-focus="group:shells"]').click();
+  assert.equal(await page.locator('#activity-panel-content .activity-row').count(),1);
+  await page.getByRole('button',{name:/Verifica locale/}).click();
+  assert.match(await page.locator('.activity-terminal').innerText(),/Avvio verifica/);
+  await page.evaluate(()=>window.__events['shell-activity']({payload:{...window.__shells['shell-1'],output:'Verifica in corso\nRiga aggiornata'}}));
+  assert.match(await page.locator('.activity-terminal').innerText(),/Riga aggiornata/);
+  await page.screenshot({path:resolve(shots,'shell-compact.png')});
+  await page.evaluate(()=>window.__stopFail=true);
+  await page.getByRole('button',{name:'Interrompi esecuzione',exact:true}).click();
+  await page.locator('.activity-shell-error').waitFor();
+  assert.match(await page.locator('.activity-shell-error').innerText(),/Stop refused/);
+  await page.getByRole('button',{name:'Interrompi esecuzione',exact:true}).click();
+  assert.equal(await page.getByRole('button',{name:'Interrompi esecuzione',exact:true}).count(),0);
+  assert.match(await page.locator('#activity-panel-content').innerText(),/Interrotto/);
+  assert.equal(await page.evaluate(()=>!!window.__unsafe),false);
+  await page.click('#activity-close');
+  assert.equal(await page.locator('[data-activity-focus="group:shells"]').count(),0, 'No shell section without active processes');
+  await page.click('#nav-home');
+  await page.locator('#activity-dock').waitFor({state:'hidden'});
+  assert.equal(await page.locator('#activity-toggle').isVisible(),false);
+  assert.equal(await page.locator('#activity-card .activity-row').count(),0);
+  await page.click('#composer-attach');
+  await page.locator('#activity-card').getByRole('button',{name:'bozza.txt',exact:true}).waitFor();
+  assert.equal(await page.locator('#activity-dock').getAttribute('aria-hidden'),'false');
+  await page.emulateMedia({reducedMotion:'reduce'});
+  assert.equal(await page.locator('#activity-dock').evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
+  assert.deepEqual(errors,[]);
+  await browser.close();console.log('PASS: activity card, sources, safe outputs, agent lifecycle/detail, conversation isolation, keyboard navigation and compact layout (mocked native services).');
+})().catch(e=>{console.error(e);process.exit(1);});

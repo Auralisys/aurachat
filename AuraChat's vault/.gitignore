@@ -1,0 +1,5 @@
+# Stato UI locale, non documentazione condivisa.
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/graph.json
+.claude/*.local.json
