@@ -30,6 +30,22 @@ void main() {
       expect(index.first['project_id'], isNull);
     },
   );
+  test('live turns count only while running and fresh', () {
+    const now = 100000;
+    expect(
+      liveTurnRunning({'status': 'running', 'updated_at': now - 1000}, now),
+      isTrue,
+    );
+    expect(
+      liveTurnRunning({'status': 'running', 'updated_at': now - 21000}, now),
+      isFalse,
+    );
+    expect(
+      liveTurnRunning({'status': 'completed', 'updated_at': now}, now),
+      isFalse,
+    );
+    expect(liveTurnRunning(null, now), isFalse);
+  });
   testWidgets(
     'login validates empty fields without attempting authentication',
     (tester) async {

@@ -58,6 +58,14 @@ bool deviceOnline(Map<String, dynamic> device, [int? now]) =>
             ((device['last_seen'] as num?)?.toInt() ?? 0) <
         45000;
 
+/// A live turn is shown only while it is running and the desktop keeps it fresh.
+bool liveTurnRunning(Map<String, dynamic>? turn, [int? now]) =>
+    turn != null &&
+    turn['status'] == 'running' &&
+    (now ?? DateTime.now().millisecondsSinceEpoch) -
+            ((turn['updated_at'] as num?)?.toInt() ?? 0) <
+        20000;
+
 List<Map<String, dynamic>> chatIndex(Map<String, dynamic> tree) {
   final chats = Map<String, dynamic>.from(tree['conversations'] ?? {});
   final projects = Map<String, dynamic>.from(tree['projects'] ?? {});
@@ -92,6 +100,8 @@ class Companion {
       user.collection('devices');
   Stream<DocumentSnapshot<Map<String, dynamic>>> get index =>
       user.collection('companion').doc('state').snapshots();
+  Stream<QuerySnapshot<Map<String, dynamic>>> liveTurns(String device) =>
+      devices.doc(device).collection('live_turns').snapshots();
   Stream<QuerySnapshot<Map<String, dynamic>>> messages(String id) => user
       .collection('conversations')
       .doc(id)

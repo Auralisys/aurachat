@@ -453,10 +453,22 @@ mostrati anche nella UI desktop; la cronologia caricata di altre chat viene
 preservata durante l'aggiornamento dell'albero remoto.
 
 Le notifiche di completamento nascono nel backend Rust: funzionano anche se il
-webview è nascosto, senza dipendere dal rendering della chat. Coprono risposte,
-agenti, shell, strumenti, trascrizioni e download voce. Gli eventi Firestore sono
-inoltrati a FCM da `../functions/completionPush`. Le approvazioni in attesa
-producono una notifica con apertura della conversazione sul telefono.
+webview è nascosto, senza dipendere dal rendering della chat. Coprono un solo
+esito per turno (risposta pronta, errore o interruzione), le approvazioni in
+attesa e le operazioni esplicite dell'utente (trascrizione, download voce). I
+completamenti intermedi di agenti, shell e strumenti restano nell'app e non
+generano push. Gli eventi Firestore sono inoltrati a FCM da
+`../functions/completionPush`. Le approvazioni in attesa producono una notifica
+con apertura della conversazione sul telefono.
+
+Durante il turno `run_chat` emette `live-turn` (running/terminal) e il gateway
+pubblica `users/{uid}/devices/{id}/live_turns/{conversation_id}`: testo parziale,
+reasoning e activity aggiornati al massimo una volta al secondo, con heartbeat
+ogni 5 secondi. I documenti terminati vengono eliminati dopo 60 secondi. Il
+telefono ignora gli stati più vecchi di 20 secondi, così un arresto del desktop
+non lascia loader permanenti. La scrittura è troncata per restare sotto il limite
+Firestore e non tocca `conversations/{id}`, che conserva le precondizioni di
+versione del salvataggio cronologia.
 
 Stato esterno: regole limitate al proprietario pubblicate dall'utente e isolamento
 verificato con 403 su un percorso valido di un altro UID. Il gateway disabilita

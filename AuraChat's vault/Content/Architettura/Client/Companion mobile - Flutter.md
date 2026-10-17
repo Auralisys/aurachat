@@ -28,7 +28,9 @@ Il progetto non ha ancora billing abilitato: la Cloud Function richiede Blaze.
 
 Dettagli operativi, schema e comandi: `mobile/README.md`. Nessuna build iOS pronta:
 la cartella iOS è uno scaffold, da configurare e verificare su macOS. Interfaccia
-mobile italiana; streaming a frammenti e offline persistente non implementati.
+mobile italiana; il testo parziale, il reasoning e le attività sono trasmessi dal
+desktop tramite `live_turns` e le chat in corso mostrano un loader. La persistenza
+offline non è implementata.
 
 
 Prove successive riuscite: login reale e ripristino sessione Android, presenza del

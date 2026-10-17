@@ -305,6 +305,7 @@ class ChatLibrary extends StatefulWidget {
     required this.onNew,
     this.selectedId,
     this.query = '',
+    this.working = const {},
   });
   final Map<String, dynamic> projects;
   final List<Map<String, dynamic>> chats;
@@ -312,6 +313,7 @@ class ChatLibrary extends StatefulWidget {
   final ValueChanged<String?> onNew;
   final String? selectedId;
   final String query;
+  final Set<String> working;
   @override
   State<ChatLibrary> createState() => _ChatLibraryState();
 }
@@ -487,6 +489,13 @@ class _ChatLibraryState extends State<ChatLibrary> {
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontSize: 16),
       ),
+      trailing: widget.working.contains(chat['id'])
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 1.6),
+            )
+          : null,
       onTap: () => widget.onSelect(chat),
     ),
   );

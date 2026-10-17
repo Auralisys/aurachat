@@ -83,6 +83,16 @@ impl Firestore {
         self.commit(auth, vec![write]).await.map(|_| ())
     }
 
+    /// Deletes a transient relay document. A missing document is already clean.
+    pub async fn relay_delete(&self, auth: &FirestoreAuth, path: &str) -> Result<(), String> {
+        let token = self.id_token(auth).await?;
+        let response = self.http.delete(doc_url(&auth.project_id, path)).bearer_auth(token).send().await.map_err(|e| e.to_string())?;
+        match response.status().as_u16() {
+            200 | 404 => Ok(()),
+            code => Err(format!("Firestore {code}: {}", truncate(&response.text().await.unwrap_or_default(), 300))),
+        }
+    }
+
     pub async fn relay_upsert(&self, auth: &FirestoreAuth, path: &str, value: &Value) -> Result<(), String> {
         let token = self.id_token(auth).await?;
         let fields = encode_value(value)?["mapValue"]["fields"].clone();

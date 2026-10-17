@@ -75,6 +75,30 @@ void main() {
     },
   );
 
+  testWidgets('working chats show a progress indicator', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: auraTheme(),
+        home: Scaffold(
+          body: ChatLibrary(
+            projects: const {},
+            chats: const [
+              {'id': 'a', 'title': 'In corso'},
+              {'id': 'b', 'title': 'Ferma'},
+            ],
+            working: const {'a'},
+            onSelect: (_) {},
+            onNew: (_) {},
+          ),
+        ),
+      ),
+    );
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.text('In corso'), findsOneWidget);
+    expect(find.text('Ferma'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'search finds project conversations without opening each project',
     (tester) async {

@@ -265,11 +265,13 @@ class _WorkspaceState extends State<Workspace> {
   late final StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>
   indexSubscription;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? messageSubscription,
-      approvalSubscription;
+      approvalSubscription,
+      liveSubscription;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
   requestSubscription;
   final List<Map<String, dynamic>> devices = [];
   List<Map<String, dynamic>> chats = [], messages = [], approvals = [];
+  Map<String, Map<String, dynamic>> liveTurns = {};
   Map<String, dynamic> tree = {};
   String? deviceId,
       conversationId,
@@ -285,6 +287,14 @@ class _WorkspaceState extends State<Workspace> {
   Timer? clock;
   bool get busy =>
       sending || requestStatus == 'pending' || requestStatus == 'running';
+  Map<String, dynamic>? get activeLive =>
+      liveTurnRunning(liveTurns[conversationId]) ? liveTurns[conversationId] : null;
+  bool get liveRunning => activeLive != null;
+  bool get turnBusy => busy || liveRunning;
+  Set<String> get workingChats => {
+    for (final entry in liveTurns.entries)
+      if (liveTurnRunning(entry.value)) entry.key,
+  };
   Map<String, dynamic>? get device =>
       devices.where((d) => d['id'] == deviceId).firstOrNull;
   bool get online => device != null && deviceOnline(device!);
@@ -325,6 +335,7 @@ class _WorkspaceState extends State<Workspace> {
       });
       if (previous != deviceId) {
         watchApprovals();
+        watchLiveTurns();
         restoreRequest();
       }
     }, onError: fail);
@@ -352,6 +363,7 @@ class _WorkspaceState extends State<Workspace> {
     indexSubscription.cancel();
     messageSubscription?.cancel();
     approvalSubscription?.cancel();
+    liveSubscription?.cancel();
     requestSubscription?.cancel();
     push.target.removeListener(openNotification);
     composerFocus.dispose();
@@ -410,6 +422,32 @@ class _WorkspaceState extends State<Workspace> {
         }, onError: fail);
   }
 
+  void watchLiveTurns() {
+    liveSubscription?.cancel();
+    if (deviceId == null) {
+      liveTurns = {};
+      return;
+    }
+    liveSubscription = api.liveTurns(deviceId!).listen((
+      snapshot,
+    ) {
+      if (!mounted) return;
+      setState(() {
+        liveTurns = {for (final doc in snapshot.docs) doc.id: doc.data()};
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted ||
+            !liveRunning ||
+            !scroll.hasClients ||
+            scroll.positions.length != 1 ||
+            scroll.position.extentAfter >= 120) {
+          return;
+        }
+        scroll.jumpTo(scroll.position.maxScrollExtent);
+      });
+    }, onError: fail);
+  }
+
   Future<void> restoreRequest() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString('request_${widget.user.uid}');
@@ -452,6 +490,7 @@ class _WorkspaceState extends State<Workspace> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('device_${widget.user.uid}', id);
     watchApprovals();
+    watchLiveTurns();
   }
 
   void selectChat(Map<String, dynamic>? chat) {
@@ -505,7 +544,7 @@ class _WorkspaceState extends State<Workspace> {
 
   Future<void> send() async {
     final text = composer.text.trim();
-    if (busy || text.isEmpty || !online) {
+    if (turnBusy || text.isEmpty || !online) {
       return;
     }
     final isNew = conversationId == null;
@@ -553,7 +592,7 @@ class _WorkspaceState extends State<Workspace> {
     Map<String, dynamic> extra = const {},
   }) async {
     final id = action == 'stop'
-        ? requestConversation
+        ? conversationId ?? requestConversation
         : action == 'permission'
         ? conversationId ?? const Uuid().v4()
         : conversationId;
@@ -845,6 +884,7 @@ class _WorkspaceState extends State<Workspace> {
     chats: chats,
     selectedId: conversationId,
     query: query,
+    working: workingChats,
     onSelect: (chat) {
       if (inDrawer) Navigator.pop(context);
       composerFocus.unfocus();
@@ -893,6 +933,7 @@ class _WorkspaceState extends State<Workspace> {
                         projects: projects,
                         chats: chats,
                         query: query,
+                        working: workingChats,
                         onSelect: (chat) {
                           Navigator.pop(sheetContext);
                           selectChat(chat);
@@ -1022,6 +1063,7 @@ class _WorkspaceState extends State<Workspace> {
         .where((c) => c['id'] == conversationId)
         .firstOrNull;
     final activeRequest = busy && requestConversation == conversationId;
+    final activeLiveTurn = activeLive;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     final keyboard = MediaQuery.viewInsetsOf(context).bottom > 0;
     return PopScope(
@@ -1258,7 +1300,9 @@ class _WorkspaceState extends State<Workspace> {
                             )
                           : libraryVisible
                           ? library()
-                          : messages.isEmpty && !activeRequest
+                          : messages.isEmpty &&
+                                !activeRequest &&
+                                activeLiveTurn == null
                           ? const SizedBox.expand()
                           : ListView(
                               key: const ValueKey('conversation-messages'),
@@ -1289,7 +1333,52 @@ class _WorkspaceState extends State<Workspace> {
                                       'content': pendingText,
                                     },
                                   ),
-                                if (activeRequest)
+                                if (activeLiveTurn != null &&
+                                    (activeLiveTurn['user_content'] as String? ??
+                                            '')
+                                        .trim()
+                                        .isNotEmpty &&
+                                    !(activeRequest &&
+                                        pendingText ==
+                                            activeLiveTurn['user_content']) &&
+                                    !messages.any(
+                                      (m) =>
+                                          m['role'] == 'user' &&
+                                          m['content'] ==
+                                              activeLiveTurn['user_content'],
+                                    ))
+                                  MessageView(
+                                    message: {
+                                      'role': 'user',
+                                      'content': activeLiveTurn['user_content'],
+                                    },
+                                  ),
+                                if (activeLiveTurn != null &&
+                                    ((activeLiveTurn['content'] as String? ??
+                                                    '')
+                                                .trim()
+                                                .isNotEmpty ||
+                                        (activeLiveTurn['reasoning']
+                                                    as String? ??
+                                                '')
+                                            .trim()
+                                            .isNotEmpty ||
+                                        ((activeLiveTurn['activity'] as List?) ??
+                                                [])
+                                            .isNotEmpty))
+                                  MessageView(
+                                    message: {
+                                      'role': 'assistant',
+                                      'content':
+                                          activeLiveTurn['content'] ?? '',
+                                      'reasoning':
+                                          activeLiveTurn['reasoning'] ?? '',
+                                      'activity':
+                                          activeLiveTurn['activity'] ??
+                                          const [],
+                                    },
+                                  ),
+                                if (activeRequest || activeLiveTurn != null)
                                   Padding(
                                     padding: const EdgeInsets.symmetric(
                                       vertical: 16,
@@ -1306,7 +1395,8 @@ class _WorkspaceState extends State<Workspace> {
                                         const SizedBox(width: 12),
                                         Expanded(
                                           child: Text(
-                                            requestStatus == 'pending'
+                                            activeRequest &&
+                                                    requestStatus == 'pending'
                                                 ? 'In attesa del PC…'
                                                 : 'AuraChat sta lavorando…',
                                             style: const TextStyle(
@@ -1441,7 +1531,7 @@ class _WorkspaceState extends State<Workspace> {
                       controller: composer,
                       focusNode: composerFocus,
                       online: online,
-                      busy: busy,
+                      busy: turnBusy,
                       onSend: send,
                       onStop: () => action('stop'),
                       onOptions: composerOptions,
@@ -1491,6 +1581,15 @@ class MessageView extends StatelessWidget {
     final activity = (message['activity'] as List? ?? [])
         .whereType<Map>()
         .toList();
+    final reasoning = [
+      (message['reasoning'] as String? ?? '').trim(),
+      ...activity
+          .where((event) => event['kind'] == 'reasoning')
+          .map((event) => (event['text'] ?? '').toString().trim()),
+    ].where((text) => text.isNotEmpty).join('\n\n');
+    final steps = activity
+        .where((event) => event['kind'] != 'reasoning')
+        .toList();
     return Padding(
       padding: const EdgeInsets.only(bottom: 28),
       child: Column(
@@ -1498,17 +1597,41 @@ class MessageView extends StatelessWidget {
             ? CrossAxisAlignment.end
             : CrossAxisAlignment.start,
         children: [
-          if (activity.isNotEmpty)
+          if (reasoning.isNotEmpty)
+            ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              dense: true,
+              shape: const Border(),
+              collapsedShape: const Border(),
+              title: const Text(
+                'Ragionamento',
+                style: TextStyle(color: muted, fontSize: 13),
+              ),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    reasoning,
+                    style: const TextStyle(
+                      color: muted,
+                      fontSize: 13,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          if (steps.isNotEmpty)
             ExpansionTile(
               tilePadding: EdgeInsets.zero,
               dense: true,
               shape: const Border(),
               collapsedShape: const Border(),
               title: Text(
-                '${activity.length} attività',
+                '${steps.length} attività',
                 style: const TextStyle(color: muted, fontSize: 13),
               ),
-              children: activity
+              children: steps
                   .map(
                     (event) => ListTile(
                       dense: true,
@@ -1520,7 +1643,11 @@ class MessageView extends StatelessWidget {
                             .toString(),
                       ),
                       subtitle: Text(
-                        (event['status'] ?? event['text'] ?? '').toString(),
+                        [
+                          event['path'],
+                          event['summary'],
+                          event['status'],
+                        ].whereType<Object>().join(' · '),
                         maxLines: 4,
                         overflow: TextOverflow.ellipsis,
                       ),

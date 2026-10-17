@@ -227,6 +227,22 @@ interruzione), la richiesta di approvazione quando serve una decisione umana, e
 le operazioni esplicite dell'utente (download del modello vocale, trascrizione).
 La stessa regola vale per il banner Windows e per FCM.
 
+## Turni live sul telefono — 18 ottobre 2026
+
+`run_chat` emette `live-turn` (running e stato terminale). Il gateway ascolta
+anche `chat-progress` e `agent-activity` e pubblica
+`users/{uid}/devices/{device}/live_turns/{conversation_id}` con testo parziale,
+reasoning, attività/tool/sub-agenti, `user_content`, `started_at` e `updated_at`.
+Le scritture sono coalescenti: al massimo circa una al secondo, heartbeat ogni
+5 secondi, campi e lista attività troncati per restare sotto 1 MiB. I documenti
+terminali vengono eliminati dopo 60 secondi; il telefono ignora gli stati più
+vecchi di 20 secondi, quindi un crash del desktop non lascia loader permanenti.
+Il percorso è separato da `conversations/{id}` per non interferire con le
+precondizioni di versione della cronologia. Il telefono mostra il testo live in
+un messaggio assistant, il reasoning in una sezione richiudibile, le attività
+tool/agenti e un loader nelle chat che stanno lavorando; lo stop dal telefono
+usa lo stesso turno registrato in `chat_runs`.
+
 ## iOS — crash all'avvio e inizializzazione (18 ottobre 2026)
 
 L'app iOS terminava subito all'avvio perché `Firebase.initializeApp` riceveva

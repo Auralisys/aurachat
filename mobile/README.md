@@ -25,8 +25,10 @@ Il menu nell'intestazione sceglie il modello. Le operazioni che richiedono conse
 si autorizzano dal telefono con la stessa anteprima usata dal desktop.
 Le richieste in corso si ritrovano riaprendo l'app. Stop annulla una richiesta
 ancora in coda oppure interrompe il turno del desktop, conservando il testo parziale.
-Le risposte arrivano quando il turno viene salvato; il testo non viene ancora
-trasmesso a frammenti al telefono. Sul desktop resta lo streaming esistente.
+Durante un turno il telefono segue `live_turns`: mostra testo parziale, reasoning
+richiudibile, tool e sub-agenti, e un indicatore nelle chat che stanno lavorando,
+anche per i turni avviati dal desktop. A fine turno il testo definitivo arriva
+dai messaggi salvati.
 
 ## Configurazione esterna ancora necessaria
 
@@ -94,6 +96,11 @@ di distribuzione vengono eliminate dopo un giorno quando la policy è applicata.
   stato pending/running/completed/failed/cancelled. Presa in carico con precondizione
   sulla revisione Firestore, senza esecuzioni automatiche duplicate.
 - `users/{uid}/devices/{id}/approvals/{id}`: richieste di consenso con revisione.
+- `users/{uid}/devices/{id}/live_turns/{conversation_id}`: stato transitorio del
+  turno in corso (`running/completed/failed/cancelled`, testo parziale,
+  reasoning, activity). Il desktop lo aggiorna al massimo una volta al secondo,
+  con un heartbeat ogni 5 secondi; il telefono lo ignora se `updated_at` è più
+  vecchio di 20 secondi e lo elimina dal desktop 60 secondi dopo la fine.
 - `users/{uid}/phones/{installation}`: registrazione FID del telefono.
 - `users/{uid}/notifications/{event}`: completamento che attiva la Cloud Function.
 - Conversazioni e messaggi usano lo schema desktop esistente, inclusi i messaggi

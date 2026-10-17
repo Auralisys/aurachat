@@ -434,7 +434,10 @@ async fn run_chat(
 ) -> Result<ChatResponse,String> {
     let notification_owner=state.config.lock().unwrap().uid.clone();
     let event_id=format!("{}-{}",conversation_id,data::now_millis());
+    let _=app.emit("live-turn",serde_json::json!({"conversation_id":conversation_id.clone(),"turn_id":event_id.clone(),"status":"running","user_content":content.clone()}));
     let result=chat_inner(app.clone(),state.clone(),conversation_id.clone(),content,attachments,retry,edit_index,expected_owner).await;
+    let turn_status=match &result {Ok(reply) if reply.cancelled=>"cancelled",Ok(_)=>"completed",Err(_)=>"failed"};
+    let _=app.emit("live-turn",serde_json::json!({"conversation_id":conversation_id.clone(),"turn_id":event_id.clone(),"status":turn_status}));
     let (title,body)=match &result {
         Ok(reply) if reply.cancelled => ("Risposta interrotta", "La risposta parziale è stata salvata."),
         Ok(_) => ("Risposta pronta", "AuraChat ha terminato la risposta."),
