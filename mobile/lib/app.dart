@@ -291,6 +291,34 @@ class _WorkspaceState extends State<Workspace> {
       liveTurnRunning(liveTurns[conversationId]) ? liveTurns[conversationId] : null;
   bool get liveRunning => activeLive != null;
   bool get turnBusy => busy || liveRunning;
+  /// Current step of the live turn, used instead of a generic loader.
+  String? get livePhase {
+    final turn = activeLive;
+    if (turn == null) return null;
+    final activity = (turn['activity'] as List? ?? [])
+        .whereType<Map>()
+        .toList();
+    if (activity.isNotEmpty) {
+      final last = activity.last;
+      final title = _stepLabel(last);
+      final command = _stepCommand(last);
+      final path = (last['path'] ?? '').toString();
+      final status = _stepStatus(last['status']);
+      if (title.isNotEmpty) {
+        return [
+          title,
+          if (command.isNotEmpty) command,
+          if (path.isNotEmpty) path,
+          if (status.isNotEmpty) status,
+        ].join(' · ');
+      }
+    }
+    final content = (turn['content'] as String? ?? '').trim();
+    final reasoning = (turn['reasoning'] as String? ?? '').trim();
+    if (content.isEmpty && reasoning.isNotEmpty) return 'Sto ragionando…';
+    if (content.isNotEmpty) return 'Sto scrivendo…';
+    return null;
+  }
   Set<String> get workingChats => {
     for (final entry in liveTurns.entries)
       if (liveTurnRunning(entry.value)) entry.key,
@@ -1367,6 +1395,7 @@ class _WorkspaceState extends State<Workspace> {
                                                 [])
                                             .isNotEmpty))
                                   MessageView(
+                                    live: true,
                                     message: {
                                       'role': 'assistant',
                                       'content':
@@ -1398,7 +1427,8 @@ class _WorkspaceState extends State<Workspace> {
                                             activeRequest &&
                                                     requestStatus == 'pending'
                                                 ? 'In attesa del PC…'
-                                                : 'AuraChat sta lavorando…',
+                                                : livePhase ??
+                                                      'AuraChat sta lavorando…',
                                             style: const TextStyle(
                                               color: muted,
                                               fontSize: 14,
@@ -1572,9 +1602,67 @@ String remoteError(String? error) => switch (error) {
   _ => 'Il desktop non ha completato la richiesta. Controlla AuraChat sul PC.',
 };
 
+const _actionLabels = {
+  'read_project_file': 'Leggi file',
+  'list_project_files': 'Elenca file',
+  'write_project_file': 'Scrivi file',
+  'edit_project_file': 'Modifica file',
+  'execute_project_command': 'Esegui comando',
+  'inspect_project_command': 'Controlla comando',
+};
+
+String _stepLabel(Map event) {
+  final title = (event['title'] ?? '').toString().trim();
+  if (title.isNotEmpty) return title;
+  final action = (event['action'] ?? '').toString();
+  if (_actionLabels.containsKey(action)) return _actionLabels[action]!;
+  if (action.isNotEmpty) return action;
+  return switch (event['kind']) {
+    'agent' => 'Agente',
+    'approval' => 'Approvazione',
+    'tool' => 'Strumento',
+    _ => 'Attività',
+  };
+}
+
+String _stepStatus(Object? status) => switch (status) {
+  'running' => 'in corso',
+  'reviewing' => 'in revisione',
+  'waiting' || 'pending' => 'in attesa',
+  'completed' || 'approved' => 'completato',
+  'failed' || 'denied' => 'errore',
+  'cancelled' || 'stopped' => 'interrotto',
+  _ => '',
+};
+
+String _stepCommand(Map event) {
+  final command = (event['command'] ?? '').toString().trim();
+  if (command.isNotEmpty) return command;
+  final arguments = event['arguments'];
+  if (arguments is Map) {
+    final program = arguments['program'];
+    if (program is String) {
+      final args = arguments['arguments'];
+      final tail = args is List
+          ? args.whereType<String>().join(' ')
+          : '';
+      return '$program $tail'.trim();
+    }
+  }
+  return '';
+}
+
+String _stepDetail(Map event) => [
+  _stepCommand(event),
+  event['path'],
+  event['summary'],
+  _stepStatus(event['status']),
+].whereType<Object>().map((value) => value.toString()).where((value) => value.isNotEmpty).join(' · ');
+
 class MessageView extends StatelessWidget {
-  const MessageView({super.key, required this.message});
+  const MessageView({super.key, required this.message, this.live = false});
   final Map<String, dynamic> message;
+  final bool live;
   @override
   Widget build(BuildContext context) {
     final user = message['role'] == 'user';
@@ -1598,63 +1686,139 @@ class MessageView extends StatelessWidget {
             : CrossAxisAlignment.start,
         children: [
           if (reasoning.isNotEmpty)
-            ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              dense: true,
-              shape: const Border(),
-              collapsedShape: const Border(),
-              title: const Text(
-                'Ragionamento',
-                style: TextStyle(color: muted, fontSize: 13),
-              ),
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(
-                    reasoning,
-                    style: const TextStyle(
-                      color: muted,
-                      fontSize: 13,
-                      height: 1.5,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          if (steps.isNotEmpty)
-            ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              dense: true,
-              shape: const Border(),
-              collapsedShape: const Border(),
-              title: Text(
-                '${steps.length} attività',
-                style: const TextStyle(color: muted, fontSize: 13),
-              ),
-              children: steps
-                  .map(
-                    (event) => ListTile(
-                      dense: true,
-                      title: Text(
-                        (event['title'] ??
-                                event['action'] ??
-                                event['kind'] ??
-                                'Attività')
-                            .toString(),
-                      ),
-                      subtitle: Text(
-                        [
-                          event['path'],
-                          event['summary'],
-                          event['status'],
-                        ].whereType<Object>().join(' · '),
-                        maxLines: 4,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+            live
+                ? Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Ragionamento',
+                          style: TextStyle(
+                            color: muted,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          reasoning,
+                          style: const TextStyle(
+                            color: muted,
+                            fontSize: 13,
+                            height: 1.5,
+                          ),
+                        ),
+                      ],
                     ),
                   )
-                  .toList(),
-            ),
+                : ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    dense: true,
+                    shape: const Border(),
+                    collapsedShape: const Border(),
+                    title: const Text(
+                      'Ragionamento',
+                      style: TextStyle(color: muted, fontSize: 13),
+                    ),
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Text(
+                          reasoning,
+                          style: const TextStyle(
+                            color: muted,
+                            fontSize: 13,
+                            height: 1.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+          if (steps.isNotEmpty)
+            live
+                ? Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Attività',
+                          style: TextStyle(
+                            color: muted,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        ...steps.map(
+                          (event) => Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Icon(
+                                  event['kind'] == 'agent'
+                                      ? Icons.smart_toy_outlined
+                                      : Icons.terminal_rounded,
+                                  size: 16,
+                                  color: muted,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _stepLabel(event),
+                                        style: const TextStyle(
+                                          fontSize: 13,
+                                          height: 1.4,
+                                        ),
+                                      ),
+                                      if (_stepDetail(event).isNotEmpty)
+                                        Text(
+                                          _stepDetail(event),
+                                          style: const TextStyle(
+                                            color: muted,
+                                            fontSize: 12,
+                                            height: 1.4,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    dense: true,
+                    shape: const Border(),
+                    collapsedShape: const Border(),
+                    title: Text(
+                      '${steps.length} attività',
+                      style: const TextStyle(color: muted, fontSize: 13),
+                    ),
+                    children: steps
+                        .map(
+                          (event) => ListTile(
+                            dense: true,
+                            title: Text(_stepLabel(event)),
+                            subtitle: Text(
+                              _stepDetail(event),
+                              maxLines: 4,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                  ),
           LayoutBuilder(
             builder: (context, constraints) => Align(
               alignment: user ? Alignment.centerRight : Alignment.centerLeft,

@@ -130,6 +130,15 @@ fn sanitize_activity(event: &Value) -> Value {
             _ => {}
         }
     }
+    // Shell commands carry the executed program only inside `arguments`.
+    if let Some(arguments) = event["arguments"].as_object() {
+        if let Some(program) = arguments.get("program").and_then(Value::as_str) {
+            let args = arguments.get("arguments").and_then(Value::as_array)
+                .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" "))
+                .unwrap_or_default();
+            value.insert("command".into(), serde_json::json!(truncate_chars(format!("{program} {args}").trim(), LIVE_MAX_FIELD)));
+        }
+    }
     Value::Object(value)
 }
 
@@ -292,7 +301,7 @@ async fn publish_live(app:&tauri::AppHandle,turns:&Arc<Mutex<HashMap<String,Live
     if jobs.is_empty() && expired.is_empty() {return;}
     let state=app.state::<AppState>();
     let Some(uid)=state.firestore.uid() else{return};
-    let jobs:Vec<_>=jobs.into_iter().filter(|(_,turn,_)|turn.uid.as_deref()==Some(uid.as_str())).collect();
+    let jobs:Vec<_>=jobs.into_iter().filter(|(_,turn,_)|turn.uid.as_deref().is_none_or(|turn_uid|turn_uid==uid)).collect();
     let Ok(auth)=crate::firebase_auth(&state) else{return};
     let (device,_)=identity();
     for (id,snapshot,value) in jobs {
