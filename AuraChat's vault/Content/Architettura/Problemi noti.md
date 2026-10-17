@@ -57,3 +57,14 @@ esterni non richiamati in questo intervento. Chiavi provider e refresh token
 conservano i limiti di storage già documentati; nessuna nuova cifratura dedicata
 o modifica delle regole remote. Vedi [[Impostazioni e provider di modelli]] e
 [[Account - Login e ripristino sessione]].
+
+## Caricamento del modello all'avvio — 17 ottobre 2026
+
+Il tempo di verifica e caricamento del modello Cohere (~2 GB) non è più opaco:
+il modello viene preparato all'apertura dell'app e il microfono mostra un loader
+sull'icona finché non è pronto, disabilitando il click anticipato. In
+Impostazioni → Voce lo stato distingue preparazione, modello caricato in memoria
+e pronto per la dettatura; durante il caricamento download e rimozione sono
+disabilitati. Annullare una trascrizione continua ad attendere il blocco ONNX già
+in corso (il risultato viene scartato), ma questo non riguarda più il primo avvio.
+Dettagli in [[Desktop gateway - Tauri]] e [[UI desktop - Refactor flat]].

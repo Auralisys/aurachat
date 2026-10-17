@@ -171,3 +171,30 @@ microfono simulato, inclusi modello occupato, annullamento della preparazione,
 errore di inferenza, recupero e risultati tardivi. Microfono fisico non verificato.
 Suite nativa: 35 test passati, quattro verifiche reali escluse dal comando
 predefinito; la verifica vocale è stata eseguita separatamente con esito positivo.
+
+## Preparazione del modello all'avvio — 17 ottobre 2026
+
+Prima il modello veniva verificato e caricato solo al primo click sul microfono:
+durante quella finestra non si distingueva il caricamento dall'occupato o
+dall'annullamento. Ora il caricamento parte da solo all'apertura dell'app e il
+microfono mostra il proprio stato.
+
+`ModelStatus` espone `loading` e `loaded` oltre a `ready`/`busy`, letti senza
+lock e sempre disponibili (`speech.rs:16`, `speech.rs:41`). Un guard RAII
+`Loading` copre tutta la finestra lenta — hash SHA-256 dei file e
+`CohereModel::load` — non solo il termine (`speech.rs:29`, `speech.rs:130`).
+`prepare()` esce subito se il modello è già in memoria, senza occupare `busy`
+(`speech.rs:141`); `remove()` azzera `loaded` (`speech.rs:114`).
+`prepare_speech_model` emette `speech-model-progress` anche al termine
+(`lib.rs:82`), così la UI si riallinea a operazione conclusa.
+
+All'avvio `warmSpeechModel()` verifica lo stato e, se il modello è installato ma
+non caricato, invoca `prepare_speech_model` senza bloccare la chat
+(`ui/voice.js:45`, `ui/voice.js:251`); lo stesso richiamo segue un download
+completato (`ui/voice.js:238`). Finché carica, il microfono è disabilitato con un
+loader sull'icona e l'etichetta "Preparazione del modello locale…"; un click
+anticipato non produce nulla (`ui/voice.js:66`). In Impostazioni → Voce compaiono
+tre stati: preparazione, "Installato · caricato in memoria" (`voice.loaded`) e
+"Installato · pronto per la dettatura"; download e rimozione restano disabilitati
+durante il caricamento (`ui/voice.js:28`). Dettagli visivi in
+[[UI desktop - Refactor flat]]; limiti in [[Problemi noti]].

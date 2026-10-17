@@ -239,8 +239,12 @@ X / forma d'onda reale / Stop / Invio. Stop trascrive nella bozza, Invio trascri
 e invia con testo e allegati preesistenti; X scarta solo l'audio. Icone centrate
 con grid, senza allineamento alla baseline del testo. Stati di preparazione,
 elaborazione, permesso negato e download interrompibile/riprendibile. Audio in
-memoria, massimo due minuti; lingua italiana/inglese secondo UI. La prima
-inferenza carica il modello locale; nessun invio audio a servizi esterni.
+memoria, massimo due minuti; lingua italiana/inglese secondo UI. Il modello
+viene caricato in memoria all'avvio dell'app: finché non è pronto il microfono è
+disabilitato con un piccolo loader circolare sull'icona (20 px, animazione
+disattivata con movimento ridotto o finestra in background) e un click anticipato
+non produce nulla; nessun invio audio a servizi esterni. Riferimenti:
+`desktop/ui/voice.js:45` (warm-up), `desktop/ui/styles.css:511` (loader).
 
 Le chat caricano i messaggi all'apertura dal nuovo storage separato. Navigazione
 ed errori non spostano risposte tardive in una chat diversa. Gli strumenti di

@@ -88,4 +88,6 @@ trova un difetto, aggiungerlo a [[Problemi noti]] con il rimando alla nota dove
 [[Impostazioni e provider di modelli]] documenta il nuovo dialogo compatto,
 provider preset/custom, modelli e API key indipendenti. Correzione della dettatura
 in [[Desktop gateway - Tauri]]; reasoning unificato e chat a 13 px in
-[[UI desktop - Refactor flat]]. Limiti e verifiche in [[Problemi noti]].
+[[UI desktop - Refactor flat]]. Il modello vocale viene caricato all'avvio e il
+microfono mostra un loader finché non è pronto; stati e verifiche in
+[[Desktop gateway - Tauri]]. Limiti in [[Problemi noti]].
