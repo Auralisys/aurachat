@@ -10,6 +10,7 @@ mod managed_shells;
 mod permissions;
 mod approvals;
 mod agent_runs;
+mod chat_runs;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -46,6 +47,7 @@ pub struct AppState {
     window_save_lock: tauri::async_runtime::Mutex<()>,
     history_save_lock: tauri::async_runtime::Mutex<()>,
     running_chats: Mutex<std::collections::HashSet<String>>,
+    chat_runs: chat_runs::ChatRuns,
 }
 
 struct ConversationRun<'a> { active: &'a Mutex<std::collections::HashSet<String>>, id: String }
@@ -77,9 +79,12 @@ async fn remove_speech_model(state: tauri::State<'_, AppState>) -> Result<speech
     tauri::async_runtime::spawn_blocking(move || speech.remove()).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
-async fn prepare_speech_model(state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn prepare_speech_model(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let speech = state.speech.clone();
-    tauri::async_runtime::spawn_blocking(move || speech.prepare()).await.map_err(|e| e.to_string())?
+    let worker = speech.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || worker.prepare()).await.map_err(|e| e.to_string())?;
+    let _ = app.emit("speech-model-progress", speech.status());
+    result
 }
 #[tauri::command]
 async fn transcribe_audio(state: tauri::State<'_, AppState>, samples: Vec<f32>, language: String) -> Result<String, String> {
@@ -89,6 +94,13 @@ async fn transcribe_audio(state: tauri::State<'_, AppState>, samples: Vec<f32>, 
 
 fn clean(s: &str) -> String {
     s.trim().to_string()
+}
+
+fn first_title(content: &str, attachments: &[Attachment]) -> String {
+    match attachments.first() {
+        Some(file) if content.trim().is_empty() => truncate_title(&file.name),
+        _ => truncate_title(content),
+    }
 }
 
 fn truncate_title(s: &str) -> String {
@@ -356,6 +368,34 @@ async fn get_conversation(state:tauri::State<'_, AppState>, conversation_id:Stri
     Ok(conversation)
 }
 
+#[tauri::command(rename_all = "snake_case")]
+async fn set_conversation_model(state: tauri::State<'_, AppState>, conversation_id: String, model: String) -> Result<ChatData, String> {
+    let model = clean(&model);
+    let auth = firebase_auth(&state)?;
+    let uid = ensure_uid(&state, &auth).await?;
+    let user = load_user_cached(&state, &auth, &uid).await?;
+    if !user.models.contains_key(&model) { return Err("model_not_found".into()); }
+    if state.running_chats.lock().unwrap().contains(&conversation_id) { return Err("chat_in_progress".into()); }
+    let _save = state.history_save_lock.lock().await;
+    let needs_load = state.data.lock().unwrap().find_conversation(&conversation_id).is_some_and(|c| !c.messages_loaded);
+    if needs_load {
+        let conversation = state.firestore.load_conversation(&uid, &auth, &conversation_id).await?;
+        if let Some(cached) = state.data.lock().unwrap().find_conversation_mut(&conversation_id) { *cached = conversation; }
+    }
+    let tree = {
+        let mut data = state.data.lock().unwrap().clone();
+        let conversation = data.find_conversation_mut(&conversation_id).ok_or("conversation_not_found")?;
+        if conversation.model.as_deref() == Some(model.as_str()) { return Ok(data); }
+        conversation.model = Some(model.clone());
+        data
+    };
+    let conversation = tree.find_conversation(&conversation_id).ok_or("conversation_not_found")?.clone();
+    state.firestore.save_conversation(&uid, &auth, &conversation, &tree).await?;
+    let tree = state.firestore.cached_tree(&uid).unwrap_or(tree);
+    *state.data.lock().unwrap() = tree.clone();
+    Ok(tree)
+}
+
 // ===== Chat =====
 
 #[derive(serde::Serialize)]
@@ -364,6 +404,7 @@ struct ChatResponse {
     usage: Usage,
     messages: Vec<ChatMessage>,
     data: ChatData,
+    cancelled: bool,
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -389,7 +430,10 @@ async fn chat(
     let auth = firebase_auth(&state)?;
     let uid = ensure_uid(&state, &auth).await?;
     let user = load_user_cached(&state, &auth, &uid).await?;
-    let mc = user.models.get(&user.active_model).ok_or("model_not_found")?;
+    // Registra il turno prima della richiesta, per poterlo fermare dallo stop.
+    let (_turn, stop) = chat_runs::Turn::start(&state.chat_runs, &uid, &conversation_id);
+    let effective_model = state.data.lock().unwrap().find_conversation(&conversation_id).and_then(|c| c.model.clone()).unwrap_or_else(|| user.active_model.clone());
+    let mc = user.models.get(&effective_model).ok_or("model_not_found")?;
     if user.model_key(mc).is_empty() { return Err("no_api_key".into()); }
     let base_url = mc.base_url.clone();
     let model = mc.model.clone();
@@ -406,6 +450,14 @@ async fn chat(
         llm::prepare_turn(&conv.messages,content,attachments,retry,edit_index)?
     };
 
+    // Il nome e il modello della chat nascono dal primo messaggio, prima della risposta del modello.
+    if let Some(conversation) = state.data.lock().unwrap().find_conversation_mut(&conversation_id) {
+        if conversation.messages.is_empty() {
+            conversation.title = first_title(&user_message.content, &user_message.attachments);
+            conversation.model = Some(effective_model.clone());
+        }
+    }
+
     let turn_id=format!("turn-{}",data::now_millis());
     let project = {
         let tree = state.data.lock().unwrap();
@@ -417,10 +469,11 @@ async fn chat(
         })
     };
     let turn_activity = std::sync::Mutex::new(Vec::<serde_json::Value>::new());
+    let streamed = std::sync::Mutex::new(String::new());
     let content_offset = std::sync::atomic::AtomicUsize::new(0);
     let completion = llm::chat_completion(&state.client, &base_url, &model, &api_key, &history, project, Some(agent_runs::Runtime{app:app.clone(),owner:uid.clone(),conversation:conversation_id.clone()}), |action,text| {
         let mut events = turn_activity.lock().unwrap();
-        if action == "__delta" { content_offset.fetch_add(text.encode_utf16().count(), std::sync::atomic::Ordering::Relaxed); }
+        if action == "__delta" { streamed.lock().unwrap().push_str(text); content_offset.fetch_add(text.encode_utf16().count(), std::sync::atomic::Ordering::Relaxed); }
         if action == "__reasoning" {
             if events.last().is_none_or(|e| e["kind"] != "reasoning" || e["offset"].as_u64() != Some(content_offset.load(std::sync::atomic::Ordering::Relaxed) as u64)) {
                 events.push(serde_json::json!({"kind":"reasoning","text":"","offset":content_offset.load(std::sync::atomic::Ordering::Relaxed),"at":data::now_millis()}));
@@ -442,9 +495,15 @@ async fn chat(
         if let Some(previous) = events.iter_mut().find(|e| e["kind"] == "agent" && e["id"] == stored["id"]) { for (key,value) in stored.as_object().unwrap() {previous[key]=value.clone();} }
         else { events.push(stored); }
         let _ = app.emit("agent-activity", agent);
-    }).await;
+    });
+    let outcome = stop.run(completion).await;
     let reviews=app.state::<approvals::Approvals>().take_turn(&uid,&conversation_id,&turn_id);
-    let (reply,mut usage)=completion?;
+    // Uno stop conserva la parte di risposta mostrata finora invece di scartarla con la richiesta.
+    let (reply, mut usage, cancelled) = match outcome {
+        Ok(Ok((reply,usage))) => (reply, usage, false),
+        Ok(Err(error)) => return Err(error),
+        Err(_) => (std::mem::take(&mut *streamed.lock().unwrap()), Usage{prompt_tokens:0,completion_tokens:0,total_tokens:0}, true),
+    };
     let mut turn_activity = turn_activity.into_inner().unwrap();
     for review in reviews {
         usage.prompt_tokens+=review.usage["prompt_tokens"].as_u64().unwrap_or(0);usage.completion_tokens+=review.usage["completion_tokens"].as_u64().unwrap_or(0);usage.total_tokens+=review.usage["total_tokens"].as_u64().unwrap_or(0);
@@ -458,17 +517,13 @@ async fn chat(
         let conv = data
             .find_conversation_mut(&conversation_id)
             .ok_or("conversation_not_found")?;
-        let is_new = conv.messages.is_empty();
         conv.messages.truncate(keep_count);
         conv.messages.push(user_message);
-        conv.messages.push(ChatMessage { role:"assistant".into(),content:reply.clone(),attachments:vec![],feedback:None,activity:turn_activity });
-        conv.updated_at = data::now_millis();
-        conv.context_tokens = usage.total_tokens;
-        if is_new {
-            conv.title = truncate_title(if conv.messages[0].content.is_empty() {
-                conv.messages[0].attachments.first().map(|f| f.name.as_str()).unwrap_or("Chat")
-            } else { &conv.messages[0].content });
+        if !reply.trim().is_empty() || !turn_activity.is_empty() {
+            conv.messages.push(ChatMessage { role:"assistant".into(),content:reply.clone(),attachments:vec![],feedback:None,activity:turn_activity });
         }
+        conv.updated_at = data::now_millis();
+        if usage.total_tokens > 0 { conv.context_tokens = usage.total_tokens; }
         (conv.messages.clone(), data.clone())
     };
 
@@ -484,7 +539,14 @@ async fn chat(
         usage,
         messages,
         data: tree,
+        cancelled,
     })
+}
+
+#[tauri::command(rename_all = "snake_case")]
+fn stop_chat(state: tauri::State<'_, AppState>, conversation_id: String) -> Result<(), String> {
+    let owner = state.firestore.uid().ok_or("login_required")?;
+    state.chat_runs.stop(&owner, &conversation_id)
 }
 
 #[tauri::command]
@@ -752,6 +814,7 @@ pub fn run() {
                 window_save_lock: tauri::async_runtime::Mutex::new(()),
                 history_save_lock: tauri::async_runtime::Mutex::new(()),
                 running_chats: Mutex::new(std::collections::HashSet::new()),
+                chat_runs: chat_runs::ChatRuns::default(),
             });
 
             if let Some(window) = app.get_webview_window("main") {
@@ -787,10 +850,12 @@ pub fn run() {
             remove_provider,
             logout,
             set_model,
+            set_conversation_model,
             get_data,
             get_conversation,
             save_data,
             chat,
+            stop_chat,
             get_locale,
             restore_window,
             save_window_state,

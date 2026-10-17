@@ -14,9 +14,17 @@ pub struct Snapshot {
     pub output: String,
     pub exit_code: Option<i32>,
     pub revision: u64,
+    /// Milliseconds since the Unix epoch; the debug console shows real durations.
+    pub started_at: u64,
+    pub finished_at: Option<u64>,
 }
 
 type Notify = Arc<dyn Fn(Snapshot) + Send + Sync>;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_millis() as u64).unwrap_or(0)
+}
+
 struct Entry { owner: String, child: Mutex<Child>, snapshot: Mutex<Snapshot>, notify: Notify, publish_lock: Mutex<()> }
 #[derive(Default)]
 pub struct Shells { entries: Mutex<HashMap<String, Arc<Entry>>>, sequence: AtomicU64 }
@@ -31,7 +39,7 @@ impl Entry {
         let mut snapshot = self.snapshot.lock().unwrap();
         if snapshot.status == "running" {
             snapshot.status = if cancelled { "cancelled" } else if code == Some(0) { "completed" } else { "failed" }.into();
-            snapshot.exit_code = code;
+            snapshot.exit_code = code;snapshot.finished_at = Some(now_ms());
         }
         snapshot.clone()
     }
@@ -62,7 +70,7 @@ impl Shells {
     pub fn track(&self, owner: String, conversation_id: String, agent_id: Option<String>, command: String, cwd: String, mut child: Child, notify: impl Fn(Snapshot) + Send + Sync + 'static) -> Snapshot {
         let id = format!("shell-{}", self.sequence.fetch_add(1, Ordering::Relaxed));
         let stdout = child.stdout.take();let stderr = child.stderr.take();
-        let snapshot = Snapshot {id:id.clone(), conversation_id, agent_id, title:command.clone(), command, cwd, status:"running".into(), output:String::new(), exit_code:None, revision:0};
+        let snapshot = Snapshot {id:id.clone(), conversation_id, agent_id, title:command.clone(), command, cwd, status:"running".into(), output:String::new(), exit_code:None, revision:0, started_at:now_ms(), finished_at:None};
         let entry = Arc::new(Entry {owner, child:Mutex::new(child), snapshot:Mutex::new(snapshot.clone()), notify:Arc::new(notify), publish_lock:Mutex::new(())});
         self.entries.lock().unwrap().insert(id, entry.clone());entry.publish();
         if let Some(stdout) = stdout { capture(stdout, entry.clone()); }
@@ -72,7 +80,7 @@ impl Shells {
             match status {
                 Ok(Some(status)) => {entry.finish(status.code(), false);entry.publish();break;}
                 Err(error) => {
-                    let mut snapshot = entry.snapshot.lock().unwrap();snapshot.status = "failed".into();snapshot.output.push_str(&format!("\n{error}"));drop(snapshot);entry.publish();break;
+                    let mut snapshot = entry.snapshot.lock().unwrap();snapshot.status = "failed".into();snapshot.finished_at = Some(now_ms());snapshot.output.push_str(&format!("\n{error}"));drop(snapshot);entry.publish();break;
                 }
                 Ok(None) => std::thread::sleep(Duration::from_millis(80)),
             }

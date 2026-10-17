@@ -34,7 +34,8 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   assert.equal(await page.locator('#composer-send').isEnabled(),true);
   await page.fill('#composer-input','Bozza di B');
   await row('a').locator('.tree-conv__title').click();assert.match(await page.locator('#messages').innerText(),/Prima ricerca/);
-  assert.equal(await page.locator('#composer-send').isEnabled(),false);
+  assert.equal(await page.locator('#composer-stop').isVisible(),true);
+  assert.equal(await page.locator('#composer-send').isVisible(),false);
   await page.click('#menu-file');assert.equal(await page.getByRole('menuitem',{name:'Nuova chat',exact:true}).isEnabled(),true);await page.keyboard.press('Escape');
   await row('b').locator('.tree-conv__title').click();assert.equal(await page.locator('#composer-input').inputValue(),'Bozza di B');
   await page.click('#btn-new-chat');assert.equal(await page.locator('#composer-input').inputValue(),'');

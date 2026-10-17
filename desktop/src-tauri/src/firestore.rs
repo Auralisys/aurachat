@@ -7,6 +7,35 @@ use serde_json::{json, Value};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Massima dimensione in byte del JSON di un singolo messaggio salvato come
+/// documento unico; oltre questa soglia il messaggio viene spezzato in parti.
+const MAX_MESSAGE_BYTES: usize = 900_000;
+/// Ogni parte di un messaggio grande resta sotto il limite di Firestore.
+const MESSAGE_CHUNK_BYTES: usize = 700_000;
+
+/// Spezza una stringa in blocchi che non superano `max` byte, senza troncare
+/// mai un carattere UTF-8 a metà.
+fn chunk_string(s: &str, max: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    let bytes = s.as_bytes();
+    while start < bytes.len() {
+        let mut end = start;
+        for (i, ch) in s[start..].char_indices() {
+            let next = start + i + ch.len_utf8();
+            if next - start > max { break; }
+            end = next;
+        }
+        if end == start { end = start + s[start..].chars().next().expect("non empty").len_utf8(); }
+        chunks.push(s[start..end].to_string());
+        start = end;
+    }
+    chunks
+}
+
+fn part_path(path: &str, index: usize, part: usize) -> String { format!("{}/parts/p{part:06}", message_path(path, index)) }
+fn part_delete(part: &Value) -> Result<Value, String> { Ok(json!({"delete":part["name"].clone(),"currentDocument":{"updateTime":version(part)?}})) }
+
 /// Client minimale per Firestore via REST API + login email/password.
 /// Nessuna dipendenza aggiuntiva: solo `reqwest`.
 pub struct Firestore {
@@ -219,7 +248,7 @@ impl Firestore {
                     let feedback = after.as_object_mut().unwrap().remove("feedback");
                     if before != after { return Err("use_save_conversation".into()); }
                     if old_feedback != feedback {
-                        writes.push(update_write(auth,&message_path(&path,index),&message_value(index,&conversation.messages[index])?,None)?);
+                        writes.append(&mut self.replace_message_writes(auth,&path,index,&conversation.messages[index]).await?);
                         changed = true;
                     }
                 }
@@ -262,11 +291,11 @@ impl Firestore {
         response_json(response).await.map(Some)
     }
 
-    async fn list_messages(&self,auth:&FirestoreAuth,path:&str) -> Result<Vec<Value>,String> {
+    async fn list_documents(&self,auth:&FirestoreAuth,collection_url:&str) -> Result<Vec<Value>,String> {
         let mut documents = Vec::new();let mut page = String::new();
         loop {
             let token=self.id_token(auth).await?;
-            let response=self.http.get(format!("{}/messages",doc_url(&auth.project_id,path)))
+            let response=self.http.get(collection_url)
                 .bearer_auth(token).query(&[("pageSize","1000"),("pageToken",page.as_str()),("orderBy","__name__")])
                 .send().await.map_err(|e|e.to_string())?;
             let value=response_json(response).await?;
@@ -275,6 +304,42 @@ impl Firestore {
             if page.is_empty(){break;}
         }
         Ok(documents)
+    }
+
+    async fn list_messages(&self,auth:&FirestoreAuth,path:&str) -> Result<Vec<Value>,String> {
+        self.list_documents(auth,&format!("{}/messages",doc_url(&auth.project_id,path))).await
+    }
+
+    async fn list_parts(&self,auth:&FirestoreAuth,path:&str,index:usize) -> Result<Vec<Value>,String> {
+        self.list_documents(auth,&format!("{}/parts",doc_url(&auth.project_id,&message_path(path,index)))).await
+    }
+
+    /// Write necessarie per sostituire il messaggio all'indice `index`,
+    /// spezzandolo in più documenti `parts/` quando supera il limite.
+    async fn replace_message_writes(&self,auth:&FirestoreAuth,path:&str,index:usize,message:&crate::llm::ChatMessage) -> Result<Vec<Value>,String> {
+        let value=message_value(index,message)?;
+        let serialized=serde_json::to_vec(&value).map_err(|e|e.to_string())?;
+        let header_path=message_path(path,index);
+        let mut writes=Vec::new();
+        if serialized.len()<=MAX_MESSAGE_BYTES {
+            writes.push(update_write(auth,&header_path,&value,None)?);
+            for part in self.list_parts(auth,path,index).await? {writes.push(part_delete(&part)?);}
+            return Ok(writes);
+        }
+        let text=std::str::from_utf8(&serialized).map_err(|e|e.to_string())?;
+        let chunks=chunk_string(text,MESSAGE_CHUNK_BYTES);
+        writes.push(update_write(auth,&header_path,&json!({"sequence":index,"chunked":true,"part_count":chunks.len()}),None)?);
+        let old_parts=self.list_parts(auth,path,index).await?;
+        for (part_index,part) in old_parts.iter().enumerate() {
+            if part_index>=chunks.len(){writes.push(part_delete(part)?);}
+        }
+        for (part_index,chunk) in chunks.iter().enumerate() {
+            let part_value=json!({"data":chunk});
+            let write=if part_index<old_parts.len(){update_write(auth,&part_path(path,index,part_index),&part_value,None)?}
+                else{new_write(auth,&part_path(path,index,part_index),&part_value)?};
+            writes.push(write);
+        }
+        Ok(writes)
     }
 
     async fn commit(&self,auth:&FirestoreAuth,writes:Vec<Value>) -> Result<Value,String> {
@@ -302,7 +367,23 @@ impl Firestore {
         for (index,doc) in documents.iter().enumerate(){
             let mut fields=document_fields(doc)?;
             if fields.remove("sequence").and_then(|v|v.as_u64())!=Some(index as u64){return Err("invalid_message_sequence".into());}
-            messages.push(Value::Object(fields));
+            if fields.remove("chunked").and_then(|v|v.as_bool()).unwrap_or(false) {
+                let part_count=fields.remove("part_count").and_then(|v|v.as_u64()).ok_or("invalid_message_parts")? as usize;
+                let parts=self.list_parts(auth,&path,index).await?;
+                if parts.len()!=part_count{return Err("incomplete_conversation".into());}
+                let mut joined=String::new();
+                for part in &parts {
+                    let mut part_fields=document_fields(part)?;
+                    let data=part_fields.remove("data").ok_or("invalid_message_part")?;
+                    joined.push_str(data.as_str().ok_or("invalid_message_part")?);
+                }
+                let mut value:Value=serde_json::from_str(&joined).map_err(|e|format!("invalid_chunked_message: {e}"))?;
+                if value.get("sequence").and_then(Value::as_u64)!=Some(index as u64){return Err("invalid_message_sequence".into());}
+                value.as_object_mut().ok_or("invalid_chunked_message")?.remove("sequence");
+                messages.push(value);
+            } else {
+                messages.push(Value::Object(fields));
+            }
         }
         metadata.insert("id".into(),json!(id));metadata.insert("messages".into(),json!(messages));
         metadata.insert("messages_loaded".into(),json!(true));metadata.insert("revision".into(),json!(version(&doc)?));
@@ -333,11 +414,12 @@ impl Firestore {
         let old=baseline.find_conversation(&conversation.id).filter(|c|c.messages_loaded);
         for (index,message) in conversation.messages.iter().enumerate(){
             if old.and_then(|c|c.messages.get(index)).is_some_and(|before|serde_json::to_value(before).ok()==serde_json::to_value(message).ok()){continue;}
-            let value=message_value(index,message)?;
-            if serde_json::to_vec(&value).map_err(|e|e.to_string())?.len()>900_000 {return Err("message_too_large".into());}
-            writes.push(update_write(auth,&message_path(&path,index),&value,None)?);
+            writes.append(&mut self.replace_message_writes(auth,&path,index,message).await?);
         }
-        for index in conversation.messages.len()..old_count {writes.push(json!({"delete":document_name(auth,&message_path(&path,index))}));}
+        for index in conversation.messages.len()..old_count {
+            writes.push(json!({"delete":document_name(auth,&message_path(&path,index))}));
+            for part in self.list_parts(auth,&path,index).await? {writes.push(part_delete(&part)?);}
+        }
         let result=self.commit(auth,writes).await?;
         let mut saved=conversation.clone();saved.revision=Some(result["writeResults"][1]["updateTime"].as_str().ok_or("missing_commit_version")?.into());
         let mut cached=ChatData::from_storage(merged)?;
@@ -460,8 +542,10 @@ fn field_write(auth:&FirestoreAuth,path:&str,field:&str,value:&Value,revision:&s
     write["updateMask"]=json!({"fieldPaths":[field]});Ok(write)
 }
 fn conversation_metadata(conversation:&Conversation,count:usize)->Value{
-    json!({"title":conversation.title,"created_at":conversation.created_at,"updated_at":conversation.updated_at,
-        "context_tokens":conversation.context_tokens,"message_count":count})
+    let mut metadata=json!({"title":conversation.title,"created_at":conversation.created_at,"updated_at":conversation.updated_at,
+        "context_tokens":conversation.context_tokens,"message_count":count});
+    if let Some(model)=&conversation.model { metadata["model"]=json!(model); }
+    metadata
 }
 fn message_path(path:&str,index:usize)->String{format!("{path}/messages/m{index:012}")}
 fn message_value(index:usize,message:&crate::llm::ChatMessage)->Result<Value,String>{
@@ -721,7 +805,7 @@ mod tests {
             let chat_path=format!("{path}/conversations/{id}");
             let outcome:Result<(),String>=async {
                 let mut draft=original.clone();
-                draft.conversations.push(Conversation {id:id.clone(),title:"Temporary CRUD fixture".into(),messages:vec![],created_at:1,updated_at:1,context_tokens:0,messages_loaded:true,revision:None});
+                draft.conversations.push(Conversation {id:id.clone(),title:"Temporary CRUD fixture".into(),model:None,messages:vec![],created_at:1,updated_at:1,context_tokens:0,messages_loaded:true,revision:None});
                 client.save_tree(&uid,&auth,&draft).await?;
                 let mut tree=client.cached_tree(&uid).ok_or("missing_draft_cache")?;
                 check(tree.find_conversation(&id).and_then(|c|c.revision.as_ref()).is_some(),"draft revision")?;

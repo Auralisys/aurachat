@@ -17,6 +17,12 @@ Vedi `../AuraChat's vault/` per le decisioni: `Overview.md`,
 - **Impostazioni** con navigazione laterale e ricerca: Generali, Account, Provider di modelli e Voce. Account mostra identità e disconnessione, senza parametri Firebase. I provider hanno una API key dedicata e uno o più modelli con URL base indipendenti. La key non torna mai nella UI: il backend espone solo `api_key_set: true/false`.
 - **Chat**: invia la cronologia della conversazione attiva a `<base_url>/v1/chat/completions`
   (formato OpenAI-compatible, streaming SSE) e mostra la risposta.
+- **Turno in corso**: il nome della chat nasce dal primo messaggio, subito, senza
+  aspettare la risposta. Mentre il modello pensa il composer resta utilizzabile: con il
+  campo vuoto compare solo **Stop**, che chiude il turno conservando la parte di risposta
+  gia mostrata; con testo o allegati compaiono **Stop** e **Invia** e l'invio accoda il
+  messaggio, che parte appena il turno corrente si chiude. Anche la dettatura resta
+  disponibile (`stop_chat` ferma il turno solo per il proprietario della conversazione).
 - **Logo Auralisys** come icona della finestra e del tray.
 
 La persistenza Firestore usa `users/{uid}`: `config`, `tree` e `window` sono mappe native,
@@ -33,18 +39,28 @@ Pairing (codice/QR), relay e push FCM. Le chat di progetto possono leggere, crea
 
 ### Card attività e pannello destro
 
-La card **Output / Agenti / Fonti** compare quando la conversazione contiene messaggi,
-allegati o attività. Il pulsante nell'intestazione la nasconde e la riapre. Su desktop
-l'ingresso e l'uscita animano anche lo spazio della conversazione; sotto i 1000 px
-il pannello si sovrappone alla chat per mantenere leggibile il contenuto. Con
-`prefers-reduced-motion` gli spostamenti sono immediati.
+La card **Artefatti / Agenti / Fonti** (più la sezione **Shell** quando serve) compare
+quando la conversazione contiene messaggi, allegati o attività. Il pulsante
+nell'intestazione la nasconde e la riapre. Su desktop l'ingresso e l'uscita animano
+anche lo spazio della conversazione; sotto i 1000 px il pannello si sovrappone alla
+chat per mantenere leggibile il contenuto. Con `prefers-reduced-motion` gli
+spostamenti sono immediati.
 
-Gli **Output** contengono solo artefatti generati (immagini, documenti, file e log
-locali), ricevuti con l'evento `artifact-created`. Le normali risposte dell'assistente
-non sono output della card. Le **Fonti** contengono gli allegati dell'utente e i link
-HTTP(S) nei suoi messaggi; le letture del progetto e i link citati dal modello non
-sono fonti. `user-source` permette a un'integrazione nativa di aggiungere screenshot
-o altre risorse effettivamente fornite dall'utente.
+Gli **Artefatti** sono solo ciò che il modello ha prodotto: immagini, documenti,
+codice, dati, log e file scritti nel progetto. Le risposte in prosa, i ragionamenti e
+gli output grezzi degli strumenti non entrano nella lista: un evento
+`artifact-created` senza `path` e senza `url` viene scartato, a meno che il `kind` sia
+`image` o `document`. Ogni riga mostra il tipo con icona o miniatura, l'azione
+(`write_project_file` crea, `edit_project_file` aggiorna), la dimensione e il
+sub-agente che l'ha prodotto; il pannello aggiunge i filtri per tipo con i conteggi,
+così molti file di testo non nascondono le immagini. Le scritture del turno attivo
+compaiono subito come «In creazione…» e diventano artefatti quando lo strumento
+completa, senza duplicati per nome file.
+
+Le **Fonti** contengono gli allegati dell'utente e i link HTTP(S) nei suoi messaggi;
+le letture del progetto e i link citati dal modello non sono fonti. `user-source`
+permette a un'integrazione nativa di aggiungere screenshot o altre risorse
+effettivamente fornite dall'utente.
 
 I due eventi usano `{conversation_id, id, title, kind, summary?, content?, url?, path?}`.
 `kind: image` abilita l'anteprima; `document` abilita Markdown sanificato; gli altri
@@ -55,20 +71,25 @@ link nei messaggi si ricostruiscono dalla cronologia salvata. Il selettore alleg
 attuale accetta ancora solo file testuali: questa UI non abilita l'upload multimodale
 né una pipeline di generazione immagini/file.
 
-La sezione **Shell** compare quando esistono esecuzioni attive. Il dettaglio mostra
-comando, directory, log in tempo reale, stato e codice di uscita, con stop e gestione
-dell'errore. I log conclusi restano consultabili finché il pannello Shell è aperto;
-chiudendolo, la sezione scompare se non ci sono più processi attivi.
+La sezione **Shell** è la console di debug della sessione: elenca tutti i comandi
+della conversazione, non solo quelli attivi. Ogni riga mostra il comando leggibile
+(ricostruito da `{program, arguments}`), un indicatore di stato e la durata; il
+dettaglio aggiunge directory, codice di uscita, sub-agente, log in tempo reale con
+scorrimento automatico e lo stop dei processi attivi. Anche i comandi in attesa di
+approvazione compaiono nella stessa lista, con stato «In attesa di approvazione» o
+«Revisione automatica»: si decidono dal compositore e non sono interrompibili. I log
+conclusi restano consultabili per tutta la sessione.
 
 `managed_shells::Shells` registra processi già avviati da un runner nativo tramite
 `track(uid, conversation_id, command, cwd, child, notify)`. Il runner passa stdout e
 stderr piped e inoltra gli snapshot con `app.emit("shell-activity", snapshot)` nella
-callback. `list_shells` recupera gli snapshot al cambio conversazione; `stop_shell`
-accetta soltanto un ID registrato che appartiene all'utente e alla conversazione.
-Su Windows termina anche i discendenti; lo stop non richiede rete. Le revisioni
-degli snapshot impediscono che aggiornamenti tardivi ripristinino stati vecchi.
-Il registro conserva al massimo gli ultimi 128 KiB di log per processo e chiude
-le esecuzioni all'uscita dell'app.
+callback. Ogni snapshot espone `started_at` e `finished_at` in millisecondi epoch: la
+UI calcola la durata reale senza inventare stati. `list_shells` recupera gli snapshot
+al cambio conversazione; `stop_shell` accetta soltanto un ID registrato che appartiene
+all'utente e alla conversazione. Su Windows termina anche i discendenti; lo stop non
+richiede rete. Le revisioni degli snapshot impediscono che aggiornamenti tardivi
+ripristinino stati vecchi. Il registro conserva al massimo gli ultimi 128 KiB di log
+per processo e chiude le esecuzioni all'uscita dell'app.
 
 Il runner nativo avvia i comandi autorizzati e li registra nel pannello Shell.
 Le esecuzioni di un sub-agente sono associate al suo ID e vengono fermate quando
@@ -99,8 +120,14 @@ condivide il contesto e le root autorizzate e inoltra risultato, reasoning e
 strumenti eseguiti. Ogni chiamata attende il risultato; sono ammesse fino a
 quattro deleghe per turno e i figli non possono delegare a loro volta.
 
+La card elenca fino a due agenti attivi sotto il riepilogo «N in esecuzione · M
+totali». Ogni riga combina orb di stato, titolo, ultima attività (o riepilogo), stato
+e tempo trascorso. Il dettaglio separa intestazione con stato, chip di modello,
+ragionamento e numero di strumenti, quindi Incarico, Cronologia e Risultato.
+
 Verifica: `node tests/activity-panel.cjs` con Playwright in `NODE_PATH` (servizi
-nativi simulati). Le immagini di verifica sono in `../.artifact/activity/`.
+nativi simulati) copre artefatti con filtri e scarto della prosa, trail shell con
+comandi in attesa e agenti. Le immagini di verifica sono in `../.artifact/activity/`.
 
 ```
 desktop/
@@ -252,7 +279,7 @@ contesto. Il pulsante + sceglie fino a quattro file di testo (128 KiB ciascuno,
 Impostazioni → Voce gestisce Cohere Transcribe INT4 (~2 GB): download da una
 revisione immutabile, controllo SHA-256, interruzione/ripresa e rimozione locale.
 Il modello usa ONNX Runtime su CPU, senza Python, chiavi o servizi di trascrizione.
-Il primo uso verifica e carica i pesi prima di aprire il microfono, con stato di preparazione visibile; su CPU i tempi dipendono dall'hardware.
+Con il modello installato la verifica SHA-256 e il caricamento dei pesi partono da soli all'apertura dell'app: il microfono mostra un loader sull'icona, resta disabilitato finché il modello non è in memoria e diventa utilizzabile subito dopo. Impostazioni → Voce espone lo stesso stato (“Preparazione del modello locale…”), quindi non serve più cliccare il microfono per scoprirlo; su CPU i tempi dipendono dall'hardware.
 Il registratore AudioWorklet cattura mono, ricampiona a 16 kHz e conserva l'audio
 solo in memoria. Limite due minuti, inferenza in blocchi fino a 30 secondi.
 La lingua segue italiano/inglese dell'interfaccia. Registrazione con forma
@@ -322,7 +349,7 @@ SHA-256 restituita dall'ultima lettura (oppure previous_content per compatibilit
 Le sostituzioni puntuali devono corrispondere una sola volta. Il backend verifica
 nuovamente percorso e contenuto dopo l'approvazione e serializza le scritture
 interne, scrivendo le sostituzioni su un file temporaneo prima della rinomina.
-Gli artefatti file sono mostrati in Output e ricostruiti dalle attività salvate.
+Gli artefatti file sono mostrati in Artefatti e ricostruiti dalle attività salvate.
 
 I sub-agenti usano il modello e i permessi del progetto, senza nuove autorizzazioni.
 Il pannello conserva il testo progressivo, il reasoning effettivamente restituito
@@ -406,7 +433,7 @@ la UI attende il completamento dell’operazione nativa prima di consentirne un�
 il risultato annullato non viene inserito in alcuna bozza. Non si interrompe
 forzatamente un’inferenza ONNX già in corso. SHA-256 è compilato con ottimizzazioni
 anche nel profilo di sviluppo, mantenendo la verifica completa dei file.
-Il test reale locale esegue preparazione e due trascrizioni consecutive.
+Il test reale locale esegue preparazione e due trascrizioni consecutive. Con il modello installato il caricamento parte all’avvio: il microfono resta disabilitato, con un loader sull’icona e senza click prematuri, finché i pesi non sono in memoria; `voice-flow.cjs` copre avvio, loader, click inerte e sblocco.
 
 Il selettore mostra il logo bianco del provider prima del modello quando disponibile
 (DeepSeek); altrimenti usa “Provider · modello”. Le etichette accessibili includono

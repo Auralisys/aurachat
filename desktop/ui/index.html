@@ -104,7 +104,7 @@
                   <button id="model-select" class="model-select__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="model-menu" data-i18n-aria-label="chat.model"><span id="model-name"></span><svg data-icon="chevron" aria-hidden="true"></svg></button>
                   <div id="model-menu" class="model-menu" role="menu" data-i18n-aria-label="chat.model" hidden></div>
                 </div>
-<button id="composer-mic" class="icon-button" aria-pressed="false" data-i18n-aria-label="chat.dictate" data-i18n-title="chat.dictate" hidden><svg data-icon="mic" aria-hidden="true"></svg></button><button id="composer-send" class="composer__send" data-i18n-aria-label="titlebar.send" data-i18n-title="titlebar.send" aria-label="" title="">
+<button id="composer-mic" class="icon-button" aria-pressed="false" data-i18n-aria-label="chat.dictate" data-i18n-title="chat.dictate" hidden><svg data-icon="mic" aria-hidden="true"></svg></button><button id="composer-stop" type="button" class="icon-button composer__stop" data-i18n-aria-label="chat.stop" data-i18n-title="chat.stop" aria-label="" title="" hidden><svg data-icon="stop" aria-hidden="true"></svg></button><button id="composer-send" class="composer__send" data-i18n-aria-label="titlebar.send" data-i18n-title="titlebar.send" aria-label="" title="">
                   <svg data-icon="send" aria-hidden="true"></svg>
                 </button>
                 </div>
@@ -188,6 +188,7 @@
     <script src="vendor/marked.js"></script>
     <script src="vendor/purify.min.js"></script>
     <dialog id="permission-confirm" class="permission-confirm" aria-labelledby="permission-confirm-title"><form method="dialog"><svg data-icon="shield" aria-hidden="true"></svg><h2 id="permission-confirm-title" data-i18n="permissions.confirm_title"></h2><p id="permission-confirm-project"></p><p data-i18n="permissions.full_description"></p><p data-i18n="permissions.command_scope"></p><div><button value="deny" data-i18n="project.cancel" autofocus></button><button value="allow" class="approval-allow" data-i18n="permissions.confirm_full"></button></div></form></dialog>
+    <dialog id="model-confirm" class="permission-confirm model-confirm" aria-labelledby="model-confirm-title"><form method="dialog"><svg data-icon="cpu" aria-hidden="true"></svg><h2 id="model-confirm-title" data-i18n="chat.model_change_title"></h2><p data-i18n="chat.model_change_body"></p><div><button value="stay" data-i18n="chat.model_change_stay" autofocus></button><button value="switch" class="approval-allow" data-i18n="chat.model_change_switch"></button></div></form></dialog>
     <script src="permissions.js"></script>
     <script src="voice.js"></script>
     <script src="activity.js"></script>

@@ -226,6 +226,10 @@ input,textarea { caret-color:var(--c-glow); }
 .composer__send { width:36px; height:36px; flex:none; display:grid; place-items:center; border-radius:var(--radius-full); background:var(--c-accent); }
 .composer__send:hover { background:var(--c-accent-hover); }
 .composer__send svg { width:18px; height:18px; }
+.composer__stop { width:36px; height:36px; color:var(--c-text); border-radius:var(--radius-full); background:var(--c-hover); }
+.composer__stop:hover { background:var(--c-soft-border); }
+.composer__stop:disabled { opacity:.45; }
+.composer__stop svg { width:16px; height:16px; }
 button:active:not(:disabled) { filter:brightness(1.15); }
 @media(prefers-reduced-motion:no-preference) { .model-menu { transform-origin:bottom right; animation:menu-arrive 140ms cubic-bezier(.16,1,.3,1); } @keyframes menu-arrive { from { opacity:0; transform:translateY(4px) scale(.98); } to { opacity:1; transform:none; } } }
 @media(forced-colors:active) { .model-menu,.account-menu { border:1px solid CanvasText; } }
@@ -479,6 +483,7 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 .composer__attach { margin-right:auto; }
 .composer__toolbar { padding-top:4px; }
 .composer__send { width:32px; height:32px; }
+.composer__stop { width:32px; height:32px; }
 .composer__hint { display:none; }
 .composer-note { font-size:12px; line-height:1.5; color:var(--c-text-muted); margin:8px 8px 0; }
 .composer-attachments,.message-attachments { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px; }
@@ -502,6 +507,13 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 .voice-recording canvas { flex:1 1 0; width:0; min-width:0; height:32px; color:var(--c-text-muted); }
 .voice-recording .icon-button { flex:none; width:28px; height:28px; padding:0; border-radius:50%; background:var(--c-hover); }
 #voice-recording-status:not(.sr-only) { font-size:12px; }
+/* Modello in caricamento: il microfono resta visibile ma inattivo, con un loader sull'icona. */
+#composer-mic { position:relative; }
+#composer-mic.is-loading { cursor:progress; }
+#composer-mic.is-loading::after { content:''; position:absolute; inset:0; margin:auto; width:20px; height:20px; border:2px solid var(--c-soft-border); border-top-color:var(--c-glow); border-radius:50%; }
+@keyframes mic-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:no-preference) { #composer-mic.is-loading::after { animation:mic-spin .85s linear infinite; } }
+.is-backgrounded #composer-mic.is-loading::after { animation-play-state:paused; }
 #voice-error:empty { display:none; }
 .permission-control { position:relative; flex-shrink:1; min-width:0; }
 .composer__toolbar:has(.permission-control:not([hidden])) .composer__attach { margin-right:0; }
@@ -565,6 +577,7 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 .permission-confirm p { font-size:13px; line-height:1.7; color:var(--c-text-muted); }
 .permission-confirm form > svg { width:24px; height:24px; color:var(--c-glow); }
 .permission-confirm form > div { display:flex; justify-content:flex-end; gap:8px; margin-top:24px; }
+.model-confirm button[value="stay"] { background:var(--c-hover); }
 @keyframes work-pulse { 50% { opacity:.55; } }
 @keyframes feedback-arrive { from { opacity:.45; transform:translateY(4px); } to { opacity:1; transform:none; } }
 @media (prefers-reduced-motion:no-preference) { .approval-card,.msg--stream .turn-history { animation:feedback-arrive var(--motion-state) var(--motion-ease); } }

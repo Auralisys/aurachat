@@ -49,6 +49,13 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   await page.evaluate(()=>__emitApproval({...__pending['command-2'],status:'pending',reason:'review_unavailable'}));
   await page.getByRole('button',{name:'Consenti una volta',exact:true}).waitFor();assert.match(await page.locator('.approval-card__reason').innerText(),/non è disponibile/);
   await page.getByRole('button',{name:'Consenti una volta',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.approval-card').length===0);
+  // A file the running turn is writing is an artifact in progress, never model prose.
+  await page.evaluate(()=>__events['chat-progress']({payload:{conversation_id:'c',kind:'__activity',text:JSON.stringify({kind:'tool',id:'write-live',action:'write_project_file',arguments:{root:0,path:'report.md'},status:'running'})}}));
+  await page.locator('[data-activity-focus="group:outputs"]').click();
+  await page.locator('#activity-panel-content .activity-row').first().waitFor();
+  assert.equal(await page.locator('#activity-panel-content .activity-row__title').innerText(),'report.md');
+  assert.equal(await page.locator('#activity-panel-content .activity-row.is-pending').count(),1);
+  await page.click('#activity-close');
   await page.evaluate(()=>__events['agent-activity']({payload:{conversation_id:'c',id:'a',title:'Aggiorna note',status:'running',summary:'Modifica del file in corso',task:'Aggiorna note.md',model:'deepseek-flash',content:'Prima parte.',reasoning_content:'Verifico il contenuto originale.',activity:[{kind:'tool',id:'tool-a',action:'edit_project_file',path:'note.md',status:'completed',output:'written',arguments:{path:'note.md'}}]}}));
   await page.locator('.activity-agents-summary').click();await page.getByRole('button',{name:/Aggiorna note/}).click();
   await page.locator('.agent-detail-history > details > summary').click();

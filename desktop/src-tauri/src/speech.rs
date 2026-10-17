@@ -13,20 +13,26 @@ const FILES: &[(&str, u64, &str)] = &[
 ];
 
 #[derive(Clone, Serialize)]
-pub struct ModelStatus { pub ready: bool, pub busy: bool, pub downloaded: u64, pub total: u64 }
+pub struct ModelStatus { pub ready: bool, pub busy: bool, pub loading: bool, pub loaded: bool, pub downloaded: u64, pub total: u64 }
 
 pub struct Speech {
     root: PathBuf,
     busy: AtomicBool,
     cancel: AtomicBool,
+    loading: AtomicBool,
+    loaded: AtomicBool,
     model: Mutex<Option<CohereModel>>,
 }
 struct Operation<'a>(&'a AtomicBool);
 impl Drop for Operation<'_> { fn drop(&mut self) { self.0.store(false, Ordering::SeqCst); } }
+// Publishes "weights are being verified and loaded into memory" for the whole loading window.
+struct Loading<'a>(&'a AtomicBool);
+impl<'a> Loading<'a> { fn new(flag: &'a AtomicBool) -> Self { flag.store(true, Ordering::SeqCst); Self(flag) } }
+impl Drop for Loading<'_> { fn drop(&mut self) { self.0.store(false, Ordering::SeqCst); } }
 
 impl Speech {
     pub fn new(config_dir: &std::path::Path) -> Self {
-        Self { root: config_dir.join("models/cohere-int4-2c870f89"), busy: AtomicBool::new(false), cancel: AtomicBool::new(false), model: Mutex::new(None) }
+        Self { root: config_dir.join("models/cohere-int4-2c870f89"), busy: AtomicBool::new(false), cancel: AtomicBool::new(false), loading: AtomicBool::new(false), loaded: AtomicBool::new(false), model: Mutex::new(None) }
     }
     fn operation(&self) -> Result<Operation<'_>, String> {
         self.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).map_err(|_| "speech_busy")?;
@@ -38,7 +44,7 @@ impl Speech {
             let final_size = fs::metadata(self.root.join(name)).map_or(0, |m| m.len());
             if final_size == *size { *size } else { fs::metadata(self.root.join(format!("{name}.part"))).map_or(0, |m| m.len().min(*size)) }
         }).sum();
-        ModelStatus { ready: complete && fs::read_to_string(self.root.join("verified")).is_ok_and(|s| s == REVISION), busy: self.busy.load(Ordering::SeqCst), downloaded, total: FILES.iter().map(|f| f.1).sum() }
+        ModelStatus { ready: complete && fs::read_to_string(self.root.join("verified")).is_ok_and(|s| s == REVISION), busy: self.busy.load(Ordering::SeqCst), loading: self.loading.load(Ordering::SeqCst), loaded: self.loaded.load(Ordering::SeqCst), downloaded, total: FILES.iter().map(|f| f.1).sum() }
     }
     pub fn cancel(&self) { self.cancel.store(true, Ordering::SeqCst); }
     fn check_cancel(&self) -> Result<(), String> { if self.cancel.load(Ordering::SeqCst) { Err("speech_cancelled".into()) } else { Ok(()) } }
@@ -108,6 +114,7 @@ impl Speech {
     pub fn remove(&self) -> Result<ModelStatus, String> {
         let guard = self.operation()?;
         *self.model.lock().map_err(|_| "speech_engine")? = None;
+        self.loaded.store(false, Ordering::SeqCst);
         for &(name, _, _) in FILES {
             for path in [self.root.join(name), self.root.join(format!("{name}.part"))] {
                 if path.exists() { fs::remove_file(path).map_err(|e| e.to_string())?; }
@@ -122,14 +129,17 @@ impl Speech {
 
     fn load_model(&self, model: &mut Option<CohereModel>) -> Result<(), String> {
         if model.is_none() {
+            let _loading = Loading::new(&self.loading);
             for &(name, _, hash) in FILES { self.verify(&self.root.join(name), hash)?; }
             self.check_cancel()?;
             *model = Some(CohereModel::load(&self.root, &Quantization::Int4).map_err(|e| format!("speech_engine: {e}"))?);
+            self.loaded.store(true, Ordering::SeqCst);
         }
         Ok(())
     }
 
     pub fn prepare(&self) -> Result<(), String> {
+        if self.loaded.load(Ordering::SeqCst) { return Ok(()); }
         let _guard = self.operation()?;
         if !self.status().ready { return Err("speech_model_missing".into()); }
         self.cancel.store(false, Ordering::SeqCst);
@@ -194,6 +204,7 @@ mod tests {
         fs::create_dir_all(&service.root).unwrap();
         fs::write(service.root.join("tokens.txt.part"), "partial").unwrap();
         assert!(!service.status().ready); assert_eq!(service.status().downloaded, 7);
+        assert!(!service.status().loading && !service.status().loaded);
         assert_eq!(service.prepare().unwrap_err(), "speech_model_missing");
         assert!(service.verify(&service.root.join("tokens.txt.part"), "wrong").is_err());
         let guard = service.operation().unwrap(); assert!(service.remove().is_err()); drop(guard);

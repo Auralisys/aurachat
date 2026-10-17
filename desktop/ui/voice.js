@@ -1,4 +1,4 @@
-const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: null, transcribing: false, downloading: false, nativeOperation: null };
+const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: null, transcribing: false, downloading: false, loading: false, loaded: false, nativeOperation: null };
 
 async function speechRequest(command, args) {
   const operation = {};
@@ -25,13 +25,14 @@ function renderSpeechModel(status) {
   $('#voice-model-progress').value = status.downloaded;
   $('#voice-model-progress').max = status.total;
   $('#voice-model-progress').hidden = status.ready || !status.downloaded;
-  $('#voice-model-status').textContent = status.ready ? t(status.busy ? 'voice.speech_busy' : 'voice.ready') : status.downloaded ? `${t('voice.downloaded')} ${percent}% · ${(status.downloaded/1e9).toFixed(2)} / ${(status.total/1e9).toFixed(2)} GB` : t('voice.not_installed');
+  const label = !status.ready ? '' : status.loading ? 'voice.loading_model' : status.busy ? 'voice.speech_busy' : status.loaded ? 'voice.loaded' : 'voice.ready';
+  $('#voice-model-status').textContent = label ? t(label) : status.downloaded ? `${t('voice.downloaded')} ${percent}% · ${(status.downloaded/1e9).toFixed(2)} / ${(status.total/1e9).toFixed(2)} GB` : t('voice.not_installed');
   $('#voice-download').hidden = status.ready || voice.downloading;
-  $('#voice-download').disabled = status.busy || voice.transcribing;
+  $('#voice-download').disabled = status.busy || status.loading || voice.transcribing;
   $('#voice-download').textContent = t(status.downloaded ? 'voice.resume' : 'voice.download');
   $('#voice-download-cancel').hidden = !voice.downloading;
   $('#voice-remove').hidden = !status.downloaded;
-  $('#voice-remove').disabled = status.busy || voice.downloading || voice.transcribing || !!voice.recording;
+  $('#voice-remove').disabled = status.busy || status.loading || voice.downloading || voice.transcribing || !!voice.recording;
 }
 
 async function refreshSpeechModel() {
@@ -39,17 +40,43 @@ async function refreshSpeechModel() {
   catch (_) { $('#voice-model-status').textContent = t('voice.error'); }
 }
 
+// The weights stay in memory: loading them at startup keeps the first microphone
+// immediate and replaces an unexplained "model busy" with a visible loading state.
+async function warmSpeechModel() {
+  if (voice.loading) return;
+  let status;
+  try { status = await invoke('speech_model_status'); } catch (_) { return; }
+  if (!status?.ready) { voice.loaded = false; return; }
+  if (status.loaded) { voice.loaded = true; return; }
+  if (status.busy) return;
+  voice.loading = true; voice.loaded = false;
+  if ($('#composer-mic')) voiceUi();
+  try {
+    await invoke('prepare_speech_model');
+    voice.loaded = true;
+  } catch (error) {
+    if (!/speech_(busy|cancelled)/.test(String(error))) composerStatus(voiceError(error));
+  } finally {
+    voice.loading = false;
+    if ($('#composer-mic')) voiceUi();
+    if ($('#voice-model-status')) refreshSpeechModel();
+  }
+}
+
 function voiceUi(message = '') {
   const mic = $('#composer-mic');
   const finishing = !!voice.nativeOperation && !voice.pending && !voice.transcribing;
   const active = !!voice.recording || voice.pending || voice.transcribing || finishing;
+  const loading = voice.loading;
   mic.hidden = active;
   $('.composer__toolbar .model-select').hidden = active;
   $('#composer-attach').hidden = active;
-  mic.disabled = active || state.busy || state.preparing || state.loadingConversation;
+  mic.disabled = active || loading || state.preparing || state.loadingConversation;
+  mic.classList.toggle('is-loading', loading);
   mic.setAttribute('aria-pressed', String(!!voice.recording));
-  mic.setAttribute('aria-label', t(voice.recording ? 'voice.stop' : 'chat.dictate'));
-  mic.title = mic.getAttribute('aria-label');
+  const label = t(voice.recording ? 'voice.stop' : loading ? 'voice.loading_model' : 'chat.dictate');
+  mic.setAttribute('aria-label', label);
+  mic.title = label;
   mic.replaceChildren(icon(voice.recording ? 'stop' : 'mic'));
   $('#voice-recording').hidden = !active;
   $('#voice-recording-status').textContent = finishing ? t('voice.finishing') : message;
@@ -57,7 +84,7 @@ function voiceUi(message = '') {
   $('#voice-waveform').hidden = voice.pending || voice.transcribing || finishing;
   $('#voice-recording-cancel').disabled = finishing;
   $('#voice-stop').hidden = !voice.recording;
-  $('#composer-send').disabled = state.busy || state.preparing || state.loadingConversation || activeConversation()?.conversation.messages_loaded === false || voice.pending || voice.transcribing || finishing;
+  updateComposerControls();
   if (active && !voice.frame) drawVoiceWave();
   if (!active) { cancelAnimationFrame(voice.frame); voice.frame = null; }
 }
@@ -107,7 +134,7 @@ function drawVoiceWave() {
 }
 
 async function startVoice() {
-  if (voice.pending || voice.transcribing || voice.nativeOperation || state.busy || state.preparing || state.loadingConversation) return;
+  if (voice.pending || voice.transcribing || voice.loading || voice.nativeOperation || state.preparing || state.loadingConversation) return;
   if (voice.recording) return stopVoice();
   const epoch = ++voice.epoch;
   voice.pending = true; voiceUi(t('voice.preparing'));
@@ -121,6 +148,7 @@ async function startVoice() {
     }
     voiceUi(t('voice.loading_model'));
     await speechRequest('prepare_speech_model');
+    voice.loaded = true;
     if (epoch !== voice.epoch) return;
     voiceUi(t('voice.preparing'));
     voice.waveform = [];
@@ -188,7 +216,7 @@ async function stopVoice(sendAfter = false) {
     releaseRecording(recording);
     if (epoch === voice.epoch) composerStatus(voiceError(error));
   } finally {
-    if (epoch === voice.epoch) { voice.transcribing = false; voiceUi(); }
+    if (epoch === voice.epoch) { voice.transcribing = false; voiceUi();flushQueue(state.activeConversationId); }
   }
 }
 
@@ -207,7 +235,7 @@ function setupLocalVoice() {
     voice.downloading = true; $('#voice-error').textContent = ''; await refreshSpeechModel();
     try { renderSpeechModel(await invoke('download_speech_model')); }
     catch (error) { if (!String(error).includes('speech_cancelled')) $('#voice-error').textContent = voiceError(error); }
-    finally { voice.downloading = false; await refreshSpeechModel(); }
+    finally { voice.downloading = false; await refreshSpeechModel(); await warmSpeechModel(); }
   };
   $('#voice-download-cancel').onclick = async () => {
     $('#voice-download-cancel').disabled = true;
@@ -215,8 +243,10 @@ function setupLocalVoice() {
   };
   $('#voice-remove').onclick = async () => {
     $('#voice-error').textContent = '';
-    try { renderSpeechModel(await invoke('remove_speech_model')); } catch (error) { $('#voice-error').textContent = voiceError(error); }
+    try { voice.loaded = false; renderSpeechModel(await invoke('remove_speech_model')); } catch (error) { $('#voice-error').textContent = voiceError(error); }
   };
   appWindow.listen('speech-model-progress', event => renderSpeechModel(event.payload)).catch(() => {});
   window.addEventListener('pagehide', cancelVoice);
+  // Installed model: warm it up right away so the microphone is never a guessing game.
+  warmSpeechModel().catch(() => {});
 }

@@ -80,3 +80,55 @@
 .activity-detail-meta .activity-stop { margin-left:auto; }
 .is-backgrounded .agent-orb--running { animation-play-state:paused; }
 @media (prefers-reduced-motion:reduce) { .activity-row { transition:none; } }
+
+/* ===== Artifacts: what the model produced, never its prose ===== */
+.activity-glyph { display:inline-flex; flex:none; align-items:center; justify-content:center; width:24px; height:24px; border-radius:6px; background:var(--c-hover); color:var(--c-text-muted); }
+.activity-glyph .ui-icon { width:15px; height:15px; }
+.activity-glyph[data-kind="image"] { color:var(--agent-color); }
+.activity-glyph[data-kind="code"],.activity-glyph[data-kind="data"] { color:var(--c-glow); }
+.activity-thumb { flex:none; width:24px; height:24px; border-radius:6px; object-fit:cover; background:var(--c-hover); }
+.activity-card .activity-glyph,.activity-card .activity-thumb { width:20px; height:20px; border-radius:5px; }
+.activity-card .activity-glyph .ui-icon { width:13px; height:13px; }
+.activity-pill { flex:none; align-self:flex-start; padding:2px 8px; border:1px solid var(--c-border); border-radius:var(--radius-full); color:var(--c-text-muted); font-size:11px; line-height:1.6; white-space:nowrap; }
+.activity-row--artifact .activity-row__text { gap:2px; }
+.activity-row.is-pending .activity-row__title { color:var(--c-text-muted); }
+.activity-filters { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 14px; }
+.activity-filter { min-height:28px; padding:4px 10px; border:1px solid var(--c-border); border-radius:var(--radius-full); color:var(--c-text-muted); font-size:11px; font-variant-numeric:tabular-nums; }
+.activity-filter[aria-pressed="true"] { background:var(--c-hover); border-color:transparent; color:var(--c-text); }
+.activity-detail-path { font-family:Consolas,monospace; }
+.activity-artifact-meta { justify-content:flex-start; gap:8px 12px; }
+
+/* ===== Shells: the session debug trail, including pending approvals ===== */
+.activity-dot { flex:none; width:8px; height:8px; margin-top:6px; border-radius:50%; background:var(--c-soft-border); }
+.activity-card .activity-dot { margin-top:0; }
+.activity-dot--running { background:var(--agent-color); animation:shell-pulse 1.8s ease-in-out infinite; }
+.activity-dot--waiting,.activity-dot--reviewing,.activity-dot--stopping { background:var(--c-glow); }
+.activity-dot--stopping { opacity:.55; }
+.activity-dot--completed { background:var(--agent-color); }
+.activity-dot--failed { background:var(--c-destructive); }
+.activity-row--shell { gap:10px; }
+.activity-row--shell .activity-row__text { gap:2px; }
+.activity-row--shell .activity-row__command { font-family:Consolas,monospace; font-size:12px; font-weight:400; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.activity-row--shell .activity-row__meta { flex-direction:row; align-items:center; gap:10px; }
+.activity-status { flex:none; color:var(--c-text-muted); font-size:11px; font-variant-numeric:tabular-nums; }
+.activity-status--running,.activity-status--waiting,.activity-status--reviewing { color:var(--c-glow); }
+.activity-status--completed { color:var(--agent-color); }
+.activity-status--failed { color:var(--c-destructive); }
+.activity-status--cancelled { color:var(--c-text-muted); }
+.activity-terminal { max-height:min(46vh,420px); overflow:auto; }
+@keyframes shell-pulse { 50% { opacity:.4; } }
+.is-backgrounded .activity-dot--running { animation-play-state:paused; }
+
+/* ===== Agent detail header, chips and sections ===== */
+.agent-detail-head { display:flex; align-items:center; gap:10px; margin:0 0 10px; }
+.agent-detail-head .agent-orb { width:28px; height:28px; margin-top:0; }
+.agent-detail-head .agent-orb .ui-icon { width:22px; height:22px; }
+.agent-detail-titles { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.agent-detail-title { font-size:14px; font-weight:600; overflow-wrap:anywhere; }
+.agent-detail-status { font-size:11px; }
+.agent-detail-chips { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 0 12px; color:var(--c-text-muted); font-size:11px; font-variant-numeric:tabular-nums; }
+.activity-chip { padding:2px 8px; border-radius:var(--radius-full); background:var(--c-hover); }
+.activity-section-title { margin:22px 0 8px; color:var(--c-text-muted); font-size:11px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; }
+.agent-history-title:not([hidden]) + .agent-detail-history { margin-top:0; }
+
+@media (prefers-reduced-motion:reduce) { .activity-dot--running { animation:none; } }

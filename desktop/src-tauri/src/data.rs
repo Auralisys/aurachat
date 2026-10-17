@@ -58,6 +58,8 @@ impl From<StoredProject> for Project {
 pub struct Conversation {
     pub id: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     #[serde(default)]
     pub messages: Vec<ChatMessage>,
     pub created_at: u64,
@@ -117,8 +119,10 @@ impl ChatData {
         }
         for c in self.conversations_all() {
             valid_id(&c.id)?;
-            if conversations.insert(c.id.clone(), json!({"title":c.title,"created_at":c.created_at,
-                "updated_at":c.updated_at,"context_tokens":c.context_tokens})).is_some() { return Err("duplicate_conversation_id".into()); }
+            let mut summary = json!({"title":c.title,"created_at":c.created_at,
+                "updated_at":c.updated_at,"context_tokens":c.context_tokens});
+            if let Some(model) = &c.model { summary["model"] = json!(model); }
+            if conversations.insert(c.id.clone(), summary).is_some() { return Err("duplicate_conversation_id".into()); }
         }
         Ok(json!({"schema_version":2,"projects":projects,"project_order":self.projects.iter().map(|p| &p.id).collect::<Vec<_>>(),
             "conversations":conversations,"standalone_conversation_ids":self.conversations.iter().map(|c| &c.id).collect::<Vec<_>>()}))
@@ -201,7 +205,7 @@ mod tests {
         data.conversations.push(Conversation {
             id: "personal".into(), title: "Chat".into(), messages: vec![],
             created_at: 0, updated_at: 0, context_tokens: 0,
-            messages_loaded:true, revision:None,
+            model: None, messages_loaded:true, revision:None,
         });
         data.find_conversation_mut("personal").unwrap().title = "Saved".into();
         let saved = serde_json::to_string(&data).unwrap();

@@ -27,11 +27,13 @@ const state = {
   runs: new Map(),
   unread: new Set(),
   drafts: new Map(),
+  queues: new Map(),
   persistedData: null,
   resultEpoch: 0,
   get busy() { return !!this.runs.get(this.activeConversationId)?.pending; },
   preparing: false,
   loadingConversation: false,
+  preloaded: new Map(),
   conversationLoadEpoch: 0,
   changingModel: false,
   navigation: [],
@@ -255,7 +257,7 @@ function icon(name) {
     }
     return svg;
   }
-  const glyph = {gear:'Settings', person:'UserRound', cpu:'Cpu', microphone:'Mic', search:'Search', back:'ArrowLeft', trash:'Trash2', compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown'}[name];
+  const glyph = {gear:'Settings', person:'UserRound', cpu:'Cpu', microphone:'Mic', search:'Search', back:'ArrowLeft', trash:'Trash2', compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', image:'Image', fileCode:'FileCode', fileData:'FileJson', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown'}[name];
   if (glyph && lucide.icons[glyph]) return lucide.createElement(lucide.icons[glyph], {class:'ui-icon','aria-hidden':'true'});
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
@@ -700,6 +702,7 @@ function clearChat() {
   updateContextInfo();
   populateProjectMenu();
   rememberNavigation(null);
+  populateModelSelect();
   renderSidebar();
   voiceUi();
 }
@@ -715,7 +718,8 @@ async function openConversation(id, refresh = true, section = null) {
   const run = state.runs.get(id);
   const found = findConversation(id);
   state.activeConversationSection = section || (found?.project ? 'projects' : 'recents');
-  const needsLoad=found && !run && (found.conversation.messages_loaded===false || (refresh && found.conversation.revision != null));
+  const freshPreload = state.preloaded.get(id) != null && Date.now() - state.preloaded.get(id) < 60000;
+  const needsLoad=found && !run && (found.conversation.messages_loaded===false || (refresh && found.conversation.revision != null && !freshPreload));
   state.loadingConversation=!!needsLoad;
   state.messages = run ? run.messages.slice() : found ? (found.conversation.messages || []).slice() : [];
   state.lastUsage = run?.usage || null;state.failedSend = run?.failedSend || null;
@@ -724,6 +728,7 @@ async function openConversation(id, refresh = true, section = null) {
   renderMessages();
   updateContextInfo();
   rememberNavigation(id);
+  populateModelSelect();
   voiceUi();
   if (needsLoad) {
     state.loadingConversation=true;voiceUi();
@@ -740,6 +745,42 @@ async function openConversation(id, refresh = true, section = null) {
       if(epoch===state.conversationLoadEpoch){state.loadingConversation=false;renderSidebar();renderMessages();voiceUi();}
     }
   }
+}
+
+function preloadRecentConversations(excludeId) {
+  const byProject = new Map();
+  const standalone = [];
+  for (const conv of allConversations().slice().sort((a, b) => b.updated_at - a.updated_at)) {
+    if (conv.id === excludeId) continue;
+    const project = state.data.projects.find(p => p.conversations.some(c => c.id === conv.id));
+    if (project) {
+      const list = byProject.get(project.id) || [];
+      if (list.length < 5) { list.push(conv.id); byProject.set(project.id, list); }
+    } else if (standalone.length < 5) {
+      standalone.push(conv.id);
+    }
+  }
+  const ids = [];
+  const seen = new Set([excludeId]);
+  for (const list of byProject.values()) for (const id of list) if (!seen.has(id)) { seen.add(id); ids.push(id); }
+  for (const id of standalone) if (!seen.has(id)) { seen.add(id); ids.push(id); }
+  (async () => {
+    for (const id of ids) {
+      try { await preloadConversation(id); } catch (_) { /* background preload failure is non-fatal */ }
+    }
+  })();
+}
+
+async function preloadConversation(id) {
+  const found = findConversation(id);
+  if (!found || found.conversation.messages_loaded === true) return;
+  const conversation = await invoke('get_conversation', { conversation_id: id });
+  const target = findConversation(id);
+  if (!target) return;
+  Object.assign(target.conversation, conversation);
+  const baseline = state.persistedData && conversationInData(state.persistedData, id);
+  if (baseline) Object.assign(baseline, structuredClone(conversation));
+  state.preloaded.set(id, Date.now());
 }
 
 function rememberNavigation(id) {
@@ -886,7 +927,7 @@ function messageEl(m, index) {
 
 function renderMessages() {
   $('#model-select').disabled = state.busy || state.changingModel;
-  $('#composer-attach').disabled = state.busy || state.preparing || state.loadingConversation;
+  $('#composer-attach').disabled = state.preparing || state.loadingConversation;
   voiceUi();
   renderActivity();
   const box = $('#messages');
@@ -940,7 +981,7 @@ function stopTimer() {
 async function requestChat(payload) {
   const id = payload.conversation_id;
   if (state.runs.get(id)?.pending || voice.pending || voice.recording || voice.transcribing || voice.nativeOperation) return false;
-  const run = {pending:true, since:Date.now(), messages:structuredClone(state.messages), usage:null, failedSend:null};
+  const run = {pending:true, since:Date.now(), messages:structuredClone(state.messages), usage:null, failedSend:null, stopping:false};
   state.runs.set(id, run);state.messages = run.messages;state.failedSend = null;state.unread.delete(id);
   closeChoiceMenus();startTimer();renderMessages();renderSidebar();
   try {
@@ -951,6 +992,7 @@ async function requestChat(payload) {
     run.saved = {...saved, messages:result.messages, messages_loaded:true};
     const target = findConversation(id)?.conversation;if (target) Object.assign(target, run.saved);
     const baseline = state.persistedData && conversationInData(state.persistedData, id);if (baseline) Object.assign(baseline, structuredClone(run.saved));
+    if (result.cancelled && state.activeConversationId === id) composerStatus(t('chat.stopped'));
     return true;
   } catch (e) {
     await finishLiveTurn(run);
@@ -966,7 +1008,8 @@ async function requestChat(payload) {
       state.messages = run.messages;state.lastUsage = run.usage;state.failedSend = run.failedSend;
       renderMessages();updateContextInfo();
     }
-    renderSidebar();
+    renderSidebar();updateComposerControls();
+    flushQueue(id);
   }
 }
 
@@ -975,23 +1018,103 @@ async function regenerateReply() {
   await requestChat({conversation_id:state.activeConversationId,content:'',retry:true});
 }
 
+// ===== Nome della chat =====
+// Il titolo nasce dal primo messaggio, subito: non a risposta conclusa.
+function titleFromMessage(text, attachments) {
+  const source = text.trim() ? text : (attachments?.[0]?.name || 'Chat');
+  const title = Array.from(source.replace(/\s+/g, ' ').trim()).slice(0, 40).join('');
+  return title || 'Chat';
+}
+
+function nameConversationFromMessage(id, text, attachments, editIndex) {
+  const found = findConversation(id);
+  if (!found || editIndex !== null || state.messages.length) return;
+  const title = titleFromMessage(text, attachments);
+  if (found.conversation.title === title) return;
+  found.conversation.title = title;
+  renderMessages();
+  renderSidebar();
+  persist();
+}
+
+// ===== Invio, coda e stop =====
+function composerHasContent() {
+  return !!$('#composer-input').value.trim() || state.attachments.length > 0;
+}
+
+function updateComposerControls() {
+  const send = $('#composer-send'), stop = $('#composer-stop');
+  const dictating = voice.pending || voice.transcribing || (!!voice.nativeOperation && !voice.recording);
+  const notReady = state.preparing || state.loadingConversation || state.changingModel || activeConversation()?.conversation.messages_loaded === false;
+  const busy = state.busy, run = state.runs.get(state.activeConversationId);
+  // Composer vuoto durante un turno: solo Stop. Con un messaggio scritto: Stop e Invia (accodato).
+  stop.hidden = !busy;
+  stop.disabled = !busy || notReady || dictating || !!run?.stopping;
+  send.hidden = busy && !composerHasContent();
+  send.disabled = notReady || dictating;
+  const label = t(busy ? 'chat.queue_send' : 'titlebar.send');
+  send.setAttribute('aria-label', label);
+  send.title = label;
+}
+
+function canStartRequest(id) {
+  return !!id && !state.runs.get(id)?.pending && !state.preparing && !voice.pending && !voice.recording && !voice.transcribing && !voice.nativeOperation;
+}
+
+async function dispatchMessage(id, message) {
+  if (id === state.activeConversationId) {
+    composerStatus();
+    if (message.edit_index !== null && message.edit_index !== undefined) state.messages = state.messages.slice(0, message.edit_index);
+    state.messages.push({role:'user', content:message.content, attachments:message.attachments});
+    renderMessages();
+  }
+  await requestChat({conversation_id:id, content:message.content, attachments:message.attachments, edit_index:message.edit_index});
+}
+
+// I messaggi accodati partono uno alla volta, appena la conversazione torna libera.
+function flushQueue(id = state.activeConversationId) {
+  const queue = state.queues.get(id);
+  if (!queue?.length || !canStartRequest(id)) return;
+  const [message] = queue.splice(0, 1);
+  if (!queue.length) state.queues.delete(id);
+  dispatchMessage(id, message);
+}
+
+async function stopChat() {
+  const id = state.activeConversationId, run = state.runs.get(id);
+  if (!id || !run?.pending || run.stopping) return;
+  run.stopping = true;
+  composerStatus(t('chat.stopping'));
+  updateComposerControls();
+  try { await invoke('stop_chat', {conversation_id:id}); }
+  catch (e) { if (!errText(e).includes('chat_not_running')) composerStatus(localizeError(e)); }
+}
+
 async function send() {
   if (voice.recording) return stopVoice(true);
-  if (state.busy || state.preparing || state.loadingConversation || activeConversation()?.conversation.messages_loaded === false || state.changingModel || voice.pending || voice.recording || voice.transcribing || voice.nativeOperation) return;
+  if (state.preparing || state.loadingConversation || activeConversation()?.conversation.messages_loaded === false || state.changingModel || voice.pending || voice.transcribing || voice.nativeOperation) return;
   const input = $('#composer-input'), text = input.value.trim();
   const attachments = structuredClone(state.attachments), editIndex = state.editingMessageIndex;
   if (!text && !attachments.length) return;
   if (!state.activeConversationId) {
-    state.preparing = true;$('#composer-send').disabled = true;$('#project-select').disabled = true;
+    state.preparing = true;$('#project-select').disabled = true;updateComposerControls();
     try {await ensureConversation();}
-    finally {state.preparing=false;$('#composer-send').disabled=false;$('#project-select').disabled=false;}
+    finally {state.preparing=false;$('#project-select').disabled=false;updateComposerControls();}
   }
-  if (!state.activeConversationId) return;
-  input.value = '';autoGrow(input);state.attachments=[];state.editingMessageIndex=null;renderDraft();
-  if (editIndex !== null) state.messages = state.messages.slice(0,editIndex);
-  state.messages.push({role:'user',content:text,attachments});
-  $('#composer-input').focus();
-  await requestChat({conversation_id:state.activeConversationId,content:text,attachments,edit_index:editIndex});
+  const id = state.activeConversationId;
+  if (!id) return;
+  input.value = '';autoGrow(input);state.attachments=[];state.editingMessageIndex=null;renderDraft();composerStatus();
+  nameConversationFromMessage(id, text, attachments, editIndex);
+  input.focus();
+  const message = {content:text, attachments, edit_index:editIndex};
+  if (state.runs.get(id)?.pending) {
+    const queue = state.queues.get(id) || [];
+    queue.push(message);state.queues.set(id, queue);
+    composerStatus(t('chat.queued'));
+    updateComposerControls();
+    return;
+  }
+  await dispatchMessage(id, message);
 }
 
 function composerStatus(message = '') {$('#composer-status').textContent=message;$('#composer-status').hidden=!message;}
@@ -1005,11 +1128,11 @@ function renderDraft() {
     chip.append(icon('file'),name,messageAction('close','chat.remove_attachment',()=>{state.attachments.splice(index,1);renderDraft();}));list.appendChild(chip);
   }
   list.hidden=!state.attachments.length;$('#attachment-note').hidden=!state.attachments.length;
-  $('#editing-message').hidden=state.editingMessageIndex===null;
+  $('#editing-message').hidden=state.editingMessageIndex===null;updateComposerControls();
 }
 
 async function attachFiles() {
-  if (state.busy || state.preparing) return;
+  if (state.preparing || state.loadingConversation) return;
   $('#composer-attach').disabled=true;composerStatus();
   try {
     const files=await invoke('choose_chat_files');
@@ -1040,9 +1163,14 @@ function autoGrow(ta) {
   ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
 }
 
+function activeModel() {
+  const conversation = activeConversation()?.conversation;
+  return conversation?.model || state.config.active_model;
+}
+
 // ===== Modello =====
 function populateModelSelect() {
-  const cur = state.config.active_model;
+  const cur = activeModel();
   const models = new Map((state.config.providers || []).flatMap(provider => provider.models.map(model => [model.id, { provider, model }])));
   const label = id => models.has(id) ? `${models.get(id).provider.name} · ${models.get(id).model.model}` : id || t('chat.model');
   const contents = id => {
@@ -1074,7 +1202,15 @@ function populateModelSelect() {
 }
 
 async function onModelChange(model) {
-  if (state.busy) return;
+  if (state.busy || state.changingModel) return;
+  const conversation = activeConversation()?.conversation;
+  const current = activeModel();
+  if (model === current) return;
+  if (conversation) {
+    if (!(await confirmModelChange())) { populateModelSelect(); return; }
+    await applyConversationModel(model);
+    return;
+  }
   const trigger = $('#model-select');
   state.changingModel = true;
   trigger.disabled = true;
@@ -1090,6 +1226,41 @@ async function onModelChange(model) {
     $('#composer-send').disabled = false;
     trigger.focus();
   }
+}
+
+async function applyConversationModel(model) {
+  const id = state.activeConversationId;
+  const trigger = $('#model-select');
+  state.changingModel = true;
+  trigger.disabled = true;
+  $('#composer-send').disabled = true;
+  try {
+    const data = await invoke('set_conversation_model', { conversation_id: id, model });
+    state.data = data;
+    state.persistedData = structuredClone(data);
+    const found = findConversation(id);
+    if (found && state.activeConversationId === id) {
+      state.messages = (found.conversation.messages || []).slice();
+      renderMessages(); updateContextInfo();
+    }
+  } catch (e) {
+    showError(localizeError(e));
+  } finally {
+    populateModelSelect();
+    trigger.disabled = state.busy;
+    state.changingModel = false;
+    $('#composer-send').disabled = false;
+    trigger.focus();
+  }
+}
+
+function confirmModelChange() {
+  const dialog = $('#model-confirm');
+  return new Promise(resolve => {
+    dialog.onclose = () => resolve(dialog.returnValue === 'switch');
+    dialog.returnValue = 'stay';
+    dialog.showModal();
+  });
 }
 
 function choiceOption(label, checked, onSelect) {
@@ -1313,7 +1484,7 @@ async function init() {
 
   // Composer
   const input = $('#composer-input');
-  input.addEventListener('input', () => autoGrow(input));
+  input.addEventListener('input', () => {autoGrow(input);updateComposerControls();});
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -1321,6 +1492,7 @@ async function init() {
     }
   });
   $('#composer-send').addEventListener('click', send);
+  $('#composer-stop').addEventListener('click', stopChat);
   setupChoiceMenu('model');
   setupChoiceMenu('project');
   setupChoiceMenu('permission');
@@ -1436,6 +1608,7 @@ async function enterChat() {
   }
   $('#sidebar').hidden = false;
   showView('chat');
+  preloadRecentConversations(state.activeConversationId);
 }
 
 init().catch(e => { showView('onboarding'); console.error('UI initialization failed'); }).finally(() => { $('#boot-splash').hidden = true; });
