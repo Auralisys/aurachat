@@ -25,6 +25,7 @@ exports.completionPush = onDocumentCreated({
   }
   const db = getFirestore();
   const phones = await db.collection(`users/${uid}/phones`).get();
+  if (phones.empty) console.warn('Push has no registered devices', { eventId });
   await Promise.all(phones.docs.map(async (phone) => {
     const fid = phone.get('fid');
     if (typeof fid !== 'string' || !fid) return;
@@ -32,11 +33,13 @@ exports.completionPush = onDocumentCreated({
     const delivery = event.data.ref.collection('deliveries').doc(fingerprint);
     if ((await delivery.get()).exists) return;
     try {
-      await getMessaging().send({ ...payload, fid });
+      const messageId = await getMessaging().send({ ...payload, fid });
       // FCM is at-least-once. The stable Android tag replaces a possible retry
       // notification if the process dies between send and this receipt.
-      await delivery.set({ sent_at: Date.now() });
+      await delivery.set({ sent_at: Date.now(), message_id: messageId, platform: phone.get('platform') || 'unknown' });
+      console.info('Push accepted by FCM', { eventId, platform: phone.get('platform') || 'unknown' });
     } catch (error) {
+      console.error('Push delivery failed', { eventId, platform: phone.get('platform') || 'unknown', code: error.code || 'unknown' });
       if (['messaging/installation-id-not-registered', 'messaging/registration-token-not-registered', 'messaging/invalid-registration-token'].includes(error.code)) {
         await db.runTransaction(async (transaction) => {
           const current = await transaction.get(phone.ref);

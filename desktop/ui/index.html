@@ -6,6 +6,7 @@
     <title>AuraChat</title>
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="activity.css" />
+    <link rel="stylesheet" href="skills.css" />
   </head>
   <body>
     <div class="backdrop" aria-hidden="true"></div>
@@ -98,8 +99,14 @@
             <div class="composer">
               <div id="editing-message" class="editing-message" hidden><span data-i18n="chat.editing"></span><button id="cancel-edit" class="icon-button" data-i18n-aria-label="project.cancel"><svg data-icon="close" aria-hidden="true"></svg></button></div>
               <div class="composer__box">
+                <div id="skill-chooser" class="skill-chooser" hidden>
+                  <p id="skill-title" class="skill-chooser__title" data-i18n="skills.title"></p>
+                  <div id="skill-options" class="skill-options" role="listbox" aria-labelledby="skill-title"></div>
+                  <p id="skill-status" class="skill-chooser__status" role="status" aria-live="polite"></p>
+                  <button id="skill-retry" type="button" class="skill-chooser__retry" data-i18n="skills.retry" hidden></button>
+                </div>
                 <div id="composer-attachments" class="composer-attachments" hidden></div>
-                <textarea id="composer-input" class="composer__input" rows="1" data-i18n-aria-label="chat.placeholder" data-i18n-placeholder="chat.placeholder" placeholder=""></textarea>
+                <textarea id="composer-input" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="skill-options" class="composer__input" rows="1" data-i18n-aria-label="chat.placeholder" data-i18n-placeholder="chat.placeholder" placeholder=""></textarea>
                 <div class="composer__toolbar"><button id="composer-attach" class="icon-button composer__attach" data-i18n-aria-label="chat.attach" data-i18n-title="chat.attach"><svg data-icon="plus" aria-hidden="true"></svg></button><div id="permission-control" class="permission-control" hidden><button id="permission-select" class="model-select__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="permission-menu" data-i18n-title="permissions.title" data-i18n-aria-label="permissions.title"><svg data-icon="shield" aria-hidden="true"></svg><span id="permission-name"></span></button><div id="permission-menu" class="model-menu permission-menu" role="menu" data-i18n-aria-label="permissions.title" hidden></div></div><div id="voice-recording" class="voice-recording" hidden><button id="voice-recording-cancel" type="button" class="icon-button" data-i18n-aria-label="voice.cancel" data-i18n-title="voice.cancel"><svg data-icon="close" aria-hidden="true"></svg></button><span id="voice-recording-status" class="sr-only" role="status"></span><canvas id="voice-waveform" height="32" aria-hidden="true"></canvas><button id="voice-stop" type="button" class="icon-button" data-i18n-aria-label="voice.stop" data-i18n-title="voice.stop"><svg data-icon="stop" aria-hidden="true"></svg></button></div><div class="model-select">
                   <button id="model-select" class="model-select__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="model-menu" data-i18n-aria-label="chat.model"><span id="model-name"></span><svg data-icon="chevron" aria-hidden="true"></svg></button>
                   <div id="model-menu" class="model-menu" role="menu" data-i18n-aria-label="chat.model" hidden></div>
@@ -195,6 +202,8 @@
     <script src="chat-progress.js"></script>
     <script src="icons.js"></script>
     <script src="settings.js"></script>
+    <script src="skills.js"></script>
+    <script src="queue.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

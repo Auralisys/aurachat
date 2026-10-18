@@ -14,6 +14,11 @@ pub fn notification_preview(text: &str, limit: usize) -> String {
     preview
 }
 
+fn device_identity_id(computer:&str,user:&str)->String {
+    // Windows computer/user names are case-insensitive, unlike the hash input.
+    format!("windows-{:x}",Sha256::digest(format!("{}/{}",computer.trim().to_lowercase(),user.trim().to_lowercase()).as_bytes()))
+}
+
 pub fn identity() -> (String, String) {
     static IDENTITY:std::sync::OnceLock<(String,String)>=std::sync::OnceLock::new();
     IDENTITY.get_or_init(|| {
@@ -24,7 +29,7 @@ pub fn identity() -> (String, String) {
         command.output().ok().filter(|result|result.status.success()).and_then(|result|String::from_utf8(result.stdout).ok()).map(|name|name.trim().to_string()).filter(|name|!name.is_empty()).unwrap_or_else(||"PC".into())
     });
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "Windows".into());
-    let id = format!("windows-{:x}", Sha256::digest(format!("{computer}/{user}").as_bytes()));
+    let id = device_identity_id(&computer,&user);
     (id, format!("{user} · {computer}"))
     }).clone()
 }
@@ -47,6 +52,7 @@ struct LiveTurn {
     content: String,
     reasoning: String,
     activity: Vec<Value>,
+    segments: Vec<Value>,
     started_at: u64,
     finished_at: Option<u64>,
     updated_at: u64,
@@ -69,12 +75,28 @@ impl LiveTurn {
     }
     fn apply_progress(&mut self, kind: &str, text: &str, now: u64) {
         match kind {
+            "__steering" => {
+                let Ok(message)=serde_json::from_str::<Value>(text) else {return};
+                if message["role"]!="user" || !message["content"].is_string(){return;}
+                if !self.content.is_empty() || !self.activity.is_empty() {
+                    self.segments.push(json!({"role":"assistant","content":std::mem::take(&mut self.content),"reasoning":std::mem::take(&mut self.reasoning),"activity":std::mem::take(&mut self.activity)}));
+                }
+                self.segments.push(message);
+            },
             "__delta" => self.content.push_str(text),
-            "__reasoning" => self.reasoning.push_str(text),
+            "__reasoning" => {
+                self.reasoning.push_str(text);
+                let offset=self.content.encode_utf16().count();
+                if self.activity.last().is_none_or(|event| event["kind"]!="reasoning" || event["offset"].as_u64()!=Some(offset as u64)) {
+                    self.activity.push(json!({"kind":"reasoning","text":"","offset":offset,"at":now}));
+                }
+                let event=self.activity.last_mut().unwrap();
+                let mut value=event["text"].as_str().unwrap_or("").to_string();value.push_str(text);event["text"]=value.into();
+            },
             "__activity" => {
                 let Ok(mut event) = serde_json::from_str::<Value>(text) else { return };
                 if event["kind"].as_str() != Some("tool") || event["id"].as_str().is_none() { return; }
-                event["offset"] = serde_json::json!(self.content.chars().count());
+                event["offset"] = serde_json::json!(self.content.encode_utf16().count());
                 upsert_activity(&mut self.activity, event);
             }
             _ => return,
@@ -84,12 +106,12 @@ impl LiveTurn {
     fn apply_agent(&mut self, mut agent: Value, now: u64) {
         if agent["id"].as_str().is_none() { return; }
         agent["kind"] = serde_json::json!("agent");
-        agent["offset"] = serde_json::json!(self.content.chars().count());
+        agent["offset"] = serde_json::json!(self.content.encode_utf16().count());
         upsert_activity(&mut self.activity, agent);
         self.touch(now);
     }
     fn document(&self, conversation: &str) -> Value {
-        serde_json::json!({
+        let mut document=serde_json::json!({
             "conversation_id": conversation,
             "turn_id": self.turn_id,
             "status": self.status,
@@ -97,10 +119,31 @@ impl LiveTurn {
             "content": truncate_chars(&self.content, LIVE_MAX_CONTENT),
             "reasoning": truncate_chars(&self.reasoning, LIVE_MAX_REASONING),
             "activity": self.activity.iter().rev().take(LIVE_MAX_ACTIVITY).rev().map(sanitize_activity).collect::<Vec<_>>(),
+            "segments": self.segments.iter().rev().take(32).rev().map(|segment| {
+                let events=segment["activity"].as_array();
+                json!({"role":segment["role"],"content":truncate_chars(segment["content"].as_str().unwrap_or(""),LIVE_MAX_CONTENT),
+                    "reasoning":truncate_chars(segment["reasoning"].as_str().unwrap_or(""),LIVE_MAX_REASONING),
+                    "activity":events.map(|events| events.iter().rev().take(LIVE_MAX_ACTIVITY).rev().map(sanitize_activity).collect::<Vec<_>>()).unwrap_or_default(),
+                    "truncated":segment["content"].as_str().unwrap_or("").chars().count()>LIVE_MAX_CONTENT || events.is_some_and(|events|events.len()>LIVE_MAX_ACTIVITY)})
+            }).collect::<Vec<_>>(),
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "updated_at": self.updated_at,
-        })
+            "truncated": self.segments.len()>32 || self.activity.len()>LIVE_MAX_ACTIVITY || self.content.chars().count()>LIVE_MAX_CONTENT || self.reasoning.chars().count()>LIVE_MAX_REASONING,
+        });
+        // Firestore limits bytes, including escaped JSON and nested agent details.
+        while serde_json::to_vec(&document).map_or(usize::MAX,|bytes|bytes.len())>750_000 {
+            document["truncated"]=json!(true);
+            let segments=document["segments"].as_array_mut().unwrap();
+            if !segments.is_empty(){segments.remove(0);continue;}
+            let activity=document["activity"].as_array_mut().unwrap();
+            if !activity.is_empty(){activity.remove(0);continue;}
+            for key in ["content","reasoning"] {
+                let text=document[key].as_str().unwrap_or("");
+                document[key]=json!(truncate_chars(text,text.chars().count()/2));
+            }
+        }
+        document
     }
 }
 
@@ -112,6 +155,21 @@ fn upsert_activity(list: &mut Vec<Value>, event: Value) {
     }
 }
 
+fn update_shell_activity(list:&mut [Value],snapshot:&Value)->bool {
+    if snapshot["id"].as_str().is_none(){return false;}
+    let mut changed=false;
+    for event in list {
+        if !event.is_object(){continue;}
+        let result=event["output"].as_str().and_then(|text|serde_json::from_str::<Value>(text).ok());
+        if event["kind"]=="tool" && matches!(event["action"].as_str(),Some("execute_project_command"|"inspect_project_command"))
+            && (event["shell_id"]==snapshot["id"] || result.as_ref().is_some_and(|value|value["id"]==snapshot["id"])) {
+            event["status"]=snapshot["status"].clone();event["output"]=json!(snapshot.to_string());changed=true;
+        }
+        if let Some(nested)=event["activity"].as_array_mut() {changed|=update_shell_activity(nested,snapshot);}
+    }
+    changed
+}
+
 fn truncate_chars(text: &str, max: usize) -> String {
     if text.chars().count() <= max { return text.to_string(); }
     let mut value: String = text.chars().take(max).collect();
@@ -121,7 +179,7 @@ fn truncate_chars(text: &str, max: usize) -> String {
 
 /// Keeps the live document small: only fields the phone displays.
 fn sanitize_activity(event: &Value) -> Value {
-    const KEYS: &[&str] = &["kind", "id", "action", "path", "title", "status", "summary", "task", "model", "text", "content", "reasoning_content"];
+    const KEYS: &[&str] = &["kind", "id", "action", "path", "title", "status", "summary", "task", "model", "text", "content", "reasoning_content", "offset", "at", "reason", "reviewer", "output", "exit_code", "shell_id", "command", "cwd"];
     let mut value = serde_json::Map::new();
     for key in KEYS {
         match event.get(*key) {
@@ -129,6 +187,16 @@ fn sanitize_activity(event: &Value) -> Value {
             Some(item @ (Value::Bool(_) | Value::Number(_))) => { value.insert((*key).into(), item.clone()); }
             _ => {}
         }
+    }
+    if let Some(arguments)=event.get("arguments") {
+        let text=arguments.to_string();
+        value.insert("arguments".into(),if text.chars().count()<=LIVE_MAX_FIELD {arguments.clone()} else {json!(truncate_chars(&text,LIVE_MAX_FIELD))});
+    }
+    if let Some(activity)=event["activity"].as_array() {
+        // Child tools do not contain further subagents.
+        value.insert("activity".into(),Value::Array(activity.iter().rev().take(8).rev().map(|item| {
+            let mut item=item.clone();item.as_object_mut().map(|map|map.remove("activity"));sanitize_activity(&item)
+        }).collect()));
     }
     // Shell commands carry the executed program only inside `arguments`.
     if let Some(arguments) = event["arguments"].as_object() {
@@ -146,7 +214,7 @@ fn viewing_match(viewing: Option<&str>, focused: bool, conversation: &str) -> bo
     focused && viewing == Some(conversation)
 }
 
-/// A completion notice is redundant only while the user is looking at that chat
+/// A local completion toast is redundant only while the user is looking at that chat
 /// in the focused window. A background window, minimize or tray still notifies.
 pub fn chat_visible(app: &tauri::AppHandle, state: &AppState, conversation: &str) -> bool {
     let focused = app.get_webview_window("main").and_then(|window| window.is_focused().ok()).unwrap_or(false);
@@ -157,8 +225,10 @@ pub fn notify(app: &tauri::AppHandle, kind: &str, id: &str, conversation: &str, 
     let state=app.state::<AppState>();
     let Some(uid)=state.firestore.uid() else { return; };
     let auth=match crate::firebase_auth(&state) {Ok(a)=>a,Err(_)=>return};
-    // OS notifications are independent of the webview's focus and visibility.
-    if let Err(e)=app.notification().builder().title(title).body(body).show() { eprintln!("Windows notification: {e}"); }
+    // Desktop attention only controls the local toast; phones have their own visibility.
+    if kind != "chat" || !chat_visible(app,&state,conversation) {
+        if let Err(e)=app.notification().builder().title(title).body(body).show() { eprintln!("Windows notification: {e}"); }
+    }
     let (device_id, device_name)=identity();
     let event_id=format!("{:x}", Sha256::digest(format!("{uid}/{device_id}/{kind}/{id}").as_bytes()));
     let value=json!({"kind":kind,"title":title,"body":body,"conversation_id":conversation,
@@ -258,6 +328,27 @@ pub fn start(app: &tauri::AppHandle) {
             if let Some(turn)=live.lock().unwrap().get_mut(id) {turn.apply_agent(value,data::now_millis());}
         });
     }
+    {
+        let live=live.clone();
+        app.listen("approval-activity",move |event| {
+            let Ok(mut value)=serde_json::from_str::<Value>(event.payload()) else{return};
+            let Some(id)=value["conversation_id"].as_str().map(str::to_owned) else{return};
+            if let Some(turn)=live.lock().unwrap().get_mut(&id) {
+                value["kind"]=json!("approval");value["offset"]=json!(turn.content.encode_utf16().count());
+                upsert_activity(&mut turn.activity,value);turn.touch(data::now_millis());
+            }
+        });
+    }
+    {
+        let live=live.clone();
+        app.listen("shell-activity",move |event| {
+            let Ok(snapshot)=serde_json::from_str::<Value>(event.payload()) else{return};
+            let Some(id)=snapshot["conversation_id"].as_str() else{return};
+            if let Some(turn)=live.lock().unwrap().get_mut(id) {
+                if update_shell_activity(&mut turn.activity,&snapshot){turn.touch(data::now_millis());}
+            }
+        });
+    }
     let live_publisher=app.clone();
     tauri::async_runtime::spawn(async move {
         loop {
@@ -337,11 +428,21 @@ async fn heartbeat_once(app:&tauri::AppHandle)->Result<(),String>{
     let project_ids:Vec<String>=state.data.lock().unwrap().projects.iter().map(|p|p.id.clone()).collect();
     let project_permissions:serde_json::Map<String,Value>={
         let permissions=state.permissions.lock().unwrap();
-        project_ids.into_iter().map(|id|{let mode=permissions.get(&uid,&id);(id,json!(mode))}).collect()
+        project_ids.iter().map(|id|{let mode=permissions.get(&uid,id);(id.clone(),json!(mode))}).collect()
     };
     let isolated=state.firestore.companion_isolated(&auth).await?;
+    let mut skills=serde_json::Map::new();
+    if isolated {
+        for project in &project_ids {
+            let mut catalog=crate::project_skill_catalog(app,&uid,project).await?;
+            if let Some(items)=catalog["skills"].as_array_mut() {
+                if items.len()>50 {items.truncate(50);catalog["truncated"]=json!(true);}
+            }
+            skills.insert(project.clone(),catalog);
+        }
+    }
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/devices/{id}"),
-        &json!({"name":name,"platform":"windows","last_seen":data::now_millis(),"protocol":2,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"project_permissions":project_permissions})).await?;
+        &json!({"name":name,"platform":"windows","identity_version":2,"last_seen":data::now_millis(),"protocol":3,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"project_permissions":project_permissions,"project_skills":skills})).await?;
     let tree=state.data.lock().unwrap().storage_tree()?;
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/companion/state"),&json!({"tree":tree})).await?;
     let outbox=state.config_dir.join("notification-outbox").join(&uid);
@@ -403,6 +504,9 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
     if data::now_millis().saturating_sub(created)>300_000{return Err("request_expired".into());}
     match request["action"].as_str().unwrap_or("chat") {
         "stop"=>return state.chat_runs.stop(uid,id),
+        "steer"=>return crate::steer_chat(app.state::<AppState>(),id.into(),request["content"].as_str().ok_or("empty_message")?.into(),None),
+        "stop_agent"=>return crate::stop_subagent(app.state::<AppState>(),app.state::<crate::agent_runs::AgentRuns>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["agent_id"].as_str().ok_or("invalid_agent")?.into()).await,
+        "stop_shell"=>return crate::stop_shell(app.state::<AppState>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["shell_id"].as_str().ok_or("invalid_shell")?.into()).await.map(|_|()),
         "approve"=>return app.state::<crate::approvals::Approvals>().resolve(uid,id,request["approval_id"].as_str().ok_or("invalid_approval")?,request["allow"].as_bool().ok_or("invalid_decision")?),
         "model"=>return crate::set_conversation_model(app.state::<AppState>(),id.into(),request["model"].as_str().ok_or("invalid_model")?.into()).await.map(|_|()),
         "permission"=>{
@@ -466,6 +570,10 @@ fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,Strin
         assert_eq!(notification_preview("Breve", 200), "Breve");
     }
     #[test]fn identity_stays_stable(){let (id,name)=identity();assert!(data::valid_id(&id).is_ok());assert!(!name.is_empty());assert_eq!(identity().0,id);}
+    #[test]fn windows_identity_is_independent_of_launch_environment_case(){
+        assert_eq!(device_identity_id("Ridney","lofio"),device_identity_id("RIDNEY","LOFIO"));
+        assert_ne!(device_identity_id("Ridney","lofio"),device_identity_id("other","lofio"));
+    }
     #[test]fn completion_notice_skips_only_the_focused_open_chat(){
         assert!(viewing_match(Some("c"),true,"c"));
         assert!(!viewing_match(Some("c"),false,"c"));
@@ -481,9 +589,37 @@ fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,Strin
         turn.apply_agent(serde_json::json!({"id":"a1","title":"Sub","status":"running","content":"x"}),6);
         turn.apply_agent(serde_json::json!({"id":"a1","title":"Sub","status":"completed","content":"y"}),7);
         assert_eq!(turn.content,"Ciao");assert_eq!(turn.reasoning,"Penso");
-        assert_eq!(turn.activity.len(),2);assert_eq!(turn.activity[0]["status"],"completed");assert_eq!(turn.activity[1]["kind"],"agent");
+        assert_eq!(turn.activity.len(),3);assert_eq!(turn.activity[0]["kind"],"reasoning");assert_eq!(turn.activity[1]["status"],"completed");assert_eq!(turn.activity[2]["kind"],"agent");
         let live=turn.document("c");
-        assert_eq!(live["user_content"],"Domanda");assert_eq!(live["status"],"running");assert_eq!(live["activity"].as_array().unwrap().len(),2);
+        assert_eq!(live["user_content"],"Domanda");assert_eq!(live["status"],"running");assert_eq!(live["activity"].as_array().unwrap().len(),3);
         turn.finish("completed",8);assert_eq!(turn.document("c")["status"],"completed");assert_eq!(turn.finished_at,Some(8));
+    }
+    #[test]fn live_details_preserve_utf16_offsets_and_nested_tools(){
+        let mut turn=LiveTurn::running(1,Some("u".into()),"t","Q");
+        turn.apply_progress("__delta","🌍",2);
+        turn.apply_progress("__reasoning","Check",3);
+        turn.apply_agent(json!({"id":"a","activity":[{"id":"cmd","kind":"tool","arguments":{"program":"git","arguments":["status"]},"output":"clean"}]}),4);
+        let value=turn.document("c");
+        assert_eq!(value["activity"][0]["offset"],2);
+        assert_eq!(value["activity"][1]["activity"][0]["output"],"clean");
+        assert_eq!(value["activity"][1]["activity"][0]["arguments"]["program"],"git");
+        assert!(serde_json::to_vec(&value).unwrap().len()<750_000);
+    }
+    #[test]fn live_guidance_splits_chronology_and_resets_offsets(){
+        let mut turn=LiveTurn::running(1,Some("u".into()),"t","Original");
+        turn.apply_progress("__delta","Before",2);
+        turn.apply_progress("__reasoning","Check",3);
+        turn.apply_progress("__steering",r#"{"role":"user","content":"Change direction","attachments":[]}"#,4);
+        turn.apply_progress("__reasoning","New plan",5);
+        turn.apply_progress("__delta","After",6);
+        let document=turn.document("c");
+        assert_eq!(document["user_content"],"Original");
+        assert_eq!(document["segments"][0]["content"],"Before");
+        assert_eq!(document["segments"][1]["role"],"user");
+        assert_eq!(document["segments"][1]["content"],"Change direction");
+        assert_eq!(document["content"],"After");
+        assert_eq!(document["activity"][0]["offset"],0);
+        turn.apply_progress("__steering","malformed",7);
+        assert_eq!(turn.document("c")["segments"].as_array().unwrap().len(),2);
     }
 }

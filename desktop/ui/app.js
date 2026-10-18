@@ -10,6 +10,8 @@ function reportViewingChat(id) {
   invoke('set_viewing_chat', { conversation_id: id ?? null }).catch(() => {});
 }
 
+let skillsChooser = null;
+
 const DEFAULT_CONFIG = {
   firebase_project_id: '',
   firebase_api_key: '',
@@ -892,6 +894,7 @@ function messageEl(m, index) {
   const role = m.role === 'user' ? 'user' : m.role === 'error' ? 'error' : 'assistant';
   const el = document.createElement('article');el.className = 'msg msg--' + role;
   el.setAttribute('aria-label',t(role === 'user' ? 'chat.you' : role === 'assistant' ? 'chat.assistant' : 'chat.error_label'));
+  if (m.guidance) {const guide = document.createElement('span');guide.className = 'msg__state msg__state--guide';guide.textContent = t('chat.guide');el.prepend(guide);}
   const text = document.createElement('div');text.className = 'msg__text';
   if (role === 'assistant') {
     text.classList.add('markdown');renderTurnBody(text, m);
@@ -952,6 +955,7 @@ function renderMessages() {
     return;
   }
   state.messages.forEach((message,index) => box.appendChild(messageEl(message,index)));
+  renderQueuedMessages(box, state.activeConversationId);
   if (state.busy) {
     const pending = document.createElement('article');pending.className = 'msg msg--assistant msg--stream';
     pending.setAttribute('aria-label', t('chat.assistant'));
@@ -989,13 +993,13 @@ function stopTimer() {
 async function requestChat(payload) {
   const id = payload.conversation_id;
   if (state.runs.get(id)?.pending || voice.pending || voice.recording || voice.transcribing || voice.nativeOperation) return false;
-  const run = {pending:true, since:Date.now(), messages:structuredClone(state.messages), usage:null, failedSend:null, stopping:false};
+  const run = {pending:true, since:Date.now(), messages:structuredClone(state.messages), usage:null, failedSend:null, stopping:false, initialMessageCount:state.messages.length, pendingGuidance:[], guidanceEvents:[]};
   state.runs.set(id, run);state.messages = run.messages;state.failedSend = null;state.unread.delete(id);
   closeChoiceMenus();startTimer();renderMessages();renderSidebar();
   try {
     const result = await invoke('chat',payload);
     await finishLiveTurn(run);
-    run.messages = result.messages;run.usage = result.usage;run.completedEpoch = ++state.resultEpoch;
+    run.messages = markGuidanceHistory(run, result.messages);run.usage = result.usage;run.completedEpoch = ++state.resultEpoch;run.queueOutcome = result.cancelled ? 'cancelled' : 'completed';
     const saved = conversationInData(result.data, id);
     run.saved = {...saved, messages:result.messages, messages_loaded:true};
     const target = findConversation(id)?.conversation;if (target) Object.assign(target, run.saved);
@@ -1006,6 +1010,7 @@ async function requestChat(payload) {
     await finishLiveTurn(run);
     if (run.stream?.content || run.stream?.activity.length) run.messages.push({role:'assistant', content:run.stream.content, activity:run.stream.activity});
     run.messages.push({role:'error',content:localizeError(e)});
+    run.queueOutcome = 'failed';
     if (!payload.retry) run.failedSend = {content:payload.content, attachments:payload.attachments || []};
     return false;
   }
@@ -1017,7 +1022,7 @@ async function requestChat(payload) {
       renderMessages();updateContextInfo();
     }
     renderSidebar();updateComposerControls();
-    flushQueue(id);
+    if (run.queueOutcome === 'completed') flushQueue(id); else if (state.queues.get(id)?.length) queuedTurns.paused.add(id);
   }
 }
 
@@ -1063,6 +1068,7 @@ function updateComposerControls() {
   const label = t(busy ? 'chat.queue_send' : 'titlebar.send');
   send.setAttribute('aria-label', label);
   send.title = label;
+  skillsChooser?.sync();
 }
 
 function canStartRequest(id) {
@@ -1082,7 +1088,7 @@ async function dispatchMessage(id, message) {
 // I messaggi accodati partono uno alla volta, appena la conversazione torna libera.
 function flushQueue(id = state.activeConversationId) {
   const queue = state.queues.get(id);
-  if (!queue?.length || !canStartRequest(id)) return;
+  if (queuedTurns.paused.has(id) || !queue?.length || !canStartRequest(id)) return;
   const [message] = queue.splice(0, 1);
   if (!queue.length) state.queues.delete(id);
   dispatchMessage(id, message);
@@ -1287,6 +1293,7 @@ function populateProjectMenu() {
   refreshPermissions();
   const project = state.data.projects.find(p => p.id === state.pendingProjectId);
   if (!project) state.pendingProjectId = null;
+  skillsChooser?.sync();
   $('#project-name').textContent = project?.name || t('chat.no_project');
   const menu = $('#project-menu');
   const choose = id => {
@@ -1465,7 +1472,7 @@ async function init() {
   setupComposerExtras();
   setupSidebarSections();
   await setupActivity();
-  await appWindow.listen('companion-permissions', () => refreshPermissions());
+  await appWindow.listen('companion-permissions', () => {refreshPermissions();skillsChooser?.invalidate();});
   await appWindow.listen('companion-started', async ({payload}) => {
     const id = payload?.conversation_id;if (!id || state.runs.get(id)?.pending) return;
     const run = {pending:true, external:true, since:Date.now(), messages:[], usage:null};
@@ -1518,9 +1525,11 @@ async function init() {
   $('#btn-new-chat').addEventListener('click', () => newChat());
 
   // Composer
+  skillsChooser = setupProjectSkills();
   const input = $('#composer-input');
   input.addEventListener('input', () => {autoGrow(input);updateComposerControls();});
   input.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented || e.isComposing) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       send();

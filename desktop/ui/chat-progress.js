@@ -19,6 +19,40 @@ function reconcileChildren(parent, nodes) {
   while (parent.children.length > nodes.length) parent.lastElementChild.remove();
 }
 
+// Resolve command activity against the latest native shell snapshot, including events
+// arriving before the tool result. This is a display overlay; it never starts commands.
+function shellProgressItem(item) {
+  if (!['execute_project_command','inspect_project_command'].includes(item.action)) return item;
+  let output;
+  try {output = JSON.parse(item.output || '{}');} catch (_) {output = {};}
+  const id = item.shell_id || output.id;
+  if (typeof id !== 'string') return item;
+  const snapshot = activity.conversations.get(state.activeConversationId)?.shells.get(id);
+  if (!snapshot) return item;
+  if (Number.isFinite(output.revision) && Number.isFinite(snapshot.revision) && output.revision > snapshot.revision) return item;
+  if (['completed','failed','cancelled'].includes(output.status) && ['running','stopping'].includes(snapshot.status)) return item;
+  return {...item, shell_id:id, status:snapshot.status, output:JSON.stringify(snapshot)};
+}
+
+function updateProgressRow(row, original, live, last) {
+  row._progressItem = original;row._progressLive = live;row._progressLast = last;
+  const item = shellProgressItem(original);
+    row.querySelector('.turn-step__label').textContent = progressLabel(item);
+    const status = item.status || (live && last && item.kind === 'reasoning' ? 'running' : 'completed');
+    row.dataset.status = status;row.dataset.kind = item.kind;
+    row.querySelector('.turn-step__status').textContent = item.kind === 'approval' ? approvalLabel(item) : t(`progress.${status}`);
+    row.querySelector('.turn-step__label').classList.toggle('is-working-text',live && ['running','reviewing'].includes(status));
+    const text = item.kind === 'reasoning' ? item.text || '' : item.kind === 'approval' ? [item.reason && (item.reason === 'review_unavailable' ? t('permissions.review_unavailable') : item.reason),JSON.stringify(item.action,null,2)].filter(Boolean).join('\n\n') : [item.arguments && JSON.stringify(item.arguments,null,2),item.output].filter(Boolean).join('\n\n');
+    if (row.lastElementChild.textContent !== text) row.lastElementChild.textContent = text;
+}
+
+function refreshShellProgress(conversationId) {
+  if (conversationId !== state.activeConversationId) return;
+  document.querySelectorAll('#messages .turn-step').forEach(row => {
+    if (row._progressItem) updateProgressRow(row, row._progressItem, row._progressLive, row._progressLast);
+  });
+}
+
 function progressHistory(items, live = false, existing = null) {
   const details = existing || document.createElement('details');details.className = 'turn-history';
   if (!existing) {
@@ -41,13 +75,7 @@ function progressHistory(items, live = false, existing = null) {
       const label = document.createElement('span');label.className = 'turn-step__label';
       const status = document.createElement('span');status.className = 'turn-step__status';title.append(progressIcon(item),label,status);row.append(title,document.createElement(item.kind === 'reasoning' ? 'p' : 'pre'));
     }
-    row.querySelector('.turn-step__label').textContent = progressLabel(item);
-    const status = item.status || (live && index === items.length - 1 && item.kind === 'reasoning' ? 'running' : 'completed');
-    row.dataset.status = status;row.dataset.kind = item.kind;
-    row.querySelector('.turn-step__status').textContent = item.kind === 'approval' ? approvalLabel(item) : t(`progress.${status}`);
-    row.querySelector('.turn-step__label').classList.toggle('is-working-text',live && ['running','reviewing'].includes(status));
-    const text = item.kind === 'reasoning' ? item.text || '' : item.kind === 'approval' ? [item.reason && (item.reason === 'review_unavailable' ? t('permissions.review_unavailable') : item.reason),JSON.stringify(item.action,null,2)].filter(Boolean).join('\n\n') : [item.arguments && JSON.stringify(item.arguments,null,2),item.output].filter(Boolean).join('\n\n');
-    if (row.lastElementChild.textContent !== text) row.lastElementChild.textContent = text;
+    updateProgressRow(row, item, live, index === items.length - 1);
     return row;
   });
   reconcileChildren(list,rows);details.toggleAttribute('data-live-history',live);return details;
@@ -167,7 +195,14 @@ async function setupChatProgress() {
         if (previous) Object.assign(previous, item);else stream.activity.push({...item, offset:stream.content.length});
       } catch (_) {return;}
     }
-    if (state.activeConversationId === payload.conversation_id) {renderThinkingStatus();if (payload.kind !== '__delta') updateLiveTurn();}
+    else if (payload.kind === '__steering') {
+      let message;
+      try { message = JSON.parse(payload.text); } catch (_) { return; }
+      if (!consumeQueuedGuidance(payload.conversation_id, message)) return;
+      if (stream.frame) { cancelAnimationFrame(stream.frame); stream.frame = null; }
+      stream.content = ''; stream.shown = 0; stream.activity = [];
+    }
+    if (state.activeConversationId === payload.conversation_id) {renderThinkingStatus();if (payload.kind === '__steering') {renderMessages();} else if (payload.kind !== '__delta') {updateLiveTurn();}}
   });
   // Retain compatibility with native project events emitted by older builds.
   await appWindow.listen('project-tool-activity', ({payload}) => {

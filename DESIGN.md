@@ -31,3 +31,18 @@ I permessi sono quelli del progetto sul PC selezionato: Richiedi approvazione,
 Approva per me, Accesso completo. Per l'accesso completo serve una conferma
 esplicita; nessun cambio durante un turno del progetto. Le chat libere mostrano
 come accedere ai permessi di progetto, senza simulare impostazioni indipendenti.
+
+## Secondo polish mobile — 18 ottobre 2026
+
+Palette e bolle viola confermate. Header e liste più compatti, gerarchia più
+discreta, composer piatto. Usare i glifi condivisi con desktop (soprattutto
+`new_chat`, cartelle e frecce) anziché le matite Material generiche per Nuova
+chat; evitare azioni ripetute sempre visibili nei progetti chiusi. Origine e
+hash in `mobile/assets/icons/provenance.json`. Il riferimento interazioni è
+anche RDGestureDetector di rdcore: feedback immediato e ripristino al cancel,
+con controlli nativi accessibili. Non introdurre dipendenze path da RD Core.
+
+Cronologia assistant: testo intercalato a gruppi di ragionamento/operazioni,
+dettagli espandibili per comando e agente, nessun reasoning inventato. Il
+loader descrive il passo corrente; gli stati terminali non continuano a girare.
+Slash picker nel composer con skill reali del progetto, stato vuoto esplicito.

@@ -447,8 +447,7 @@ async fn run_chat(
         Ok(_) => ("Risposta pronta", "AuraChat ha terminato la risposta."),
         Err(_) => ("Chat terminata con errore", "Apri AuraChat per controllare il problema."),
     };
-    if state.firestore.uid().as_deref()==Some(notification_owner.as_str())
-        && !companion::chat_visible(&app,&state,&conversation_id) {
+    if state.firestore.uid().as_deref()==Some(notification_owner.as_str()) {
         let chat_title=state.data.lock().unwrap().find_conversation(&conversation_id)
             .map(|chat|chat.title.clone()).filter(|name|!name.trim().is_empty()).unwrap_or_else(||title.into());
         let preview=match &result {
@@ -487,7 +486,8 @@ async fn chat_inner(
     drop(account);
     let user = load_user_cached(&state, &auth, &uid).await?;
     // Registra il turno prima della richiesta, per poterlo fermare dallo stop.
-    let (_turn, stop) = chat_runs::Turn::start(&state.chat_runs, &uid, &conversation_id);
+    let (turn, stop) = chat_runs::Turn::start(&state.chat_runs, &uid, &conversation_id);
+    let guidance = turn.guidance();
     let effective_model = state.data.lock().unwrap().find_conversation(&conversation_id).and_then(|c| c.model.clone()).unwrap_or_else(|| user.active_model.clone());
     let mc = user.models.get(&effective_model).ok_or("model_not_found")?;
     if user.model_key(mc).is_empty() { return Err("no_api_key".into()); }
@@ -521,14 +521,27 @@ async fn chat_inner(
             let grants = state.folder_access.lock().unwrap().paths(&uid, &project.id);
             let (allowed, unavailable): (Vec<_>,Vec<_>) = project.source_folders.iter().cloned().partition(|p| grants.contains(p));
             project_files::ProjectFiles { name: project.name.clone(), roots: allowed.into_iter().map(PathBuf::from).collect(), unavailable,
-                execution: Some(permissions::Execution {app:app.clone(),owner:uid.clone(),project:project.id.clone(),conversation:conversation_id.clone(),turn_id:turn_id.clone(),intent:history.last().map(|m|m.content.chars().take(16000).collect()).unwrap_or_default(),agent_id:None,cancellation:None}) }
+                execution: Some(permissions::Execution {app:app.clone(),owner:uid.clone(),project:project.id.clone(),conversation:conversation_id.clone(),turn_id:turn_id.clone(),intent:history.last().map(|m|m.content.chars().take(16000).collect()).unwrap_or_default(),agent_id:None,cancellation:Some(stop.clone())}) }
         })
     };
     let turn_activity = std::sync::Mutex::new(Vec::<serde_json::Value>::new());
     let streamed = std::sync::Mutex::new(String::new());
     let content_offset = std::sync::atomic::AtomicUsize::new(0);
-    let completion = llm::chat_completion(&state.client, &base_url, &model, &api_key, &history, project, Some(agent_runs::Runtime{app:app.clone(),owner:uid.clone(),conversation:conversation_id.clone()}), |action,text| {
+    let segments = std::sync::Mutex::new(Vec::<ChatMessage>::new());
+    let progress = |action:&str,text:&str| {
         let mut events = turn_activity.lock().unwrap();
+        if action == "__steering" {
+            if let Ok(message) = serde_json::from_str::<ChatMessage>(text) {
+                let content=std::mem::take(&mut *streamed.lock().unwrap());
+                let activity=std::mem::take(&mut *events);
+                let mut segments=segments.lock().unwrap();
+                if !content.is_empty() || !activity.is_empty() {
+                    segments.push(ChatMessage{role:"assistant".into(),content,activity,attachments:vec![],feedback:None});
+                }
+                segments.push(message);
+                content_offset.store(0,std::sync::atomic::Ordering::Relaxed);
+            }
+        }
         if action == "__delta" { streamed.lock().unwrap().push_str(text); content_offset.fetch_add(text.encode_utf16().count(), std::sync::atomic::Ordering::Relaxed); }
         if action == "__reasoning" {
             if events.last().is_none_or(|e| e["kind"] != "reasoning" || e["offset"].as_u64() != Some(content_offset.load(std::sync::atomic::Ordering::Relaxed) as u64)) {
@@ -544,7 +557,8 @@ async fn chat_inner(
             }
         }
         let _ = app.emit("chat-progress", serde_json::json!({"conversation_id":conversation_id,"kind":action,"text":text}));
-    }, |mut agent| {
+    };
+    let completion = llm::chat_completion_steered(&state.client, &base_url, &model, &api_key, &history, project, Some(agent_runs::Runtime{app:app.clone(),owner:uid.clone(),conversation:conversation_id.clone()}), Some(guidance.clone()), &progress, |mut agent| {
         agent["conversation_id"] = serde_json::json!(conversation_id);
         let mut events = turn_activity.lock().unwrap();
         let mut stored = agent.clone();stored["kind"] = serde_json::json!("agent");stored["offset"] = content_offset.load(std::sync::atomic::Ordering::Relaxed).into();
@@ -553,14 +567,44 @@ async fn chat_inner(
         let _ = app.emit("agent-activity", agent);
     });
     let outcome = stop.run(completion).await;
+    guidance.close();
+    // Stop/error can win before the runner consumes accepted guidance.
+    for message in guidance.take() {progress("__steering",&serde_json::to_string(&message).map_err(|e|e.to_string())?);}
+    if outcome.is_err() {
+        app.state::<agent_runs::AgentRuns>().cancel_conversation(&uid,&conversation_id);
+        let shells=app.state::<std::sync::Arc<managed_shells::Shells>>().inner().clone();
+        let owner=uid.clone();let conversation=conversation_id.clone();
+        tauri::async_runtime::spawn_blocking(move||{
+            for shell in shells.list(&owner,&conversation).into_iter().filter(|shell|shell.status=="running") {
+                let _=shells.stop(&owner,&conversation,&shell.id);
+            }
+        }).await.map_err(|error|error.to_string())?;
+    }
     let reviews=app.state::<approvals::Approvals>().take_turn(&uid,&conversation_id,&turn_id);
     // Uno stop conserva la parte di risposta mostrata finora invece di scartarla con la richiesta.
+    let deferred_error = match &outcome {Ok(Err(error)) if !segments.lock().unwrap().is_empty()=>Some(error.clone()),_=>None};
     let (reply, mut usage, cancelled) = match outcome {
         Ok(Ok((reply,usage))) => (reply, usage, false),
+        Ok(Err(_)) if deferred_error.is_some() => (std::mem::take(&mut *streamed.lock().unwrap()), Usage{prompt_tokens:0,completion_tokens:0,total_tokens:0}, false),
         Ok(Err(error)) => return Err(error),
         Err(_) => (std::mem::take(&mut *streamed.lock().unwrap()), Usage{prompt_tokens:0,completion_tokens:0,total_tokens:0}, true),
     };
     let mut turn_activity = turn_activity.into_inner().unwrap();
+    if cancelled {
+        fn cancel(events:&mut [serde_json::Value]) {
+            for event in events {
+                if matches!(event["status"].as_str(),Some("running"|"reviewing"|"pending"|"waiting")){event["status"]="cancelled".into();}
+                if let Some(nested)=event["activity"].as_array_mut(){cancel(nested);}
+            }
+        }
+        cancel(&mut turn_activity);
+        for event in &turn_activity {
+            if event["kind"]=="agent" && event["status"]=="cancelled" {
+                let mut snapshot=event.clone();snapshot["conversation_id"]=serde_json::json!(conversation_id);
+                let _=app.emit("agent-activity",snapshot);
+            }
+        }
+    }
     for review in reviews {
         usage.prompt_tokens+=review.usage["prompt_tokens"].as_u64().unwrap_or(0);usage.completion_tokens+=review.usage["completion_tokens"].as_u64().unwrap_or(0);usage.total_tokens+=review.usage["total_tokens"].as_u64().unwrap_or(0);
         let mut event=serde_json::to_value(review).map_err(|e|e.to_string())?;event["kind"]="approval".into();event["offset"]=0.into();turn_activity.push(event);
@@ -575,6 +619,7 @@ async fn chat_inner(
             .ok_or("conversation_not_found")?;
         conv.messages.truncate(keep_count);
         conv.messages.push(user_message);
+        conv.messages.extend(segments.into_inner().unwrap());
         if !reply.trim().is_empty() || !turn_activity.is_empty() {
             conv.messages.push(ChatMessage { role:"assistant".into(),content:reply.clone(),attachments:vec![],feedback:None,activity:turn_activity });
         }
@@ -590,6 +635,7 @@ async fn chat_inner(
     let tree=state.firestore.cached_tree(&uid).unwrap_or(tree);
     *state.data.lock().unwrap() = tree.clone();
 
+    if let Some(error)=deferred_error {return Err(error);}
     Ok(ChatResponse {
         content: reply,
         usage,
@@ -604,6 +650,33 @@ async fn chat_inner(
 #[tauri::command(rename_all = "snake_case")]
 fn set_viewing_chat(state: tauri::State<'_, AppState>, conversation_id: Option<String>) {
     *state.viewing_chat.lock().unwrap() = conversation_id.filter(|id| data::valid_id(id).is_ok());
+}
+
+pub(crate) async fn project_skill_catalog(app:&tauri::AppHandle, uid:&str, project_id:&str)->Result<serde_json::Value,String> {
+    let state=app.state::<AppState>();
+    if state.firestore.uid().as_deref()!=Some(uid){return Err("login_required".into());}
+    let files={
+        let tree=state.data.lock().unwrap();
+        let project=tree.projects.iter().find(|project|project.id==project_id).ok_or("project_not_found")?;
+        let grants=state.folder_access.lock().unwrap().paths(uid,project_id);
+        project_files::ProjectFiles{name:project.name.clone(),roots:project.source_folders.iter().filter(|path|grants.contains(path)).map(PathBuf::from).collect(),unavailable:vec![],
+            execution:Some(permissions::Execution{app:app.clone(),owner:uid.into(),project:project_id.into(),conversation:String::new(),turn_id:String::new(),intent:String::new(),agent_id:None,cancellation:None})}
+    };
+    tauri::async_runtime::spawn_blocking(move||files.discover_skills()).await.map_err(|error|error.to_string())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn project_skills(app:tauri::AppHandle,state:tauri::State<'_,AppState>,project_id:String)->Result<serde_json::Value,String>{
+    let uid=state.firestore.uid().ok_or("login_required")?;
+    project_skill_catalog(&app,&uid,&project_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+fn steer_chat(state: tauri::State<'_, AppState>, conversation_id:String, content:String, attachments:Option<Vec<Attachment>>) -> Result<(),String> {
+    let owner=state.firestore.uid().ok_or("login_required")?;
+    state.chat_runs.steer(&owner,&conversation_id,ChatMessage{
+        role:"user".into(),content:clean(&content),attachments:attachments.unwrap_or_default(),feedback:None,activity:vec![],
+    })
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -926,7 +999,9 @@ pub fn run() {
             save_data,
             chat,
             set_viewing_chat,
+            project_skills,
             stop_chat,
+            steer_chat,
             get_locale,
             restore_window,
             save_window_state,

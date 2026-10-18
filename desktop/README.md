@@ -457,7 +457,7 @@ webview è nascosto, senza dipendere dal rendering della chat. Coprono un solo
 esito per turno (risposta pronta, errore o interruzione), le approvazioni in
 attesa e le operazioni esplicite dell'utente (trascrizione, download voce). I
 completamenti intermedi di agenti, shell e strumenti restano nell'app e non
-generano push. La notifica di fine turno viene omessa quando la chat è quella
+generano push. Il solo toast Windows di fine turno viene omesso quando la chat è quella
 aperta nella finestra principale **e** la finestra è a fuoco: l'utente sta già
 vedendo la risposta. In tray, minimizzata o su un'altra chat la notifica arriva
 normalmente. Gli eventi Firestore sono inoltrati a FCM da
@@ -505,3 +505,22 @@ Invio automatico verificato con HTTP 204 e pubblicazione su Android. Nessuna
 istanza sempre accesa; 256 MiB/CPU frazionaria, max 3 istanze e build eliminate
 dopo un giorno. Le notifiche di fine risposta mostrano titolo della chat e primi
 200 caratteri della risposta, uguali su Windows e telefono.
+
+## Skill e stato dei processi — 18 ottobre 2026
+
+Il compositore mostra un catalogo `/` per il progetto corrente; tastiera
+(frecce/Invio/Escape), stato di caricamento, duplicati ed errori hanno feedback
+esplicito. `project_skills` è autenticato e legge solo root già concesse.
+`list_project_skills` e `load_project_skill` sono tool reali del modello;
+`/nome` carica la skill prima dell’inferenza e registra l’attività. Discovery
+in `.agents/skills`, `.codex/skills` e `.aurachat/skills`, budget globale di
+200 entry, file fino a 32 KiB. I permessi restano quelli del progetto.
+
+Un tool shell che restituisce un processo running rimane running; gli eventi
+shell aggiornano stato/output e non rilanciano comandi. Fermare il turno
+cancella agenti figli e shell della stessa conversazione e conserva gli stati
+terminali nella cronologia. Il telefono può fermare singoli agenti o comandi.
+
+Il filtro di visibilità riguarda il solo toast Windows: l’evento push è
+comunque pubblicato. La precedente soppressione comune impediva le push
+mentre il desktop mostrava la chat; corretta in questa sessione.

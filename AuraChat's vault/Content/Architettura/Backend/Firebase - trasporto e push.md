@@ -225,10 +225,11 @@ generano più push: restano visibili nell'app desktop. Vengono inviate soltanto:
 una notifica a fine turno di chat (risposta pronta, errore bloccante o
 interruzione), la richiesta di approvazione quando serve una decisione umana, e
 le operazioni esplicite dell'utente (download del modello vocale, trascrizione).
-La stessa regola vale per il banner Windows e per FCM. La notifica di fine
-turno viene inoltre soppressa se la chat conclusa è quella aperta nella
-finestra principale e la finestra è a fuoco; il controllo avviene al momento
-dell'invio, quindi tray, minimizzato o un'altra chat notificano comunque.
+Il toast Windows viene soppresso se la chat conclusa è aperta nella finestra
+principale a fuoco. L’evento Firestore per le push viene comunque pubblicato:
+il focus del desktop non deve sopprimere le notifiche degli altri dispositivi.
+Il telefono evita il banner locale per quella chat soltanto quando la sta
+mostrando in foreground; approvazioni sempre notificate.
 
 ## Turni live sul telefono — 18 ottobre 2026
 
@@ -264,3 +265,41 @@ Notifications per l'App ID. Abilitati `UIBackgroundModes`
 (`remote-notification`), Darwin initialization per le notifiche locali e il
 delegate `UNUserNotificationCenter` in AppDelegate. Il token APNs viene atteso
 prima di `register()`; il permesso viene chiesto dopo il login.
+
+## Correzione push multipiattaforma e cronologia — 18 ottobre 2026
+
+La precedente soppressione in `run_chat` eliminava anche l’evento push quando
+la chat era aperta sul PC. Il filtro è stato spostato sul solo toast Windows.
+Il payload FCM include `kind` per la decisione locale sul telefono.
+La funzione registra accettazione FCM, piattaforma ed errori senza loggare FID;
+la ricevuta conserva `message_id`: prova l’accettazione del provider, non la
+visualizzazione sul dispositivo.
+
+iOS richiede anche `FirebaseMessagingInstallationIdEnabled = true` in
+`Runner/Info.plist` per `register()`/FID. Mancava: il warning `invalid-request`
+segnalato dall’utente è coerente con questa configurazione incompleta. Flag
+aggiunto, piattaforma salvata correttamente come `ios`, attesa APNs esplicita;
+la registrazione attende anche il salvataggio del dispositivo prima di dichiarare
+successo, conserva gli eventi arrivati prima del login e riprova al ritorno in
+foreground. Test iPhone non eseguibile da Windows: nuova build Mac necessaria.
+
+Il relay conserva offset UTF-16, segmenti reasoning, argomenti/output, approvazioni
+e attività dei figli; aggiorna i comandi da `shell-activity`. La serializzazione
+viene limitata in byte prima della scrittura Firestore. Cronologia mobile
+intercalata al testo con passaggi espandibili e stati effettivi.
+
+Verifica reale di questa sessione: Cloud Function ridistribuita; push di prova
+visualizzata da Android in foreground e background senza disinstallazione.
+Richiesta remota di calcolo tramite sotto-agente completata con `437`, con
+reasoning/tool/agente salvati. Questo non certifica ancora la consegna iOS.
+
+## Identità Windows — regressione trovata durante i test
+
+Il riavvio con un launcher diverso ha prodotto `Ridney` invece di `RIDNEY`:
+il vecchio hash case-sensitive creava due ID per lo stesso PC, lasciando
+il telefono collegato a un gateway offline. L’hash ora normalizza maiuscole
+e spazi dei nomi Windows (`identity_version: 2`). Il telefono riconosce un
+solo gateway canonico online con lo stesso nome, sostituendo il vecchio alias
+solo se offline e senza richiesta locale in corso. Casi ambigui non migrano.
+Le richieste già accodate non vengono copiate o rieseguite. Test dedicati
+Rust e Dart verificano identità e riconnessione.

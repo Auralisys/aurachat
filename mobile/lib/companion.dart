@@ -58,6 +58,16 @@ bool deviceOnline(Map<String, dynamic> device, [int? now]) =>
             ((device['last_seen'] as num?)?.toInt() ?? 0) <
         45000;
 
+String? onlineDeviceReplacement(List<Map<String, dynamic>> devices, String? selected, [int? now]) {
+  final current = devices.where((device) => device['id'] == selected).firstOrNull;
+  if (current == null || deviceOnline(current, now)) return null;
+  final name = (current['name'] as String? ?? '').trim().toLowerCase();
+  if (name.isEmpty) return null;
+  final matches = devices.where((device) => device['id'] != selected && device['identity_version'] == 2 &&
+    (device['name'] as String? ?? '').trim().toLowerCase() == name && deviceOnline(device, now)).toList();
+  return matches.length == 1 ? matches.single['id'] as String : null;
+}
+
 /// A live turn is shown only while it is running and the desktop keeps it fresh.
 bool liveTurnRunning(Map<String, dynamic>? turn, [int? now]) =>
     turn != null &&
@@ -169,6 +179,12 @@ class PushNotifications {
   final local = FlutterLocalNotificationsPlugin();
   final _subscriptions = <StreamSubscription<dynamic>>[];
   String? _uid, _installation;
+  String? _fid;
+  Completer<void>? _registration;
+  bool _binding = false;
+  String? visibleConversation;
+  bool foreground = true;
+  final _shown = <String>{};
   static const channel = AndroidNotificationChannel(
     'aurachat_completion',
     'Attività completate',
@@ -204,8 +220,17 @@ class PushNotifications {
         if (_uid == null || message.data['uid'] != _uid) {
           return;
         }
+        if (foreground && visibleConversation != null &&
+            message.data['conversation_id'] == visibleConversation &&
+            message.data['kind'] == 'chat') {
+          return;
+        }
         final id =
             message.data['event_id'] ?? message.messageId ?? const Uuid().v4();
+        if (_shown.contains(id)) return;
+        _shown.add(id);
+        if (_shown.length > 500) _shown.remove(_shown.first);
+        try {
         await local.show(
           id: id.hashCode & 0x7fffffff,
           title: message.notification?.title ?? 'AuraChat',
@@ -221,6 +246,10 @@ class PushNotifications {
           ),
           payload: message.data['conversation_id'],
         );
+        } catch (error) {
+          _shown.remove(id);
+          warning.value = 'Visualizzazione notifiche: ${friendlyError(error)}';
+        }
       }),
     );
     _subscriptions.add(
@@ -236,16 +265,21 @@ class PushNotifications {
     }
     _subscriptions.add(
       FirebaseMessaging.instance.onRegistered.listen((fid) async {
+        _fid = fid;
         try {
           await _register(fid);
+          if (_registration?.isCompleted == false) _registration!.complete();
         } catch (error) {
-          warning.value = friendlyError(error);
+          warning.value = 'Registrazione notifiche: ${friendlyError(error)}';
+          if (_registration?.isCompleted == false) _registration!.completeError(error);
         }
       }),
     );
   }
 
   Future<void> bind(String uid) async {
+    if (_binding) return;
+    _binding = true;
     _uid = uid;
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -264,20 +298,37 @@ class PushNotifications {
       if (defaultTargetPlatform == TargetPlatform.iOS) {
         // FCM non può registrare l'installazione senza il token APNs. Il primo
         // token può arrivare qualche istante dopo il consenso.
-        for (var attempt = 0; attempt < 10; attempt++) {
+        for (var attempt = 0; attempt < 40; attempt++) {
           if (await FirebaseMessaging.instance.getAPNSToken() != null) {
             break;
           }
           await Future<void>.delayed(const Duration(milliseconds: 500));
         }
+        if (await FirebaseMessaging.instance.getAPNSToken() == null) {
+          warning.value = 'Registrazione Apple non disponibile. Riapri l’app e riprova; verifica Push Notifications e il profilo di firma iOS.';
+          return;
+        }
       }
+      _registration = Completer<void>();
+      final confirmed = _registration!.future.timeout(const Duration(seconds: 20));
+      // Attach the error handler before native registration can emit an event.
+      final confirmation = confirmed.then<Object?>((_) => null, onError: (Object e) => e);
       await FirebaseMessaging.instance.register();
+      if (_fid != null) {
+        await _register(_fid!);
+        if (!_registration!.isCompleted) _registration!.complete();
+      }
+      final failure = await confirmation;
+      if (failure != null) throw failure;
       warning.value = null;
     } catch (error) {
       if (kDebugMode) {
         debugPrint('FCM registration failed: $error');
       }
       warning.value = 'Notifiche: ${friendlyError(error)}';
+    } finally {
+      _registration = null;
+      _binding = false;
     }
   }
 
@@ -293,7 +344,7 @@ class PushNotifications {
         .doc(_installation)
         .set({
           'fid': fid,
-          'platform': 'android',
+          'platform': defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
           'updated_at': DateTime.now().millisecondsSinceEpoch,
         });
   }
@@ -311,6 +362,8 @@ class PushNotifications {
     await FirebaseMessaging.instance.unregister();
     await local.cancelAll();
     _uid = null;
+    _fid = null;
+    visibleConversation = null;
     target.value = null;
     await FirebaseAuth.instance.signOut();
   }

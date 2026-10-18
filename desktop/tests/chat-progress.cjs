@@ -83,7 +83,28 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  await page.waitForFunction(()=>document.querySelector('.msg--stream .turn-text')?.textContent.trim()==='Risposta immediata.');
  await page.evaluate(()=>{window.__answer='Risposta immediata.';window.__history=[];window.__finish();});
  await page.waitForFunction(()=>!state.busy);
+ // Shell snapshots update correlated rows without recreating expanded details or starting commands.
+ await page.evaluate(()=>{
+   state.messages=[{role:'assistant',content:'Command status.',activity:[
+     {kind:'tool',id:'command-row',action:'execute_project_command',status:'running',output:JSON.stringify({id:'shell-test',status:'running'})},
+     {kind:'tool',id:'inspect-row',action:'inspect_project_command',shell_id:'shell-test',status:'running',output:'{}'}
+   ]}];renderMessages();
+   window.__shellRow=document.querySelector('.turn-step');__shellRow.open=true;
+   window.__shell=(conversation_id,status,revision,output)=>__listeners['shell-activity']({payload:{conversation_id,id:'shell-test',status,revision,output}});
+   __shell('other-chat','completed',8,'Wrong chat');
+ });
+ assert.equal(await page.locator('.turn-step').first().getAttribute('data-status'),'running');
+ await page.evaluate(()=>__shell('c','running',3,'Still working'));
+ assert.match(await page.locator('.turn-step').first().textContent(),/Still working/);
+ await page.evaluate(()=>__shell('c','completed',4,'Command finished'));
+ assert.equal(await page.locator('.turn-step[data-status="completed"]').count(),2);
+ assert.equal(await page.evaluate(()=>__shellRow===document.querySelector('.turn-step') && __shellRow.open),true);
+ await page.evaluate(()=>__shell('c','running',2,'Stale output'));
+ assert.match(await page.locator('.turn-step').first().textContent(),/Command finished/);
+ await page.evaluate(()=>renderMessages());
+ assert.equal(await page.locator('.turn-step[data-status="completed"]').count(),2);
+ assert.equal(await page.evaluate(()=>__calls.filter(call=>['execute_project_command','inspect_project_command','stop_shell'].includes(call.cmd)).length),0);
  assert.deepEqual(errors,[]);
- console.log('PASS: single unified reasoning/activity history, stable header and expanded rows, pulsing brain, elapsed time, paced text, saved tool output, compact layout and reduced motion.');
+ console.log('PASS: single unified reasoning/activity history, stable header and expanded rows, pulsing brain, elapsed time, paced text, saved tool output, compact layout, reduced motion and correlated shell completion.');
  await browser.close();
 })().catch(error=>{console.error(error);process.exit(1);});

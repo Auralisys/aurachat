@@ -8,9 +8,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 import 'package:uuid/uuid.dart';
 import 'companion.dart';
 import 'ui.dart';
+import 'turn_history.dart';
+import 'skill_picker.dart';
+import 'aura_icons.dart';
+import 'message_queue.dart';
+import 'queued_bubble.dart';
 
 final push = PushNotifications();
 void startAuraChat() {
@@ -251,12 +257,18 @@ class Workspace extends StatefulWidget {
   State<Workspace> createState() => _WorkspaceState();
 }
 
-class _WorkspaceState extends State<Workspace> {
+class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   late final Companion api;
+  // Session-only: queued drafts are not persisted across app restarts.
+  final outbox = <(String, String), ConversationQueue>{};
+  final queueSubscriptions = <StreamSubscription<dynamic>>[];
+  ConversationQueue? get currentQueue => outbox[(deviceId, conversationId)];
   final composer = TextEditingController();
   final composerFocus = FocusNode();
   final scaffoldKey = GlobalKey<ScaffoldState>();
-  final modelMenuKey = GlobalKey<PopupMenuButtonState<String>>();
+  final speech = SpeechToText();
+  bool speechReady = false, micActive = false;
+  String micPrefix = '';
   bool libraryVisible = true;
   bool changingPermission = false;
   final scroll = ScrollController();
@@ -329,6 +341,8 @@ class _WorkspaceState extends State<Workspace> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    push.foreground = WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     composerFocus.addListener(() {
       if (composerFocus.hasFocus && libraryVisible) {
         setState(() => libraryVisible = false);
@@ -359,9 +373,11 @@ class _WorkspaceState extends State<Workspace> {
         deviceId ??=
             prefs.getString('device_${widget.user.uid}') ??
             devices.firstOrNull?['id'];
+        if (!busy) deviceId = onlineDeviceReplacement(devices, deviceId) ?? deviceId;
         loading = false;
       });
       if (previous != deviceId) {
+        if (deviceId != null) await prefs.setString('device_${widget.user.uid}', deviceId!);
         watchApprovals();
         watchLiveTurns();
         restoreRequest();
@@ -386,7 +402,10 @@ class _WorkspaceState extends State<Workspace> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    push.visibleConversation = null;
     clock?.cancel();
+    for (final subscription in queueSubscriptions) { subscription.cancel(); }
     deviceSubscription.cancel();
     indexSubscription.cancel();
     messageSubscription?.cancel();
@@ -394,10 +413,17 @@ class _WorkspaceState extends State<Workspace> {
     liveSubscription?.cancel();
     requestSubscription?.cancel();
     push.target.removeListener(openNotification);
+    if (micActive) speech.cancel();
     composerFocus.dispose();
     composer.dispose();
     scroll.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    push.foreground = state == AppLifecycleState.resumed;
+    if (push.foreground) push.bind(widget.user.uid);
   }
 
   void fail(Object e) {
@@ -456,13 +482,22 @@ class _WorkspaceState extends State<Workspace> {
       liveTurns = {};
       return;
     }
-    liveSubscription = api.liveTurns(deviceId!).listen((
+    final watchedDevice = deviceId!;
+    liveTurns = {};
+    for (final lane in outbox.values.where((q) => q.device == watchedDevice)) {
+      lane.liveKnown = false;
+    }
+    liveSubscription = api.liveTurns(watchedDevice).listen((
       snapshot,
     ) {
-      if (!mounted) return;
+      if (!mounted || deviceId != watchedDevice) return;
       setState(() {
         liveTurns = {for (final doc in snapshot.docs) doc.id: doc.data()};
+        for (final lane in outbox.values.where((q) => q.device == watchedDevice)) {
+          lane.observeLive(liveTurns[lane.conversation]);
+        }
       });
+      flushQueues();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted ||
             !liveRunning ||
@@ -491,10 +526,11 @@ class _WorkspaceState extends State<Workspace> {
   void watchRequest(String id) {
     requestSubscription?.cancel();
     activeRequestId = id;
-    requestSubscription = api.requests(deviceId!).doc(id).snapshots().listen((
+    final watchedDevice = deviceId!;
+    requestSubscription = api.requests(watchedDevice).doc(id).snapshots().listen((
       snapshot,
     ) {
-      if (!mounted || snapshot.data() == null) {
+      if (!mounted || deviceId != watchedDevice || activeRequestId != id || snapshot.data() == null) {
         return;
       }
       final data = snapshot.data()!;
@@ -503,10 +539,14 @@ class _WorkspaceState extends State<Workspace> {
         requestStatus = data['status'];
         requestConversation = data['conversation_id'];
         pendingText = busy ? data['content'] : null;
+        for (final lane in outbox.values.where((q) => q.device == watchedDevice)) {
+          lane.observeRequest(id, data['status'] as String?);
+        }
         if (requestStatus == 'failed' && previous != 'failed') {
           error = remoteError(data['error'] as String?);
         }
       });
+      flushQueues();
     }, onError: fail);
   }
 
@@ -522,6 +562,7 @@ class _WorkspaceState extends State<Workspace> {
   }
 
   void selectChat(Map<String, dynamic>? chat) {
+    push.visibleConversation = chat?['id'] as String?;
     final version = ++loadVersion;
     messageSubscription?.cancel();
     setState(() {
@@ -572,11 +613,34 @@ class _WorkspaceState extends State<Workspace> {
 
   Future<void> send() async {
     final text = composer.text.trim();
-    if (turnBusy || text.isEmpty || !online) {
+    if (text.isEmpty || !online) {
+      return;
+    }
+    if (turnBusy || (currentQueue?.drafts.isNotEmpty ?? false)) {
+      final target = conversationId;
+      if (target == null) return;
+      setState(() {
+        final lane = outbox.putIfAbsent((deviceId!, target),
+          () => ConversationQueue(deviceId!, target, projectId));
+        if (lane.drafts.isEmpty && lane.operation == null) {
+          lane.completed = false;
+          lane.paused = null;
+          lane.waitingRequest = busy ? activeRequestId : null;
+          lane.waitingTurn = null;
+          lane.observeLive(liveTurns[target]);
+          // A failed request cannot authorize a later automatic retry.
+          if (requestStatus == 'failed') lane.paused = 'Controlla la chat prima di inviare la coda.';
+        }
+        lane.drafts.add(QueuedDraft(const Uuid().v4(), text));
+        composer.clear();
+      });
+      flushQueues();
       return;
     }
     final isNew = conversationId == null;
     final id = conversationId ?? const Uuid().v4();
+    final targetDevice = deviceId!;
+    final targetProject = projectId;
     setState(() {
       sending = true;
       error = null;
@@ -585,22 +649,25 @@ class _WorkspaceState extends State<Workspace> {
     });
     try {
       final request = await api.send(
-        deviceId!,
+        targetDevice,
         id,
         text,
         newConversation: isNew,
-        project: projectId,
+        project: targetProject,
         extra: {if (isNew && chosenModel != null) 'model': chosenModel},
       );
       if (!mounted) {
         return;
       }
-      composer.clear();
-      if (isNew) {
-        selectChat({'id': id, 'project_id': projectId});
+      if (composer.text.trim() == text) composer.clear();
+      for (final lane in outbox.values.where((q) => q.device == targetDevice && q.waitingRequest == null && !q.completed)) {
+        lane.waitingRequest = request;
+      }
+      if (isNew && conversationId == null && deviceId == targetDevice) {
+        selectChat({'id': id, 'project_id': targetProject});
       }
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('request_${widget.user.uid}', '$deviceId/$request');
+      await prefs.setString('request_${widget.user.uid}', '$targetDevice/$request');
       if (!mounted) {
         return;
       }
@@ -611,8 +678,104 @@ class _WorkspaceState extends State<Workspace> {
     } finally {
       if (mounted) {
         setState(() => sending = false);
+        flushQueues();
       }
     }
+  }
+
+  void flushQueues() {
+    if (!mounted || busy || !online) return;
+    for (final lane in outbox.values) {
+      if (lane.device == deviceId && lane.canFlush) {
+        dispatchQueued(lane, lane.drafts.first);
+        return;
+      }
+    }
+  }
+
+  Future<void> dispatchQueued(ConversationQueue lane, QueuedDraft draft, {bool guide = false}) async {
+    if (!mounted || lane.device != deviceId || !online) return;
+    if (guide && (!liveTurnRunning(liveTurns[lane.conversation]) || busy && requestConversation != lane.conversation)) return;
+    if (!guide && busy) return;
+    if (!lane.begin(draft, asGuide: guide)) return;
+    setState(() { if (!guide) sending = true; });
+    try {
+      final request = await api.send(lane.device, lane.conversation, draft.text,
+        project: lane.project, action: guide ? 'steer' : 'chat');
+      if (!mounted) return;
+      if (!guide) {
+        lane.waitingRequest = request;
+        requestConversation = lane.conversation;
+        pendingText = draft.text;
+        requestStatus = 'pending';
+        activeRequestId = request;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('request_${widget.user.uid}', '${lane.device}/$request');
+      }
+      // Keep watching late terminal receipts even if the user changes chat/device.
+      late final StreamSubscription<DocumentSnapshot<Map<String, dynamic>>> receipt;
+      receipt = api.requests(lane.device).doc(request).snapshots().listen((snapshot) {
+        if (!mounted) return;
+        final status = snapshot.data()?['status'] as String?;
+        if (!['completed', 'failed', 'cancelled'].contains(status)) return;
+        setState(() {
+          if (guide) {
+            lane.finishGuide(draft, accepted: status == 'completed');
+          } else {
+            lane.observeRequest(request, status);
+            if (activeRequestId == request) {
+              requestStatus = status;
+              pendingText = null;
+            }
+          }
+          if (status != 'completed') error = remoteError(snapshot.data()?['error'] as String?);
+        });
+        receipt.cancel();
+        queueSubscriptions.remove(receipt);
+        flushQueues();
+      }, onError: (Object e) {
+        // Unknown outcome: retain and lock the draft; never replay automatically.
+        if (mounted) setState(() => lane.paused = 'Esito da verificare sul PC. Il messaggio non verrà reinviato.');
+      });
+      queueSubscriptions.add(receipt);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          lane.paused =
+              'Esito da verificare sul PC. Il messaggio non verrà reinviato.';
+          error = friendlyError(e);
+        });
+      }
+    } finally {
+      if (mounted && !guide) setState(() => sending = false);
+    }
+  }
+
+  Future<void> editQueued(ConversationQueue lane, QueuedDraft draft) async {
+    if (lane.operation != null) return;
+    final editor = TextEditingController(text: draft.text);
+    final value = await showDialog<String>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Modifica messaggio in coda'),
+      content: TextField(controller: editor, autofocus: true, minLines: 2, maxLines: 6, maxLength: 25000),
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annulla')),
+        TextButton(onPressed: () => Navigator.pop(context, editor.text), child: const Text('Salva'))],
+    ));
+    // The route may still use its controller during its dismissal animation.
+    WidgetsBinding.instance.addPostFrameCallback((_) => editor.dispose());
+    if (mounted && value != null) setState(() => lane.edit(draft, value));
+  }
+
+  Future<void> resumeQueue(ConversationQueue lane) async {
+    if (lane.operation != null || lane.running || busy || !online) return;
+    final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Inviare la coda?'),
+      content: const Text('Controlla sul PC che questi messaggi non siano già stati elaborati. Verranno inviati in ordine.'),
+      actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Annulla')),
+        TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Invia'))],
+    ));
+    if (!mounted || confirmed != true || lane.operation != null || lane.running) return;
+    setState(() { lane.paused = null; lane.completed = true; });
+    flushQueues();
   }
 
   Future<void> action(
@@ -736,9 +899,15 @@ class _WorkspaceState extends State<Workspace> {
     'full' => 'Accesso completo',
     _ => 'Permessi progetto',
   };
-  String get modelName {
+  String? get selectedModelId {
     final chat = chats.where((c) => c['id'] == conversationId).firstOrNull;
-    final id = chat?['model'] ?? chosenModel ?? device?['active_model'];
+    return chat?['model'] as String? ??
+        chosenModel ??
+        device?['active_model'] as String?;
+  }
+
+  String get modelName {
+    final id = selectedModelId;
     return ((device?['models'] as List?) ?? [])
                 .where((m) => m['id'] == id)
                 .firstOrNull?['name']
@@ -746,130 +915,69 @@ class _WorkspaceState extends State<Workspace> {
         'Scegli modello';
   }
 
-  Future<void> chooseModel() => showModalBottomSheet<void>(
-    context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
-    builder: (sheetContext) => SafeArea(
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(sheetContext).height * .7,
-        ),
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(24, 8, 24, 16),
-              child: Text(
-                'Modello',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-              ),
+  List<ComposerChoice> get modelChoices =>
+      ((device?['models'] as List?) ?? [])
+          .whereType<Map>()
+          .map(
+            (m) => ComposerChoice(
+              value: m['id'] as String,
+              label: (m['name'] ?? m['id']).toString(),
             ),
-            ...((device?['models'] as List?) ?? []).map(
-              (m) => ListTile(
-                title: Text(m['name'] as String),
-                trailing: m['name'] == modelName
-                    ? const Icon(Icons.check_rounded, color: orchid)
-                    : null,
-                onTap: () {
-                  setState(() => chosenModel = m['id']);
-                  Navigator.pop(sheetContext);
-                  if (conversationId != null) {
-                    action('model', extra: {'model': m['id']});
-                  }
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
+          )
+          .toList();
 
-  Future<void> choosePermissions() async {
-    final project = projectId;
-    final mode = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(24, 8, 24, 16),
-              child: Text(
-                'Permessi',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-              ),
-            ),
-            if (project == null) ...[
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                child: Text(
-                  'I permessi di file e comandi si gestiscono nelle chat di progetto.',
-                  style: TextStyle(color: muted),
-                ),
-              ),
-              if (conversationId == null)
-                ListTile(
-                  leading: const Icon(Icons.folder_outlined),
-                  title: const Text('Scegli progetto'),
-                  onTap: () {
-                    Navigator.pop(sheetContext, 'project');
-                  },
-                ),
-            ] else ...[
-              if (permissionMode == null)
-                const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text(
-                    'Collega un desktop aggiornato per modificare i permessi.',
-                    style: TextStyle(color: muted),
-                  ),
-                ),
-              ...const [
-                (
-                  'ask',
-                  'Richiedi approvazione',
-                  'Chiede conferma prima di scrivere file o eseguire comandi.',
-                ),
-                (
-                  'auto',
-                  'Approva per me',
-                  'Revisiona automaticamente i comandi e chiede conferma per azioni rischiose o incerte.',
-                ),
-                (
-                  'full',
-                  'Accesso completo',
-                  'File e comandi senza conferme, anche fuori dal progetto.',
-                ),
-              ].map(
-                (m) => ListTile(
-                  title: Text(m.$2),
-                  subtitle: Text(m.$3),
-                  enabled:
-                      online &&
-                      !busy &&
-                      !changingPermission &&
-                      permissionMode != null,
-                  trailing: permissionMode == m.$1
-                      ? const Icon(Icons.check_rounded, color: orchid)
-                      : null,
-                  onTap: () => Navigator.pop(sheetContext, m.$1),
-                ),
-              ),
-            ],
-            const SizedBox(height: 16),
-          ],
-        ),
+  String? get projectName => projects[projectId]?['name']?.toString();
+
+  List<ComposerChoice> get permissionChoices => [
+    if (projectId == null)
+      const ComposerChoice(
+        value: 'project',
+        label: 'Scegli progetto',
+        description:
+            'I permessi di file e comandi si gestiscono nelle chat di progetto.',
       ),
-    );
-    if (!mounted || mode == null) return;
+    if (projectId != null && permissionMode == null)
+      const ComposerChoice(
+        value: 'unsupported',
+        label: 'Collega un desktop aggiornato',
+        description: 'Serve AuraChat aggiornato sul PC per modificare i permessi.',
+        enabled: false,
+      ),
+    ComposerChoice(
+      value: 'ask',
+      label: 'Richiedi approvazione',
+      description: 'Chiede conferma prima di scrivere file o eseguire comandi.',
+      enabled: permissionMode != null && !changingPermission,
+    ),
+    ComposerChoice(
+      value: 'auto',
+      label: 'Approva per me',
+      description:
+          'Revisiona automaticamente i comandi e chiede conferma per azioni rischiose o incerte.',
+      enabled: permissionMode != null && !changingPermission,
+    ),
+    ComposerChoice(
+      value: 'full',
+      label: 'Accesso completo',
+      description: 'File e comandi senza conferme, anche fuori dal progetto.',
+      enabled: permissionMode != null && !changingPermission,
+    ),
+  ];
+
+  void selectModel(String id) {
+    setState(() => chosenModel = id);
+    if (conversationId != null) {
+      action('model', extra: {'model': id});
+    }
+  }
+
+  Future<void> applyPermission(String mode) async {
+    final project = projectId;
     if (mode == 'project') {
       await chooseProject();
       return;
     }
-    if (mode == permissionMode) return;
+    if (permissionMode == null || mode == permissionMode) return;
     var confirmed = false;
     if (mode == 'full') {
       confirmed =
@@ -905,6 +1013,74 @@ class _WorkspaceState extends State<Workspace> {
       },
     );
     if (mounted) setState(() => changingPermission = false);
+  }
+
+  Future<void> toggleMic() async {
+    if (micActive) {
+      await speech.stop();
+      if (mounted) setState(() => micActive = false);
+      return;
+    }
+    if (!online) return;
+    if (!speechReady) {
+      try {
+        speechReady = await speech.initialize(
+          onStatus: (status) {
+            if (!mounted) return;
+            if (status == 'done' || status == 'notListening') {
+              setState(() => micActive = false);
+            }
+          },
+          onError: (error) {
+            if (!mounted) return;
+            setState(() {
+              micActive = false;
+              if (error.permanent) speechReady = false;
+            });
+          },
+        );
+      } catch (_) {
+        speechReady = false;
+      }
+      if (!mounted) return;
+      if (!speechReady) {
+        setState(
+          () => error =
+              'Dettatura non disponibile su questo dispositivo. Controlla i permessi del microfono.',
+        );
+        return;
+      }
+    }
+    micPrefix = composer.text;
+    var started = false;
+    try {
+      started = await speech.listen(
+        onResult: (result) {
+          if (!mounted) return;
+          final words = result.recognizedWords.trim();
+          final text = words.isEmpty
+              ? micPrefix
+              : micPrefix.isEmpty
+              ? words
+              : '$micPrefix $words';
+          composer.value = TextEditingValue(
+            text: text,
+            selection: TextSelection.collapsed(offset: text.length),
+          );
+          if (result.finalResult && micActive) {
+            setState(() => micActive = false);
+          }
+        },
+      );
+    } catch (_) {
+      started = false;
+    }
+    if (!mounted) return;
+    if (!started) {
+      setState(() => error = 'Impossibile avviare la dettatura.');
+      return;
+    }
+    setState(() => micActive = true);
   }
 
   Widget library({bool inDrawer = false, String query = ''}) => ChatLibrary(
@@ -1053,15 +1229,6 @@ class _WorkspaceState extends State<Workspace> {
                 chooseProject();
               },
             ),
-          ListTile(
-            leading: const Icon(Icons.tune_rounded),
-            title: const Text('Scegli modello'),
-            enabled: online && !busy,
-            onTap: () {
-              Navigator.pop(sheetContext);
-              modelMenuKey.currentState?.showButtonMenu();
-            },
-          ),
           const SizedBox(height: 12),
         ],
       ),
@@ -1102,10 +1269,10 @@ class _WorkspaceState extends State<Workspace> {
       child: Scaffold(
         key: scaffoldKey,
         appBar: AppBar(
-          toolbarHeight: 72,
-          leadingWidth: 76,
+          toolbarHeight: 64,
+          leadingWidth: 72,
           leading: Padding(
-            padding: const EdgeInsets.only(left: 16, top: 12, bottom: 12),
+            padding: const EdgeInsets.only(left: 12, top: 8, bottom: 8),
             child: RoundButton(
               icon: libraryVisible
                   ? Icons.menu_rounded
@@ -1116,62 +1283,41 @@ class _WorkspaceState extends State<Workspace> {
                   : openLibrary,
             ),
           ),
-          title: PopupMenuButton<String>(
-            key: modelMenuKey,
-            tooltip: 'Scegli modello',
-            enabled: online && !busy,
-            position: PopupMenuPosition.under,
-            onSelected: (value) {
-              setState(() => chosenModel = value);
-              if (conversationId != null) {
-                action('model', extra: {'model': value});
-              }
-            },
-            itemBuilder: (context) => ((device?['models'] as List?) ?? [])
-                .map(
-                  (m) => CheckedPopupMenuItem<String>(
-                    value: m['id'] as String,
-                    checked:
-                        m['id'] ==
-                        (activeChat?['model'] ??
-                            chosenModel ??
-                            device?['active_model']),
-                    child: Text(m['name'] as String),
+          // The bar has a fixed height, so two lines clamp very large text.
+          title: MediaQuery.withClampedTextScaling(
+            maxScaleFactor: 1.4,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Text(
+                  libraryVisible
+                      ? 'AuraChat'
+                      : activeChat?['title'] ?? 'Nuova chat',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: libraryVisible ? 20 : 17,
+                    height: 1.25,
+                    fontWeight: FontWeight.w600,
+                    color: textColor,
                   ),
-                )
-                .toList(),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      libraryVisible
-                          ? 'AuraChat'
-                          : activeChat?['title'] ?? 'Nuova chat',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: libraryVisible ? 20 : 17,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  const Icon(
-                    Icons.keyboard_arrow_down_rounded,
-                    size: 18,
-                    color: muted,
-                  ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 2),
+                ChatContextLabel(
+                  project: libraryVisible ? null : projectName,
+                  pc: device?['name']?.toString(),
+                  online: online,
+                  onTap: busy ? null : chooseDevice,
+                ),
+              ],
             ),
           ),
           actions: [
             Padding(
               padding: const EdgeInsets.only(right: 16),
               child: RoundButton(
+                glyph: libraryVisible ? null : const AuraGlyph('new_chat'),
                 icon: libraryVisible
                     ? Icons.search_rounded
                     : Icons.edit_outlined,
@@ -1241,7 +1387,7 @@ class _WorkspaceState extends State<Workspace> {
                                     Navigator.pop(context);
                                     newChat();
                                   },
-                            icon: const Icon(Icons.edit_outlined, size: 20),
+                            icon: const AuraGlyph('new_chat', size: 20),
                             label: const Text('Nuova chat'),
                           ),
                           const Spacer(),
@@ -1280,18 +1426,6 @@ class _WorkspaceState extends State<Workspace> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (libraryVisible)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-                        child: DeviceLabel(
-                          name: device?['name'] ?? 'Scegli un PC',
-                          online: online,
-                          onTap: busy ? null : chooseDevice,
-                        ),
-                      ),
-                    ),
                   ValueListenableBuilder<String?>(
                     valueListenable: push.warning,
                     builder: (context, warning, _) => warning == null
@@ -1330,8 +1464,19 @@ class _WorkspaceState extends State<Workspace> {
                           ? library()
                           : messages.isEmpty &&
                                 !activeRequest &&
-                                activeLiveTurn == null
-                          ? const SizedBox.expand()
+                                activeLiveTurn == null && (currentQueue?.drafts.isEmpty ?? true)
+                          ? const Center(
+                              child: Padding(
+                                padding: EdgeInsets.all(32),
+                                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                                  Text('Da dove iniziamo?', textAlign: TextAlign.center,
+                                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w600, letterSpacing: -.5)),
+                                  SizedBox(height: 10),
+                                  Text('Scrivi un messaggio per iniziare.', textAlign: TextAlign.center,
+                                    style: TextStyle(color: muted, fontSize: 14, height: 1.5)),
+                                ]),
+                              ),
+                            )
                           : ListView(
                               key: const ValueKey('conversation-messages'),
                               controller: scroll,
@@ -1381,6 +1526,10 @@ class _WorkspaceState extends State<Workspace> {
                                       'content': activeLiveTurn['user_content'],
                                     },
                                   ),
+                                if (activeLiveTurn != null)
+                                  ...((activeLiveTurn['segments'] as List?) ?? const [])
+                                    .whereType<Map>()
+                                    .map((segment) => MessageView(message: Map<String, dynamic>.from(segment), live: true)),
                                 if (activeLiveTurn != null &&
                                     ((activeLiveTurn['content'] as String? ??
                                                     '')
@@ -1396,6 +1545,8 @@ class _WorkspaceState extends State<Workspace> {
                                             .isNotEmpty))
                                   MessageView(
                                     live: true,
+                                    onStopAgent: (id) => action('stop_agent', extra: {'agent_id': id}),
+                                    onStopShell: (id) => action('stop_shell', extra: {'shell_id': id}),
                                     message: {
                                       'role': 'assistant',
                                       'content':
@@ -1405,8 +1556,24 @@ class _WorkspaceState extends State<Workspace> {
                                       'activity':
                                           activeLiveTurn['activity'] ??
                                           const [],
+                                      'truncated': activeLiveTurn['truncated'] == true,
                                     },
                                   ),
+                                if (currentQueue case final lane?)
+                                  for (final draft in lane.drafts)
+                                    QueuedMessageBubble(
+                                      key: ValueKey(draft.id), text: draft.text,
+                                      locked: lane.operation != null,
+                                      status: lane.operation == draft
+                                        ? (lane.paused ?? (lane.steering ? 'Invio guida…' : 'Invio…'))
+                                        : 'In coda',
+                                      warning: lane.paused,
+                                      onEdit: () => editQueued(lane, draft),
+                                      onDelete: () => setState(() => lane.remove(draft)),
+                                      onGuide: liveRunning && online ? () => dispatchQueued(lane, draft, guide: true) : null,
+                                      onResume: lane.paused != null && !lane.running && !busy && online
+                                        ? () => resumeQueue(lane) : null,
+                                    ),
                                 if (activeRequest || activeLiveTurn != null)
                                   Padding(
                                     padding: const EdgeInsets.symmetric(
@@ -1523,55 +1690,35 @@ class _WorkspaceState extends State<Workspace> {
                         ),
                       ),
                     ),
-                  if (!libraryVisible)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          DeviceLabel(
-                            name: device?['name'] ?? 'Scegli un PC',
-                            online: online,
-                            onTap: busy ? null : chooseDevice,
-                          ),
-                          if (conversationId == null || projectId != null)
-                            TextButton.icon(
-                              style: TextButton.styleFrom(
-                                foregroundColor: muted,
-                                minimumSize: const Size(48, 48),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                ),
-                              ),
-                              onPressed: busy || conversationId != null
-                                  ? null
-                                  : chooseProject,
-                              icon: const Icon(Icons.folder_outlined, size: 20),
-                              label: Text(
-                                projects[projectId]?['name'] ?? 'Chat libera',
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
                   Padding(
                     key: const ValueKey('composer-area'),
-                    padding: EdgeInsets.fromLTRB(16, 8, 16, keyboard ? 8 : 12),
-                    child: AuraComposer(
+                    padding: EdgeInsets.fromLTRB(12, 8, 12, keyboard ? 8 : 12),
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    SkillPicker(controller: composer, focus: composerFocus, enabled: !turnBusy && online,
+                      hasProject: projectId != null,
+                      skills: (((device?['project_skills'] as Map?)?[projectId] as Map?)?['skills'] as List? ?? [])
+                        .whereType<Map>().map((s) => Map<String,dynamic>.from(s)).toList()),
+                    AuraComposer(
                       controller: composer,
                       focusNode: composerFocus,
                       online: online,
                       busy: turnBusy,
+                      allowQueue: conversationId != null,
                       onSend: send,
                       onStop: () => action('stop'),
                       onOptions: composerOptions,
                       modelName: modelName,
                       permissionLabel: permissionLabel,
-                      onModel: chooseModel,
-                      onPermissions: changingPermission
-                          ? null
-                          : choosePermissions,
+                      models: modelChoices,
+                      selectedModel: selectedModelId,
+                      onModelSelected: selectModel,
+                      permissions: permissionChoices,
+                      selectedPermission: permissionMode,
+                      onPermissionSelected: applyPermission,
+                      micActive: micActive,
+                      onMic: online ? toggleMic : null,
                     ),
+                    ]),
                   ),
                 ],
               ),
@@ -1652,173 +1799,26 @@ String _stepCommand(Map event) {
   return '';
 }
 
-String _stepDetail(Map event) => [
-  _stepCommand(event),
-  event['path'],
-  event['summary'],
-  _stepStatus(event['status']),
-].whereType<Object>().map((value) => value.toString()).where((value) => value.isNotEmpty).join(' · ');
-
 class MessageView extends StatelessWidget {
-  const MessageView({super.key, required this.message, this.live = false});
+  const MessageView({super.key, required this.message, this.live = false, this.onStopAgent, this.onStopShell});
   final Map<String, dynamic> message;
   final bool live;
+  final ValueChanged<String>? onStopAgent, onStopShell;
   @override
   Widget build(BuildContext context) {
     final user = message['role'] == 'user';
-    final activity = (message['activity'] as List? ?? [])
-        .whereType<Map>()
-        .toList();
-    final reasoning = [
-      (message['reasoning'] as String? ?? '').trim(),
-      ...activity
-          .where((event) => event['kind'] == 'reasoning')
-          .map((event) => (event['text'] ?? '').toString().trim()),
-    ].where((text) => text.isNotEmpty).join('\n\n');
-    final steps = activity
-        .where((event) => event['kind'] != 'reasoning')
-        .toList();
+    if (!user) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 28),
+        child: TurnHistory(message: message, live: live,
+          onStopAgent: onStopAgent, onStopShell: onStopShell),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: 28),
       child: Column(
-        crossAxisAlignment: user
-            ? CrossAxisAlignment.end
-            : CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          if (reasoning.isNotEmpty)
-            live
-                ? Padding(
-                    padding: const EdgeInsets.only(bottom: 14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Ragionamento',
-                          style: TextStyle(
-                            color: muted,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          reasoning,
-                          style: const TextStyle(
-                            color: muted,
-                            fontSize: 13,
-                            height: 1.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                : ExpansionTile(
-                    tilePadding: EdgeInsets.zero,
-                    dense: true,
-                    shape: const Border(),
-                    collapsedShape: const Border(),
-                    title: const Text(
-                      'Ragionamento',
-                      style: TextStyle(color: muted, fontSize: 13),
-                    ),
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Text(
-                          reasoning,
-                          style: const TextStyle(
-                            color: muted,
-                            fontSize: 13,
-                            height: 1.5,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-          if (steps.isNotEmpty)
-            live
-                ? Padding(
-                    padding: const EdgeInsets.only(bottom: 14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Attività',
-                          style: TextStyle(
-                            color: muted,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        ...steps.map(
-                          (event) => Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Icon(
-                                  event['kind'] == 'agent'
-                                      ? Icons.smart_toy_outlined
-                                      : Icons.terminal_rounded,
-                                  size: 16,
-                                  color: muted,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        _stepLabel(event),
-                                        style: const TextStyle(
-                                          fontSize: 13,
-                                          height: 1.4,
-                                        ),
-                                      ),
-                                      if (_stepDetail(event).isNotEmpty)
-                                        Text(
-                                          _stepDetail(event),
-                                          style: const TextStyle(
-                                            color: muted,
-                                            fontSize: 12,
-                                            height: 1.4,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                : ExpansionTile(
-                    tilePadding: EdgeInsets.zero,
-                    dense: true,
-                    shape: const Border(),
-                    collapsedShape: const Border(),
-                    title: Text(
-                      '${steps.length} attività',
-                      style: const TextStyle(color: muted, fontSize: 13),
-                    ),
-                    children: steps
-                        .map(
-                          (event) => ListTile(
-                            dense: true,
-                            title: Text(_stepLabel(event)),
-                            subtitle: Text(
-                              _stepDetail(event),
-                              maxLines: 4,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        )
-                        .toList(),
-                  ),
           LayoutBuilder(
             builder: (context, constraints) => Align(
               alignment: user ? Alignment.centerRight : Alignment.centerLeft,

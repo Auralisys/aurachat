@@ -1,0 +1,47 @@
+{
+  "source": "ChatGPT Windows 26.1013.4894, extracted webview/assets",
+  "changes": "Removed build hashes; renamed new_chat_os_windows to new_chat; neutral dark ink uses currentColor in monochrome SVGs.",
+  "icons": [
+    {
+      "file": "arrow_up.svg",
+      "source": "arrow_up-6c904b0911e9.svg",
+      "sourceSha256": "83f21ab4a65951fd98ccf9ab89d743250c7e8aca86fc5c8b7a0220c6d7cfcc0c"
+    },
+    {
+      "file": "bot.svg",
+      "source": "bot-18272b8a0d1a.svg",
+      "sourceSha256": "bec6de9d2013a6240d429ef6236e844d77a258190b5218161c51a90cd89e4424"
+    },
+    {
+      "file": "chevron_down.svg",
+      "source": "chevron_down-6d8fb03d85b2.svg",
+      "sourceSha256": "60f528fbe29743a6d8f3f1f3710a7ff443c45ec71652a4d8f7370628015cd3ef"
+    },
+    {
+      "file": "chevron_left.svg",
+      "source": "chevron_left-cb173ec9f260.svg",
+      "sourceSha256": "720c9ed794b7fb2c3b0be20490a9952b9ffc2d640248b40b4cc51ea213b824ef"
+    },
+    {
+      "file": "home.svg",
+      "source": "home-53fa00df0b9e.svg",
+      "sourceSha256": "c13db831d6a643a5d3b70c5c0e9fc8c6d45de8d11cd3c761f1331dd7ba506b3b"
+    },
+    {
+      "file": "new_chat.svg",
+      "source": "new_chat_os_windows-c4e9d2720cf4.svg",
+      "sourceSha256": "7d7b449357723433ee9eb5e004ea4146db2cac8bdbadb9ded4e29fcf177485b2"
+    },
+    {
+      "file": "folder_closed.svg",
+      "source": "folder_closed-72c28e1ee356.svg",
+      "sourceSha256": "621b68d807b7466438be71461e3717a51ff26ea49956278b54633cc53b3eef58"
+    },
+    {
+      "file": "folder_open.svg",
+      "source": "folder_open-cfa3e46867f9.svg",
+      "sourceSha256": "2020f0c64c4346e3a95fe3e945919370d5870971b0948748471ea283e7a1d988"
+    }
+  ],
+  "mobileSource": "Copied from desktop/ui/assets/icons without further changes."
+}

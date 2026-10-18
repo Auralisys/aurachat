@@ -9,9 +9,10 @@ test('retries recent events but drops expired and invalid events', () => {
   assert.equal(notificationExpired('invalid', now), true);
 });
 test('routes completion to the correct account and conversation, with stable retry tag', () => {
-  const event = { title: 'Risposta pronta', body: 'Completata', conversation_id: 'chat1', device_id: 'pc1', api_key: 'never-copy-this' };
+  const event = { kind: 'chat', title: 'Risposta pronta', body: 'Completata', conversation_id: 'chat1', device_id: 'pc1', api_key: 'never-copy-this' };
   const result = notificationPayload('owner', 'event1', event);
   assert.equal(result.data.uid, 'owner');
+  assert.equal(result.data.kind, 'chat');
   assert.equal(result.data.conversation_id, 'chat1');
   assert.equal(result.android.notification.tag, 'event1');
   assert.equal(result.android.notification.channelId, 'aurachat_completion');

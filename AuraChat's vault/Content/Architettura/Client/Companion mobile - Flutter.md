@@ -18,8 +18,9 @@ Notifiche selettive: un solo esito per turno di chat (risposta pronta, errore o
 interruzione), richieste di approvazione e operazioni esplicite dell'utente
 (trascrizione, download del modello vocale). Tool, sub-agenti e comandi intermedi
 non generano push. La funzione `functions/completionPush` inoltra gli eventi a
-FCM anche in background; il tap apre la conversazione. La notifica di fine turno
-viene omessa quando la chat conclusa è aperta nella finestra desktop a fuoco.
+FCM anche in background; il tap apre la conversazione. Il focus desktop sopprime solo il toast Windows; la push viene comunque
+pubblicata. Sul telefono il banner foreground viene evitato solo se quella chat
+è aperta sul telefono stesso.
 
 Durante un turno il telefono segue `live_turns`: mostra il testo assistant in
 streaming, **Ragionamento** e **Attività** espansi con etichette italiane,
@@ -57,3 +58,24 @@ pubblicata in europe-west3; invio automatico verificato in background e con
 processo Android assente prima del completamento. Notifiche Windows presenti
 nella cronologia di sistema. Nome chat nel titolo e anteprima di 200 caratteri
 della risposta, con ellissi quando tagliata, condivisi tra desktop e telefono.
+
+## Skill, ordine dei passaggi e polish — 18 ottobre 2026
+
+Ragionamento, tool, approvazioni e agenti sono intercalati al testo tramite offset
+UTF-16. Ogni passo espande i dati effettivi; i sotto-agenti includono reasoning,
+attività e risultato, con stop sul singolo agente/comando quando attivo. I
+comandi running non vengono più segnati come completati. Fermare il padre
+cancella figli e shell della stessa chat.
+
+Il compositore supporta `/` con catalogo del progetto pubblicato dal PC
+(protocollo 3), discovery/load reali e invocazione `/nome`. Nessuna skill
+globale importata automaticamente. Posizioni e limiti in `mobile/README.md`.
+
+Secondo polish: liste/header compatti, meno azioni ripetute, icone SVG condivise
+con desktop anziché le matite generiche, composer piatto. Riferimenti studiati:
+Impeccable, UI UX Pro Max, Apple Design e i componenti RD Core/Nuifit locali
+([[RD Core e Nuifit - Riferimenti riusati]]).
+
+Android aggiornato senza disinstallazione: push foreground/background e
+caricamento di una skill temporanea provati realmente. La correzione del flag
+FID iOS e dell’inoltro APNs richiede ancora nuova build/verifica su iPhone.

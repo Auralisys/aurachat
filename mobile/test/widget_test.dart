@@ -4,6 +4,16 @@ import 'package:aurachat_mobile/app.dart';
 import 'package:aurachat_mobile/companion.dart';
 
 void main() {
+  test('reconnects only an offline alias to one online version of the same Windows name', () {
+    final devices = <Map<String,dynamic>>[
+      {'id':'old','name':'lofio · Ridney','remote_enabled':true,'last_seen':1},
+      {'id':'canonical','name':'lofio · RIDNEY','identity_version':2,'remote_enabled':true,'last_seen':100000},
+    ];
+    expect(onlineDeviceReplacement(devices,'old',100010),'canonical');
+    expect(onlineDeviceReplacement(devices,'canonical',100010),isNull);
+    expect(onlineDeviceReplacement([...devices, {...devices.last,'id':'ambiguous'}],'old',100010),isNull);
+    expect(onlineDeviceReplacement([{...devices.first,'name':'Other PC'},devices.last],'old',100010),isNull);
+  });
   test(
     'device liveness expires and chat index preserves project ownership',
     () {

@@ -660,6 +660,7 @@ async function setupActivity() {
     const previous = shells.get(payload.id) || {};
     if (payload.revision != null && previous.revision != null && payload.revision < previous.revision) return;
     shells.set(payload.id, Object.assign(previous, payload));
+    refreshShellProgress(payload.conversation_id);
     if (payload.conversation_id === state.activeConversationId) renderActivity();
   });
   // Live writes become artifacts while the turn is still running.

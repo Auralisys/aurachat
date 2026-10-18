@@ -208,3 +208,46 @@ non disabilitato. Evidenza
 `codex.exe` superava il limite REA di 256 MiB; Ghidra non configurato.
 I motori nativi non sono stati decompilati. Le conclusioni statiche non
 sostituiscono prove runtime né dimostrano disponibilità nell'account.
+
+## Notifiche e skill — approfondimento del 18 ottobre 2026
+
+Lettura statica mirata dell’estratto già conservato, senza eseguire codice del
+target o interrogare servizi ChatGPT. In `.vite/build/main-C4DYk222.js`
+(SHA-256 `c8a2af504b21314fa6a64ad1b4ec83dbad80033ede902caf9978fd9c74a2c175`):
+
+- `showNotification` a offset 500827: supporto OS, deduplicazione per ID,
+  creazione e rimozione della notifica, controllo ripetuto prima di mostrarla.
+- `registerVisibleConversation` a 504559: registro delle conversazioni
+  visibili associato al webContents di origine.
+- `shouldSuppressNotification` a 504708: agent-message considera conversazione
+  visibile e finestra a fuoco; turn-complete usa una preferenza off/unfocused
+  (default unfocused). Permission/question hanno trattamento distinto.
+
+Offset base zero; in questi tre punti indici Unicode e UTF-16 coincidono.
+Questo prova una decisione **locale** sui toast del client distribuito. Non
+dimostra come siano implementate le push su iOS/Android o il loro backend.
+L’ulteriore analisi semantica del main è scaduta: evidenza parziale
+`ev_2096601a72175ceb942ef4714de4db95fa7b1f7833bab6d8dff591353b16849e`.
+Le osservazioni sopra provengono dalla lettura diretta verificata del file.
+
+L’approfondimento skill ha osservato `skills/list`, attività di caricamento
+SKILL.md e controlli del compositore slash. REA ha analizzato solo
+`webview/assets/composer-controls-26fb26618ba3.js`: parent
+`ev_770a4c77c48ae52267ab780f0ddaaf08007ed9df12fd1ceadef884e1d16bd868`,
+summary `ev_199f1c8802ffd6d774d6dd14869d4f9641339b872812eaef46bf08a9ac06805f`.
+Copertura applicativa parziale, grafo limitato per numero di nodi; questi
+risultati non ricostruiscono il discovery backend completo del prodotto.
+
+Scelte AuraChat: eventi indipendenti dalla visibilità del desktop, filtro toast
+locale; cronologia tipizzata con offset e attività espandibili; skill locali
+al progetto attraverso discovery/load e `/nome`. I tool sono funzioni native
+fornite al modello, non un nuovo addestramento del modello. Il client non
+replica le integrazioni MCP, sandbox, tool cloud o ricerca web di ChatGPT.
+Riferimenti aggiuntivi propri dell’utente: [[RD Core e Nuifit - Riferimenti riusati]].
+
+
+### Coda e guida durante il turno — 18 ottobre 2026
+
+Lettura statica del componente distribuito `webview/assets/queued-message-list-aa3e4e664a72.js` (SHA-256 `fb6796a6230366c6e4ef43e318b5af1cac11472d7bda01a719ef44a73b91f348`). Il componente distingue `queued`, `pending`, `sending` e `outcome-unknown`; permette modifica, eliminazione e invio come `Steer`. Una coda interrotta espone `Resume`; un esito ambiguo non autorizza il reinvio automatico. Queste sono osservazioni del client desktop Codex/ChatGPT distribuito, non prove del protocollo interno del modello o della UI Android.
+
+Per AuraChat la richiesta utente è una bolla nella conversazione, con etichetta «In coda» sopra a destra. La guida immediata è distinta dalla coda FIFO; i comandi già eseguiti devono conservare i risultati nel contesto.

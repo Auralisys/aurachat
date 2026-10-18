@@ -28,6 +28,11 @@ impl AgentRuns {
     pub fn cancelled(&self,id:&str)->bool {self.0.lock().unwrap().get(id).is_some_and(|e|e.cancellation.is_cancelled())}
     pub fn finish(&self,id:&str){self.0.lock().unwrap().remove(id);}
     pub fn token(&self,id:&str)->Option<Arc<Cancellation>>{self.0.lock().unwrap().get(id).map(|e|e.cancellation.clone())}
+    pub fn cancel_conversation(&self,owner:&str,conversation:&str){
+        self.0.lock().unwrap().retain(|_,entry|{
+            if entry.owner==owner && entry.conversation==conversation {entry.cancellation.cancel();false}else{true}
+        });
+    }
 }
 #[derive(Clone)]
 pub struct Runtime {pub app:tauri::AppHandle,pub owner:String,pub conversation:String}
@@ -37,6 +42,11 @@ impl Runtime {
 }
 #[cfg(test)] mod tests {
     use super::*;
+    #[test] fn parent_stop_cancels_only_its_own_children(){
+        let runs=AgentRuns::default();let child=runs.start("u","c","a");let other=runs.start("u","other","b");
+        runs.cancel_conversation("wrong","c");assert!(!child.is_cancelled());
+        runs.cancel_conversation("u","c");assert!(child.is_cancelled());assert!(!other.is_cancelled());assert!(runs.token("a").is_none());
+    }
     #[test] fn only_the_owner_can_stop_and_pending_io_is_cancellable(){
         let runs=AgentRuns::default();let cancellation=runs.start("u","c","a");
         assert!(runs.stop("other","c","a").is_err());assert!(runs.stop("u","other","a").is_err());

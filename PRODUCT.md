@@ -19,4 +19,5 @@ Flutter mobile, Tauri/Rust desktop, Firebase Auth/Firestore/FCM e Cloud Function
 - Test reali sull'emulatore Android disponibile.
 
 ## Da verificare
-Attivazione fatturazione Firebase necessaria al deploy del mittente push.
+Consegna push su iPhone reale con nuova build e configurazione APNs;
+Blaze e Cloud Function sono già attivi.

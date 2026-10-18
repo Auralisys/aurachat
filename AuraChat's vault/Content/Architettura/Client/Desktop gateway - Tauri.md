@@ -83,10 +83,11 @@ pubblicati sotto la sessione corrente. Il percorso è separato da
 `conversations/{id}` per non interferire con le precondizioni di versione.
 
 Il backend conosce la chat aperta tramite il comando `set_viewing_chat`, chiamato
-da `openConversation`/`clearChat`. La notifica di fine turno (toast Windows e
-push FCM) viene soppressa solo se quella chat è aperta **e** la finestra
+da `openConversation`/`clearChat`. Il toast Windows di fine turno viene soppresso solo se quella chat è aperta
+**e** la finestra
 principale è a fuoco; tray, minimizzata, finestra non a fuoco o altra chat
-notificano normalmente. Le richieste di approvazione non vengono mai soppresse.
+notificano normalmente. La push FCM viene sempre pubblicata, indipendentemente
+dal focus Windows. Le richieste di approvazione non vengono mai soppresse.
 `logout` azzera la chat osservata. Test Rust puro su `viewing_match` e sul
 reducer live.
 
@@ -221,3 +222,15 @@ tre stati: preparazione, "Installato · caricato in memoria" (`voice.loaded`) e
 "Installato · pronto per la dettatura"; download e rimozione restano disabilitati
 durante il caricamento (`ui/voice.js:28`). Dettagli visivi in
 [[UI desktop - Refactor flat]]; limiti in [[Problemi noti]].
+
+## Skill e cancellazione figli — 18 ottobre 2026
+
+Tool `list_project_skills`/`load_project_skill`, catalogo autenticato
+`project_skills` e menu slash nel composer. Solo root già autorizzate e file
+SKILL.md nei percorsi standard del progetto; skill e risorse non ampliano
+i permessi. Invocazione esplicita `/nome` registrata nella cronologia.
+
+I processi mantengono il loro stato reale finché non terminano; gli snapshot
+shell aggiornano anche la cronologia in streaming. Stop del turno cancella
+agenti figli e processi della stessa chat, senza toccare altre conversazioni.
+Il telefono può interrompere singoli agenti e shell attraverso ID registrati.

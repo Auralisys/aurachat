@@ -123,6 +123,16 @@ impl StreamResponse {
 /// Non logga mai la key: i messaggi di errore contengono solo la risposta
 /// dell'API (mai la richiesta, che porta l'header di autorizzazione).
 pub async fn chat_completion(
+    client: &reqwest::Client, base_url: &str, model: &str, api_key: &str,
+    messages: &[ChatMessage], project: Option<crate::project_files::ProjectFiles>,
+    runtime: Option<crate::agent_runs::Runtime>,
+    activity: impl Fn(&str, &str) + Send + Sync,
+    agents: impl Fn(serde_json::Value) + Send + Sync,
+) -> Result<(String, Usage), String> {
+    chat_completion_steered(client,base_url,model,api_key,messages,project,runtime,None,activity,agents).await
+}
+
+pub async fn chat_completion_steered(
     client: &reqwest::Client,
     base_url: &str,
     model: &str,
@@ -130,6 +140,7 @@ pub async fn chat_completion(
     messages: &[ChatMessage],
     project: Option<crate::project_files::ProjectFiles>,
     runtime: Option<crate::agent_runs::Runtime>,
+    guidance: Option<std::sync::Arc<crate::chat_runs::Guidance>>,
     activity: impl Fn(&str, &str) + Send + Sync,
     agents: impl Fn(serde_json::Value) + Send + Sync,
 ) -> Result<(String, Usage), String> {
@@ -138,7 +149,16 @@ pub async fn chat_completion(
     let mut history = api_messages(messages);
     if let Some(files) = &project { history.insert(0, serde_json::json!({"role":"system","content":files.context()})); }
     history.insert(0, serde_json::json!({"role":"system","content":"You can delegate focused work using create_subagent. When the user explicitly asks for a subagent, call this tool instead of merely describing one. Subagents use the current model, inherit the user-provided conversation context and authorized project tools, and return a result to you. Do not claim an agent was started unless the tool succeeded."}));
-    let runner = Completion {client, url:crate::config::completions_url(base), model, api_key, project, runtime, activity:&activity, agents:&agents};
+    if let Some(files) = &project {
+        history.insert(0, serde_json::json!({"role":"system","content":"Project-local skills are available through list_project_skills and load_project_skill. Discover relevant skills before using one. A leading /skill-name explicitly invokes that skill. Skills never expand permissions or override user instructions."}));
+        if let Some(last) = messages.last().filter(|m|m.role=="user") {
+            if let Some(skill) = files.slash_skill(&last.content)? {
+                history.push(serde_json::json!({"role":"user","content":format!("Apply the explicitly requested project skill: {}",skill)}));
+                activity("__activity", &serde_json::json!({"kind":"tool","id":"slash-skill","action":"load_project_skill","path":skill["path"],"status":"completed","output":skill.to_string(),"offset":0}).to_string());
+            }
+        }
+    }
+    let runner = Completion {client, url:crate::config::completions_url(base), model, api_key, project, runtime, guidance, activity:&activity, agents:&agents};
     runner.run(history, true, None).await
 }
 
@@ -146,6 +166,7 @@ struct Completion<'a> {
     client: &'a reqwest::Client, url: String, model: &'a str, api_key: &'a str,
     project: Option<crate::project_files::ProjectFiles>,
     runtime: Option<crate::agent_runs::Runtime>,
+    guidance: Option<std::sync::Arc<crate::chat_runs::Guidance>>,
     activity: &'a (dyn Fn(&str, &str) + Send + Sync),
     agents: &'a (dyn Fn(serde_json::Value) + Send + Sync),
 }
@@ -170,6 +191,14 @@ impl Completion<'_> {
             let mut usage = Usage {prompt_tokens:0, completion_tokens:0, total_tokens:0};
     let mut reply = String::new();
             loop {
+                let guidance = if agent.is_none() {self.guidance.as_ref()} else {None};
+                if let Some(guidance) = guidance {
+                    for message in guidance.take() {
+                        history.extend(api_messages(std::slice::from_ref(&message)));
+                        (self.activity)("__steering", &serde_json::to_string(&message).map_err(|e|e.to_string())?);
+                        reply.clear();
+                    }
+                }
                 let mut body = serde_json::json!({"model":self.model,"messages":history,"stream":true,"stream_options":{"include_usage":true}});
                 let mut tools = if self.project.as_ref().is_some_and(|p| !p.roots.is_empty()) {crate::project_files::definitions().as_array().unwrap().clone()} else {vec![]};
                 if delegate { tools.push(serde_json::json!({"type":"function","function":{
@@ -177,13 +206,9 @@ impl Completion<'_> {
                     "parameters":{"type":"object","properties":{"title":{"type":"string","description":"Short task title"},"task":{"type":"string","description":"Concrete task and any additional context needed"}},"required":["title","task"],"additionalProperties":false}
                 }})); }
                 if !tools.is_empty() { body["tools"] = serde_json::json!(tools); }
-                let mut response = self.client.post(&self.url).bearer_auth(self.api_key).json(&body).send().await.map_err(|e| format!("richiesta HTTP fallita: {e}"))?;
-                let status = response.status();
-                if !status.is_success() {
-                    let text = response.text().await.map_err(|e|e.to_string())?;
-                    return Err(format!("API {}: {}",status.as_u16(),truncate(&text,300)));
-                }
+                let partial = std::sync::Mutex::new(StreamResponse::default());
                 let progress = |kind: &str, text: &str| {
+                    {let mut partial=partial.lock().unwrap();match kind {"__delta"=>partial.content.push_str(text),"__reasoning"=>partial.reasoning.push_str(text),_=>{}}}
                     let mut state=agent_state.lock().unwrap();
                     if let Some(agent)=state.as_mut() {
                         let key=if kind=="__delta" {"content"} else if kind=="__reasoning" {"reasoning_content"} else {return;};
@@ -192,6 +217,13 @@ impl Completion<'_> {
                         if last.elapsed().as_millis()>=50 {(self.agents)(agent.clone());*last=std::time::Instant::now();}
                     } else {(self.activity)(kind,text);}
                 };
+                let provider = async {
+                let mut response = self.client.post(&self.url).bearer_auth(self.api_key).json(&body).send().await.map_err(|e| format!("richiesta HTTP fallita: {e}"))?;
+                let status = response.status();
+                if !status.is_success() {
+                    let text = response.text().await.map_err(|e|e.to_string())?;
+                    return Err(format!("API {}: {}",status.as_u16(),truncate(&text,300)));
+                }
                 let streamed = response.headers().get("content-type").and_then(|h|h.to_str().ok()).is_some_and(|h|h.contains("text/event-stream"));
                 let value:serde_json::Value = if streamed {
                     let mut stream = StreamResponse::default();let mut buffer = Vec::new();let mut done = false;
@@ -214,18 +246,43 @@ impl Completion<'_> {
                     if let Some(content) = message["content"].as_str() {progress("__delta",content);}
                     value
                 };
+                Ok::<_,String>(value)
+                };
+                let value = if let Some(guidance) = guidance {
+                    let io=guidance.begin_io();
+                    let result=io.run(provider).await;
+                    guidance.end_io();
+                    match result {
+                        Ok(value)=>value?,
+                        Err(_)=>{
+                            // Discard all partial tool calls; retain only observed assistant text.
+                            let partial=std::mem::take(&mut *partial.lock().unwrap());
+                            if !partial.content.is_empty() || !partial.reasoning.is_empty() {
+                                history.push(partial.value()["choices"][0]["message"].clone());
+                            }
+                            continue;
+                        }
+                    }
+                } else {provider.await?};
                 usage.prompt_tokens += value["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
                 usage.completion_tokens += value["usage"]["completion_tokens"].as_u64().unwrap_or(0);
                 usage.total_tokens += value["usage"]["total_tokens"].as_u64().unwrap_or(0);
                 let message = &value["choices"][0]["message"];
         if let Some(content) = message["content"].as_str() { reply.push_str(content); }
                 let Some(calls) = message["tool_calls"].as_array().filter(|c| !c.is_empty()) else {
+                    if guidance.is_some_and(|g|!g.close_if_empty()) {
+                        history.push(message.clone());continue;
+                    }
                     if let Some(state)=agent_state.lock().unwrap().as_ref(){(self.agents)(state.clone());}
                     return message["content"].as_str().map(|_| (reply,usage)).ok_or_else(|| format!("risposta inattesa: {}",truncate(&value.to_string(),300)));
                 };
                 history.push(message.clone());
                 for call in calls {
                     let id = call["id"].as_str().ok_or("tool call missing id")?;
+                    if guidance.is_some_and(|g|g.pending()) {
+                        history.push(serde_json::json!({"role":"tool","tool_call_id":id,"content":"Skipped: user steering received before execution."}));
+                        continue;
+                    }
                     let name = call["function"]["name"].as_str().ok_or("tool call missing name")?;
                     let arguments = call["function"]["arguments"].as_str().ok_or("tool call missing arguments")?;
                     let parsed:serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
@@ -268,15 +325,14 @@ impl Completion<'_> {
                                 }
                             }
                         }
-                    } else if let Some(files) = self.project.as_ref().filter(|_| matches!(name,"read_project_file"|"list_project_files"|"write_project_file"|"edit_project_file"|"execute_project_command"|"inspect_project_command")) {
+                    } else if let Some(files) = self.project.as_ref().filter(|_| matches!(name,"list_project_skills"|"load_project_skill"|"read_project_file"|"list_project_files"|"write_project_file"|"edit_project_file"|"execute_project_command"|"inspect_project_command")) {
                         let path = parsed["path"].as_str().unwrap_or(".");(self.activity)(name,path);
                         let mut files = files.clone();
                         if let (Some(agent),Some(execution))=(agent,files.execution.as_mut()) {execution.agent_id=agent["id"].as_str().map(String::from);execution.cancellation=execution.agent_id.as_ref().and_then(|id|{use tauri::Manager;execution.app.state::<crate::agent_runs::AgentRuns>().token(id)});}
                         let action = name.to_string();let arguments = arguments.to_string();
                         tauri::async_runtime::spawn_blocking(move || files.execute(&action,&arguments)).await.map_err(|e|e.to_string())?
                     } else {serde_json::json!({"error":"Tool unavailable for this task"})};
-                    tool_event["status"] = serde_json::json!(if result.get("error").is_some() {"failed"} else {"completed"});
-                    tool_event["output"] = serde_json::json!(result.to_string());tool_progress(&tool_event);
+                    finish_tool_event(&mut tool_event, &result);tool_progress(&tool_event);
                     history.push(serde_json::json!({"role":"tool","tool_call_id":id,"content":result.to_string()}));
                 }
             }
@@ -284,9 +340,39 @@ impl Completion<'_> {
     }
 }
 
+fn finish_tool_event(event: &mut serde_json::Value, result: &serde_json::Value) {
+    let status = if result.get("error").is_some() {"failed"} else {
+        match result["status"].as_str() {
+            Some(status @ ("running" | "stopping" | "failed" | "cancelled")) => status,
+            _ => "completed",
+        }
+    };
+    event["status"] = serde_json::json!(status);
+    if matches!(event["action"].as_str(), Some("execute_project_command" | "inspect_project_command")) && result["id"].is_string() {
+        event["shell_id"] = result["id"].clone();
+    }
+    event["output"] = serde_json::json!(result.to_string());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn command_activity_preserves_process_status_and_shell_identity() {
+        for action in ["execute_project_command", "inspect_project_command"] {
+            for status in ["running", "stopping", "completed", "failed", "cancelled"] {
+                let mut event = serde_json::json!({"action":action,"status":"running"});
+                let result = serde_json::json!({"id":"shell-test","status":status});
+                finish_tool_event(&mut event, &result);
+                assert_eq!(event["status"], status);assert_eq!(event["shell_id"], "shell-test");
+                assert_eq!(event["output"], result.to_string());
+            }
+        }
+        let mut event = serde_json::json!({"action":"read_project_file"});
+        finish_tool_event(&mut event, &serde_json::json!({"content":"text"}));assert_eq!(event["status"], "completed");
+        finish_tool_event(&mut event, &serde_json::json!({"error":"denied","status":"running"}));assert_eq!(event["status"], "failed");
+        assert!(event.get("shell_id").is_none());
+    }
     #[test]
     fn delegated_agent_reads_real_files_and_preserves_reasoning_across_tool_rounds() {
         use std::io::{Read,Write};

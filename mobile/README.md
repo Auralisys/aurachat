@@ -217,3 +217,38 @@ successivo con risposta di 100 parole ha mostrato su Android e nella cronologia
 Windows il nome della chat e la stessa anteprima `ANTEPRIMA_NOTIFICA_OK...`,
 troncata con ellissi. Invocazioni Cloud Run terminate con HTTP 204.
 Test mirato Rust dell'anteprima e due test Node della funzione superati.
+
+## Push, skill e cronologia — verifica del 18 ottobre 2026
+
+Il focus di Windows sopprime il toast locale della chat aperta, ma non elimina
+l’evento push destinato ai telefoni. In foreground il telefono evita il banner
+solo per la chat che sta mostrando; approvazioni sempre notificate. FCM
+`message_id` nelle ricevute attesta accettazione, non visualizzazione.
+
+La registrazione aspetta il salvataggio del FID, conserva gli eventi arrivati
+prima del login, distingue `ios` da `android` e riprova al resume. iOS usa anche
+`FirebaseMessagingInstallationIdEnabled = true` e inoltro APNs esplicito nel
+runner, come Nuifit. Il warning `invalid-request` va riprovato su nuova build
+iOS; nessun test iPhone può essere certificato dall’ambiente Windows.
+
+La chat mobile ricostruisce testo e passaggi secondo offset UTF-16, con
+ragionamenti, argomenti/output dei tool, approvazioni e sotto-agenti espandibili.
+Le anteprime live sono limitate e dichiarano il taglio; la cronologia salvata
+resta il riferimento completo. I controlli di stop live operano sugli ID
+registrati e verificano account/conversazione sul PC.
+
+Digitare `/` nel progetto apre le skill note del PC selezionato. Discovery
+nelle cartelle `.agents/skills`, `.codex/skills`, `.aurachat/skills` delle sole
+root di progetto già autorizzate; `SKILL.md` UTF-8 fino a 32 KiB. `/nome` carica
+la skill; il modello dispone anche di `list_project_skills`/`load_project_skill`.
+I nomi duplicati richiedono selezione esplicita di root/path via tool. Il
+catalogo mobile è aggiornato col heartbeat (protocollo 3). Nessuna importazione
+automatica delle skill del profilo utente o delle integrazioni MCP.
+
+Polish: gerarchia compatta, composer piatto, menu coerenti, target 48 dp,
+Reduce Motion e testo ingrandito. Gli SVG selezionati coincidono con desktop:
+provenienza in `assets/icons/provenance.json`; nessun bundle JS ChatGPT incluso.
+
+Test reali: push Android foreground/background via Cloud Function, turno con
+sotto-agente (437) e caricamento skill temporanea (SKILL_RUNTIME_OK). App
+aggiornata in-place, senza logout/disinstallazione.

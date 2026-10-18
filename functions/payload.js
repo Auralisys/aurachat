@@ -9,7 +9,7 @@ function notificationPayload(uid, eventId, event) {
   }
   return {
     notification: { title: event.title.slice(0, 120), body: event.body.slice(0, 400) },
-    data: { uid, event_id: eventId, conversation_id: String(event.conversation_id || ''), device_id: String(event.device_id || '') },
+    data: { uid, event_id: eventId, kind: String(event.kind || ''), conversation_id: String(event.conversation_id || ''), device_id: String(event.device_id || '') },
     android: { priority: 'high', notification: { channelId: 'aurachat_completion', tag: eventId, icon: 'ic_notification', sound: 'default' } },
     apns: { payload: { aps: { sound: 'default' } } },
   };
