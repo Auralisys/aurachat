@@ -79,3 +79,30 @@ Impeccable, UI UX Pro Max, Apple Design e i componenti RD Core/Nuifit locali
 Android aggiornato senza disinstallazione: push foreground/background e
 caricamento di una skill temporanea provati realmente. La correzione del flag
 FID iOS e dell’inoltro APNs richiede ancora nuova build/verifica su iPhone.
+
+## Dettatura via PC, menu composer e coda — 18 ottobre 2026
+
+Il riconoscimento vocale locale (`speech_to_text`) è stato rimosso: non era
+affidabile. Il telefono registra ora un WAV **16 kHz mono 16-bit** con `record`.
+Al tap sul microfono consulta `speech` nell'heartbeat del PC: se manca chiede di
+aggiornare AuraChat, se `ready` è falso chiede di scaricare il modello vocale da
+Impostazioni → Voce, se `busy`/`loading` invita a riprovare. Il composer mostra
+stop durante la registrazione e uno spinner durante la trascrizione.
+
+L'audio viene diviso in parti da 500 KB e scritto in
+`users/{uid}/devices/{id}/requests` con `status: audio`; una richiesta
+`action: transcribe` contiene `audio_parts` e `language`. Il PC ricompone il WAV,
+trascrive con Cohere e riscrive `result.text` nella richiesta. Il telefono unisce
+il testo alla bozza già presente. Stop trascrive soltanto; invio durante la
+registrazione trascrive e invia subito, come sul desktop. Su timeout le parti non
+vengono cancellate, perché il PC potrebbe doverle ancora leggere.
+
+I menu di modello e permessi sono centrati con 20 px per lato (massimo 480 px),
+non più ancorati all'icona che li apre.
+
+La coda dei messaggi mostra la bolla utente con **In coda** e un menu a tre
+puntini: **Manda subito** (steering se un turno è in corso, altrimenti promozione
+e invio immediato), **Modifica** (riporta il testo nel composer) e **Cancella**.
+Se resta in coda parte in FIFO alla fine del turno, anche dopo uno stop. Sono
+stati corretti il blocco dell'operazione dopo errori di invio, la coda creata
+mentre girava un'altra chat e i messaggi che scavalcavano la coda esistente.

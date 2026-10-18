@@ -234,3 +234,31 @@ I processi mantengono il loro stato reale finché non terminano; gli snapshot
 shell aggiornano anche la cronologia in streaming. Stop del turno cancella
 agenti figli e processi della stessa chat, senza toccare altre conversazioni.
 Il telefono può interrompere singoli agenti e shell attraverso ID registrati.
+
+## Trascrizione remota e coda interattiva — 18 ottobre 2026
+
+L'heartbeat del dispositivo pubblica anche `speech` con `ready`, `busy` e
+`loading`, così il telefono sa se il modello Cohere è installato e libero prima
+di registrare. La nuova azione companion `transcribe` legge le parti audio dalla
+collezione `requests` tramite `relay_get`, le decodifica da base64 e ricompone il
+WAV in memoria; `speech::transcribe_wav` valida il file 16 kHz mono 16-bit, lo
+scrive in una cartella temporanea, carica i campioni con `read_wav_samples` e usa
+lo stesso `Speech::transcribe` del desktop. Limite remoto 4 MB (due minuti);
+l'`account_lock` viene rilasciato prima dell'inferenza. `execute` ora restituisce
+un `Value`: il poll scrive `result` nella richiesta insieme a `completed`, e il
+telefono legge `result.text`. Il risultato non viene incluso per le azioni che
+non lo producono. Aggiunte le dipendenze `base64` e il test che rifiuta audio non
+WAV/troppo grande (`cargo check --tests` verde; l'esecuzione della suite in
+questo ambiente si ferma sulla DLL ONNX Runtime).
+
+La bolla della coda desktop non ha più i pulsanti inline: mostra **In coda** e un
+menu a tre puntini con **Manda subito**, **Modifica** e **Cancella**. Manda subito
+usa `steer_chat` se un turno è in corso, altrimenti sposta la bozza in testa e
+chiama `flushQueue`. Modifica rimuove la bozza e la riporta nel composer con gli
+allegati; l'editor inline e il relativo lock sono stati eliminati. `flushQueue`
+riparte dopo completed **e** dopo cancelled/stopped, mentre solo un failure
+sconosciuto mette in pausa. Un invio manuale con coda già presente viene accodato
+dopo i draft esistenti. `requestChat` non semina più un turno di background con i
+messaggi della chat attiva e non sostituisce `state.messages` se la conversazione
+non è quella aperta. Il listener `companion-updated` fa ripartire la coda locale
+quando un turno avviato da un altro dispositivo termina.

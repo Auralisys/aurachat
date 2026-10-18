@@ -303,3 +303,26 @@ solo gateway canonico online con lo stesso nome, sostituendo il vecchio alias
 solo se offline e senza richiesta locale in corso. Casi ambigui non migrano.
 Le richieste già accodate non vengono copiate o rieseguite. Test dedicati
 Rust e Dart verificano identità e riconnessione.
+
+## Audio di dettatura e risultato trascrizione — 18 ottobre 2026
+
+Le richieste companion restano documenti da massimo 1 MiB, quindi un WAV non
+viene scritto in un unico documento. Il telefono crea nella stessa collezione
+`users/{uid}/devices/{device}/requests` una serie di documenti di appoggio con
+`status: audio`, `action: audio` e un campo `audio` base64 (parti da 500 KB).
+Il poll del desktop interroga solo `status: pending`, quindi non le prende in
+carico. La richiesta `action: transcribe` contiene l'elenco ordinato
+`audio_parts`, `language` e un `conversation_id` valido; il gateway legge ogni
+parte con `relay_get`, ricompone il WAV, trascrive e riscrive il documento con
+`status: completed` e `result: {text}`. In caso di errore usa il consueto
+`status: failed` + `error` (`speech_model_missing`, `speech_busy`,
+`speech_invalid_audio`, `speech_language`, `audio_missing`).
+
+Il telefono elimina le parti solo dopo aver ricevuto uno stato terminale. Se la
+risposta non arriva entro 180 secondi non le cancella, perché il desktop può
+averle lette o doverle ancora leggere; il documento di richiesta resta come
+traccia. L'heartbeat `devices/{id}` pubblica ora anche `speech: {ready, busy,
+loading}`, usato dal telefono per il messaggio "scarica prima il modello vocale
+sul PC" e per evitare registrazioni mentre il modello carica o sta trascrivendo.
+Questo flusso non introduce nuove collezioni né regole Firestore: usa la stessa
+collezione `requests` già autorizzata al proprietario.
