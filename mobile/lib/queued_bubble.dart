@@ -12,7 +12,7 @@ class QueuedMessageBubble extends StatelessWidget {
     this.warning,
     this.onEdit,
     this.onDelete,
-    this.onGuide,
+    this.onSendNow,
     this.onResume,
   });
 
@@ -20,7 +20,7 @@ class QueuedMessageBubble extends StatelessWidget {
   final String status;
   final bool locked;
   final String? warning;
-  final VoidCallback? onEdit, onDelete, onGuide, onResume;
+  final VoidCallback? onEdit, onDelete, onSendNow, onResume;
 
   @override
   Widget build(BuildContext context) {
@@ -30,15 +30,60 @@ class QueuedMessageBubble extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Padding(
-            padding: const EdgeInsets.only(right: 6, bottom: 6),
-            child: Text(
-              status,
-              style: const TextStyle(
-                fontSize: 12,
-                height: 1.3,
-                fontWeight: FontWeight.w600,
-                color: muted,
-              ),
+            padding: const EdgeInsets.only(right: 2, bottom: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                Text(
+                  status,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    height: 1.3,
+                    fontWeight: FontWeight.w600,
+                    color: muted,
+                  ),
+                ),
+                PopupMenuButton<_QueueAction>(
+                  tooltip: 'Azioni messaggio in coda',
+                  icon: const Icon(
+                    Icons.more_horiz_rounded,
+                    size: 20,
+                    color: muted,
+                  ),
+                  color: panel,
+                  surfaceTintColor: Colors.transparent,
+                  padding: EdgeInsets.zero,
+                  onSelected: (value) {
+                    if (locked) return;
+                    switch (value) {
+                      case _QueueAction.sendNow:
+                        onSendNow?.call();
+                      case _QueueAction.edit:
+                        onEdit?.call();
+                      case _QueueAction.delete:
+                        onDelete?.call();
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: _QueueAction.sendNow,
+                      enabled: !locked && onSendNow != null,
+                      child: const Text('Manda subito'),
+                    ),
+                    PopupMenuItem(
+                      value: _QueueAction.edit,
+                      enabled: !locked && onEdit != null,
+                      child: const Text('Modifica'),
+                    ),
+                    PopupMenuItem(
+                      value: _QueueAction.delete,
+                      enabled: !locked && onDelete != null,
+                      child: const Text('Cancella'),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
           LayoutBuilder(
@@ -101,46 +146,10 @@ class QueuedMessageBubble extends StatelessWidget {
                 ],
               ),
             ),
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                _action(context, Icons.edit_outlined, 'Modifica', onEdit),
-                _action(
-                  context,
-                  Icons.delete_outline_rounded,
-                  'Elimina',
-                  onDelete,
-                ),
-                if (onGuide != null)
-                  _action(context, Icons.bolt_rounded, 'Usa come guida', onGuide),
-              ],
-            ),
-          ),
         ],
       ),
     );
   }
-
-  Widget _action(
-    BuildContext context,
-    IconData icon,
-    String label,
-    VoidCallback? onTap,
-  ) {
-    return TextButton.icon(
-      onPressed: locked || onTap == null ? null : onTap,
-      icon: Icon(icon, size: 16),
-      label: Text(label),
-      style: TextButton.styleFrom(
-        foregroundColor: orchid,
-        disabledForegroundColor: muted.withValues(alpha: .5),
-        minimumSize: const Size(48, 48),
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-      ),
-    );
-  }
 }
+
+enum _QueueAction { sendNow, edit, delete }

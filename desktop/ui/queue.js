@@ -1,5 +1,5 @@
 // Local queues never replay after reload. Native history owns consumed guidance.
-const queuedTurns = {steering:new Map(), editing:new Map(), paused:new Set()};
+const queuedTurns = {steering:new Map(), paused:new Set()};
 
 function sameGuidance(a, b) {
   return a?.content === b?.content && JSON.stringify(a?.attachments || []) === JSON.stringify(b?.attachments || []);
@@ -13,47 +13,51 @@ function removeQueuedMessage(id, message) {
   if (!queue.length) state.queues.delete(id);
 }
 
-function queueLocked(id) {return queuedTurns.steering.has(id) || queuedTurns.editing.has(id);}
+function queueLocked(id) {return queuedTurns.steering.has(id);}
 function refreshQueue(id) {if (id === state.activeConversationId) {renderMessages();updateComposerControls();}}
+
+function editQueuedMessage(id, message) {
+  if (queueLocked(id) || !state.queues.get(id)?.includes(message)) return;
+  removeQueuedMessage(id,message);
+  const input = $('#composer-input');
+  const text = (message.content || '').trim();
+  input.value = input.value.trim() ? `${input.value.replace(/\s+$/,'')}\n${text}` : text;
+  if (message.attachments?.length) state.attachments = [...state.attachments, ...structuredClone(message.attachments)];
+  state.editingMessageIndex = null;
+  autoGrow(input);renderDraft();input.focus();composerStatus();refreshQueue(id);
+}
+
+// Sends the draft now: as guidance into the running turn, otherwise ahead of
+// the rest of the queue as a normal turn.
+function sendQueuedNow(id, message) {
+  if (queueLocked(id) || !state.queues.get(id)?.includes(message)) return;
+  const run = state.runs.get(id);
+  if (run?.pending) {steerQueuedMessage(id,message);return;}
+  const queue = state.queues.get(id), index = queue.indexOf(message);
+  if (index > 0) {queue.splice(index,1);queue.unshift(message);}
+  queuedTurns.paused.delete(id);
+  refreshQueue(id);flushQueue(id);
+}
 
 function queuedMessageEl(id, message) {
   const el = messageEl({...message, role:'user'}, -1);el.classList.add('msg--queued');
   el.dataset.queueId = message.queue_id;
-  const label = document.createElement('span');label.className = 'msg__state';label.textContent = t('queue.queued');el.prepend(label);
-  const actions = el.querySelector('.msg-actions');actions.replaceChildren();
+  const meta = document.createElement('div');meta.className = 'msg__queue-meta';
+  const label = document.createElement('span');label.className = 'msg__state';label.textContent = t('queue.queued');
+  el.querySelector('.msg-actions')?.replaceChildren();
   const locked = queueLocked(id) || state.preparing || state.loadingConversation;
-  const edit = messageAction('rename','chat.edit', () => {
+  const more = messageAction('more','sidebar.options', () => {
     if (queueLocked(id)) return;
-    queuedTurns.editing.set(id, {message, content:message.content});refreshQueue(id);
-    document.querySelector('.queue-editor textarea')?.focus();
+    const run = state.runs.get(id);
+    showTreeMenu(el, more, t('queue.queued'), [
+      ['send','queue.send_now', () => sendQueuedNow(id,message)],
+      ['rename','queue.edit', () => editQueuedMessage(id,message)],
+      ['delete','queue.delete', () => {if (queueLocked(id)) return;removeQueuedMessage(id,message);refreshQueue(id);}],
+    ]);
+    if (run?.pending && run.stopping) $('#tree-menu button:first-of-type')?.setAttribute('disabled','');
   });
-  const remove = messageAction('delete','queue.delete', () => {
-    if (queueLocked(id)) return;
-    removeQueuedMessage(id,message);refreshQueue(id);
-  });
-  const steer = document.createElement('button');steer.type = 'button';steer.className = 'queue-steer';
-  steer.textContent = t(queuedTurns.steering.get(id)?.message === message ? 'queue.sending' : 'queue.steer');
-  steer.onclick = () => steerQueuedMessage(id,message);
-  edit.disabled = remove.disabled = locked;
-  steer.disabled = locked || !state.runs.get(id)?.pending || !!state.runs.get(id)?.stopping;
-  actions.append(edit,remove,steer);
-  const editing = queuedTurns.editing.get(id);
-  if (editing?.message === message) {
-    const form = document.createElement('form');form.className = 'queue-editor';
-    const input = document.createElement('textarea');input.value = editing.content;input.rows = 3;input.setAttribute('aria-label',t('queue.edit'));
-    input.oninput = () => {editing.content = input.value;};
-    const save = document.createElement('button');save.type = 'submit';save.textContent = t('queue.save');
-    const cancel = document.createElement('button');cancel.type = 'button';cancel.textContent = t('project.cancel');
-    const finish = () => {queuedTurns.editing.delete(id);refreshQueue(id);flushQueue(id);};
-    form.onsubmit = event => {
-      event.preventDefault();
-      if (!editing.content.trim() && !message.attachments?.length) return;
-      message.content = editing.content.trim();delete message.steer_error;finish();
-    };
-    cancel.onclick = finish;
-    input.onkeydown = event => {if (event.key === 'Escape') {event.preventDefault();event.stopPropagation();finish();}};
-    form.append(input,save,cancel);el.append(form);
-  }
+  more.disabled = locked;
+  meta.append(label, more);el.prepend(meta);
   if (message.steer_error) {
     const error = document.createElement('p');error.className = 'queue-note';error.setAttribute('role','status');error.textContent = t('queue.steer_failed');el.append(error);
   }

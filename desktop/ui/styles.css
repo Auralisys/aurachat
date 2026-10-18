@@ -598,13 +598,9 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 .msg--queued .msg__text { max-width:min(85%,560px); background:var(--c-user); border:1px solid var(--c-glow); border-radius:18px; padding:var(--space-3) var(--space-4); }
 .msg__state { position:absolute; top:-20px; right:4px; font-size:11px; font-weight:600; letter-spacing:.02em; color:var(--c-text-muted); }
 .msg__state--guide { color:var(--c-glow); }
-.msg--queued .msg-actions { position:static; opacity:1; margin-top:6px; }
-.queue-steer { display:inline-flex; align-items:center; gap:6px; min-height:28px; padding:4px 10px; border-radius:7px; font-size:12px; color:var(--c-glow); background:transparent; }
-.queue-steer:hover { background:var(--c-hover); color:var(--c-text); }
-.queue-editor { width:100%; max-width:min(85%,560px); margin-top:8px; }
-.queue-editor textarea { width:100%; resize:vertical; padding:10px 12px; border-radius:10px; border:1px solid var(--c-border); background:var(--c-input); color:var(--c-text); font:inherit; }
-.queue-editor textarea { display:block; margin-bottom:8px; }
-.queue-editor button { min-height:32px; padding:6px 12px; border-radius:8px; font-size:12px; background:var(--c-hover); color:var(--c-text); }
+.msg__queue-meta { position:absolute; top:-26px; right:2px; display:flex; align-items:center; gap:2px; }
+.msg__queue-meta .msg__state { position:static; top:auto; right:auto; }
+.msg__queue-meta .message-action { width:24px; height:24px; padding:4px; }
 .queue-note { font-size:12px; color:var(--c-destructive); margin:6px 2px 0; }
 .queue-paused { display:flex; align-items:center; justify-content:flex-end; gap:12px; width:100%; padding:8px 4px; }
 .queue-paused span { font-size:12px; color:var(--c-text-muted); }

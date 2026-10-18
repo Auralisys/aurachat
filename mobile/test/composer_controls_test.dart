@@ -138,6 +138,102 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('composer menus stay inside 20 px side margins', (tester) async {
+    tester.view.physicalSize = const Size(320, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final controller = TextEditingController();
+    final focus = FocusNode();
+    addTearDown(controller.dispose);
+    addTearDown(focus.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: auraTheme(),
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(320, 700)),
+          child: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: AuraComposer(
+                  controller: controller,
+                  focusNode: focus,
+                  online: true,
+                  busy: false,
+                  onSend: () {},
+                  onStop: () {},
+                  onOptions: () {},
+                  permissions: const [
+                    ComposerChoice(
+                      value: 'ask',
+                      label: 'Richiedi approvazione',
+                      description: 'Chiede conferma prima di agire.',
+                    ),
+                    ComposerChoice(value: 'auto', label: 'Approva per me'),
+                  ],
+                  selectedPermission: 'ask',
+                  onPermissionSelected: (_) {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byTooltip('Permessi progetto'));
+    await tester.pumpAndSettle();
+    final menu = tester.getRect(find.byType(MenuItemButton).first);
+   
+    expect(menu.left, greaterThanOrEqualTo(20));
+    expect(menu.right, lessThanOrEqualTo(300));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('dictation turns the mic into stop and enables send', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    final focus = FocusNode();
+    addTearDown(controller.dispose);
+    addTearDown(focus.dispose);
+    var sent = 0, mic = 0;
+    Future<void> render({required bool active, required bool busy}) =>
+        tester.pumpWidget(
+          host(
+            AuraComposer(
+              controller: controller,
+              focusNode: focus,
+              online: true,
+              busy: false,
+              onSend: () => sent++,
+              onStop: () {},
+              onOptions: () {},
+              micActive: active,
+              micBusy: busy,
+              onMic: () => mic++,
+            ),
+          ),
+        );
+    await render(active: true, busy: false);
+    expect(find.byTooltip('Ferma dettatura'), findsOneWidget);
+    expect(find.byIcon(Icons.stop_rounded), findsOneWidget);
+    // Send is usable with an empty composer because it ends the dictation.
+    await tester.tap(find.byTooltip('Invia dettatura'));
+    expect(sent, 1);
+    await render(active: false, busy: false);
+    await tester.tap(find.byTooltip('Dettatura'));
+    expect(mic, 1);
+    await render(active: false, busy: true);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    final send = tester.widget<IconButton>(
+      find.widgetWithIcon(IconButton, Icons.arrow_upward_rounded),
+    );
+    expect(send.onPressed, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('send and stop follow the desktop composer logic', (
     tester,
   ) async {
@@ -163,7 +259,10 @@ void main() {
     await render(true);
     expect(find.byTooltip('Interrompi risposta'), findsOneWidget);
     expect(find.byTooltip('Invia in coda'), findsNothing);
-    await tester.enterText(find.byKey(const ValueKey('chat-composer')), 'Bozza');
+    await tester.enterText(
+      find.byKey(const ValueKey('chat-composer')),
+      'Bozza',
+    );
     await tester.pump();
     expect(find.byTooltip('Interrompi risposta'), findsOneWidget);
     expect(find.byTooltip('Invia in coda'), findsOneWidget);
@@ -211,17 +310,18 @@ void main() {
         ),
       ),
     );
-    Color dot() => (tester
-                .widget<Container>(
-                  find.byWidgetPredicate(
-                    (widget) =>
-                        widget is Container &&
-                        widget.constraints?.maxWidth == 6,
-                  ),
-                )
-                .decoration!
-            as BoxDecoration)
-        .color!;
+    Color dot() =>
+        (tester
+                    .widget<Container>(
+                      find.byWidgetPredicate(
+                        (widget) =>
+                            widget is Container &&
+                            widget.constraints?.maxWidth == 6,
+                      ),
+                    )
+                    .decoration!
+                as BoxDecoration)
+            .color!;
     await render(online: true);
     expect(find.text('AuraChat'), findsOneWidget);
     expect(find.text('PC di Lorenzo'), findsOneWidget);

@@ -353,6 +353,12 @@ impl Firestore {
         Ok(tree)
     }
 
+    /// Reads a relay document as a plain JSON object, for companion actions
+    /// that also need to receive data written by the phone.
+    pub async fn relay_get(&self,auth:&FirestoreAuth,path:&str) -> Result<Option<Value>,String> {
+        self.get_document(auth,path,None).await?.map(|doc|Ok(Value::Object(document_fields(&doc)?))).transpose()
+    }
+
     async fn get_document(&self,auth:&FirestoreAuth,path:&str,mask:Option<&str>) -> Result<Option<Value>,String> {
         let token = self.id_token(auth).await?;
         let mut request = self.http.get(doc_url(&auth.project_id,path)).bearer_auth(token);

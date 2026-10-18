@@ -170,6 +170,20 @@ impl Speech {
         }
         Ok(text.join(" ").trim().to_string())
     }
+
+    /// Transcribes a WAV uploaded by a paired phone. The phone records 16 kHz,
+    /// mono, 16-bit PCM; the transcriber validates those exact parameters.
+    pub fn transcribe_wav(&self, bytes: Vec<u8>, language: &str) -> Result<String, String> {
+        if bytes.len() > 4_000_000 { return Err("speech_invalid_audio".into()); }
+        let path = std::env::temp_dir().join(format!(
+            "aurachat-speech-{}-{}.wav", std::process::id(), crate::data::now_millis()
+        ));
+        fs::write(&path, &bytes).map_err(|_| "speech_invalid_audio".to_string())?;
+        let samples = transcribe_rs::audio::read_wav_samples(&path)
+            .map_err(|_| "speech_invalid_audio".to_string());
+        let _ = fs::remove_file(&path);
+        self.transcribe(samples?, language.to_string())
+    }
 }
 
 // Bound encoder memory and token count; prefer a quiet boundary within 25–30 seconds.
@@ -197,6 +211,11 @@ mod tests {
         assert!(validate_audio(&vec![0.1; 16000*120+1], "it").is_err());
         let mut audio = vec![0.1; 16000*60]; audio[16000*27..16000*27+1600].fill(0.0);
         assert_eq!(chunk_end(&audio), 16000*27+800);
+    }
+    #[test] fn remote_audio_requires_a_valid_wav() {
+        let service = Speech::new(&std::env::temp_dir());
+        assert_eq!(service.transcribe_wav(vec![0; 100], "it").unwrap_err(), "speech_invalid_audio");
+        assert_eq!(service.transcribe_wav(vec![0; 4_000_001], "it").unwrap_err(), "speech_invalid_audio");
     }
     #[test] fn partial_model_is_never_ready() {
         let root = std::env::temp_dir().join(format!("aurachat-speech-test-{}", std::process::id()));

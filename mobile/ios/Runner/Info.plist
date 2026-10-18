@@ -30,8 +30,6 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>AuraChat usa il microfono per dettare i messaggi.</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>AuraChat usa il riconoscimento vocale per dettare i messaggi.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

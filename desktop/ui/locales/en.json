@@ -41,6 +41,7 @@
   "queue.queued": "Queued",
   "queue.sending": "Sending…",
   "queue.steer": "Use as guide",
+  "queue.send_now": "Send now",
   "queue.edit": "Edit",
   "queue.delete": "Delete",
   "queue.save": "Save",

@@ -152,13 +152,29 @@ class ComposerDropdown extends StatefulWidget {
 
 class _ComposerDropdownState extends State<ComposerDropdown> {
   final controller = MenuController();
+  final anchorKey = GlobalKey();
+
+  /// Opens the menu centred in the viewport with 20 px side margins, instead
+  /// of hanging off the icon's edge.
+  void toggleMenu(double width) {
+    if (controller.isOpen) {
+      controller.close();
+      return;
+    }
+    final box = anchorKey.currentContext?.findRenderObject() as RenderBox?;
+    final origin = box?.localToGlobal(Offset.zero) ?? Offset.zero;
+    final screen = MediaQuery.sizeOf(context).width;
+    final left = (screen - width) / 2;
+    controller.open(
+      position: Offset(left - origin.dx, (box?.size.height ?? 40) + 8),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    final width = (MediaQuery.sizeOf(context).width - 48).clamp(220.0, 320.0);
+    final width = (MediaQuery.sizeOf(context).width - 40).clamp(220.0, 480.0);
     return MenuAnchor(
       controller: controller,
-      alignmentOffset: const Offset(0, 8),
       style: MenuStyle(
         backgroundColor: const WidgetStatePropertyAll(panel),
         surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
@@ -176,71 +192,78 @@ class _ComposerDropdownState extends State<ComposerDropdown> {
       ),
       menuChildren: [
         for (final choice in widget.choices)
-          MenuItemButton(
-            onPressed: choice.enabled
-                ? () {
-                    controller.close();
-                    widget.onSelected(choice.value);
-                  }
-                : null,
-            style: MenuItemButton.styleFrom(
-              foregroundColor: textColor,
-              backgroundColor: choice.value == widget.selected
-                  ? violet.withValues(alpha: .22)
-                  : Colors.transparent,
-              disabledForegroundColor: muted.withValues(alpha: .45),
-              minimumSize: const Size.fromHeight(48),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+          SizedBox(
+            width: width - 12,
+            child: MenuItemButton(
+              onPressed: choice.enabled
+                  ? () {
+                      controller.close();
+                      widget.onSelected(choice.value);
+                    }
+                  : null,
+              style: MenuItemButton.styleFrom(
+                foregroundColor: textColor,
+                backgroundColor: choice.value == widget.selected
+                    ? violet.withValues(alpha: .22)
+                    : Colors.transparent,
+                disabledForegroundColor: muted.withValues(alpha: .45),
+                minimumSize: const Size.fromHeight(48),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        choice.label,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
-                          height: 1.3,
-                          fontWeight: choice.value == widget.selected
-                              ? FontWeight.w600
-                              : FontWeight.w500,
-                        ),
-                      ),
-                      if (choice.description != null)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 2),
-                          child: Text(
-                            choice.description!,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              height: 1.3,
-                              color: muted,
-                            ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          choice.label,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 14,
+                            height: 1.3,
+                            fontWeight: choice.value == widget.selected
+                                ? FontWeight.w600
+                                : FontWeight.w500,
                           ),
                         ),
-                    ],
+                        if (choice.description != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              choice.description!,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                height: 1.3,
+                                color: muted,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
-                ),
-                if (choice.value == widget.selected)
-                  const Icon(Icons.check_rounded, size: 18, color: orchid),
-              ],
+                  if (choice.value == widget.selected)
+                    const Icon(Icons.check_rounded, size: 18, color: orchid),
+                ],
+              ),
             ),
           ),
       ],
       builder: (context, controller, child) => IconButton(
+        key: anchorKey,
         tooltip: widget.label,
         onPressed: widget.enabled && widget.choices.isNotEmpty
-            ? () => controller.isOpen ? controller.close() : controller.open()
+            ? () => toggleMenu(width)
             : null,
         color: muted,
         disabledColor: muted.withValues(alpha: .4),
@@ -276,12 +299,13 @@ class AuraComposer extends StatelessWidget {
     this.onPermissionSelected,
     this.showMic = true,
     this.micActive = false,
+    this.micBusy = false,
     this.onMic,
     this.allowQueue = false,
   });
   final TextEditingController controller;
   final FocusNode focusNode;
-  final bool online, busy, allowQueue, showMic, micActive;
+  final bool online, busy, allowQueue, showMic, micActive, micBusy;
   final String modelName, permissionLabel;
   final List<ComposerChoice> models, permissions;
   final String? selectedModel, selectedPermission;
@@ -292,7 +316,8 @@ class AuraComposer extends StatelessWidget {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: Listenable.merge([controller, focusNode]),
     builder: (context, _) {
-      final ready = online && controller.text.trim().isNotEmpty;
+      // While dictating, send means "stop recording and send the transcript".
+      final ready = online && (controller.text.trim().isNotEmpty || micActive);
       // Keep every control on the same 40 px footprint: the filled send button
       // used to dwarf the icon-only tools.
       final toolStyle = IconButton.styleFrom(
@@ -302,8 +327,16 @@ class AuraComposer extends StatelessWidget {
         shape: const CircleBorder(),
       );
       final send = IconButton.filled(
-        tooltip: busy ? 'Invia in coda' : 'Invia messaggio',
-        onPressed: busy
+        tooltip: micBusy
+            ? 'Trascrizione in corso'
+            : micActive
+            ? 'Invia dettatura'
+            : busy
+            ? 'Invia in coda'
+            : 'Invia messaggio',
+        onPressed: micBusy
+            ? null
+            : busy
             ? (allowQueue && ready ? onSend : null)
             : ready
             ? onSend
@@ -315,9 +348,8 @@ class AuraComposer extends StatelessWidget {
                 : violet,
           ),
           foregroundColor: WidgetStateProperty.resolveWith(
-            (states) => states.contains(WidgetState.disabled)
-                ? muted
-                : Colors.white,
+            (states) =>
+                states.contains(WidgetState.disabled) ? muted : Colors.white,
           ),
           fixedSize: const WidgetStatePropertyAll(Size(40, 40)),
         ),
@@ -327,9 +359,7 @@ class AuraComposer extends StatelessWidget {
         tooltip: 'Interrompi risposta',
         onPressed: onStop,
         style: toolStyle.copyWith(
-          backgroundColor: WidgetStatePropertyAll(
-            muted.withValues(alpha: .18),
-          ),
+          backgroundColor: WidgetStatePropertyAll(muted.withValues(alpha: .18)),
           foregroundColor: const WidgetStatePropertyAll(textColor),
           fixedSize: const WidgetStatePropertyAll(Size(40, 40)),
         ),
@@ -407,24 +437,33 @@ class AuraComposer extends StatelessWidget {
                   onSelected: (value) => onModelSelected?.call(value),
                 ),
                 if (showMic)
-                  IconButton(
-                    tooltip: micActive ? 'Ferma dettatura' : 'Dettatura',
-                    onPressed: onMic,
-                    color: micActive ? orchid : muted,
-                    disabledColor: muted.withValues(alpha: .4),
-                    style: toolStyle,
-                    icon: Icon(
-                      micActive ? Icons.mic_rounded : Icons.mic_none_rounded,
-                      size: 20,
+                  if (micBusy)
+                    const SizedBox(
+                      width: 40,
+                      height: 40,
+                      child: Center(
+                        child: SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                    )
+                  else
+                    IconButton(
+                      tooltip: micActive ? 'Ferma dettatura' : 'Dettatura',
+                      onPressed: onMic,
+                      color: micActive ? orchid : muted,
+                      disabledColor: muted.withValues(alpha: .4),
+                      style: toolStyle,
+                      icon: Icon(
+                        micActive ? Icons.stop_rounded : Icons.mic_none_rounded,
+                        size: micActive ? 18 : 20,
+                      ),
                     ),
-                  ),
                 // Stop is shown for the whole turn; send joins it only when
                 // there is a draft to queue, matching the desktop composer.
-                if (busy) ...[
-                  stop,
-                  if (allowQueue && ready) send,
-                ] else
-                  send,
+                if (busy) ...[stop, if (allowQueue && ready) send] else send,
               ],
             ),
           ],

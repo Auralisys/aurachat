@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -7,8 +8,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:speech_to_text/speech_to_text.dart';
 import 'package:uuid/uuid.dart';
 import 'companion.dart';
 import 'ui.dart';
@@ -266,9 +267,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   final composer = TextEditingController();
   final composerFocus = FocusNode();
   final scaffoldKey = GlobalKey<ScaffoldState>();
-  final speech = SpeechToText();
-  bool speechReady = false, micActive = false;
-  String micPrefix = '';
+  final recorder = AudioRecorder();
+  bool micActive = false, micTranscribing = false;
+  String? micPath;
+  Timer? micTimer;
   bool libraryVisible = true;
   bool changingPermission = false;
   final scroll = ScrollController();
@@ -300,9 +302,12 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   bool get busy =>
       sending || requestStatus == 'pending' || requestStatus == 'running';
   Map<String, dynamic>? get activeLive =>
-      liveTurnRunning(liveTurns[conversationId]) ? liveTurns[conversationId] : null;
+      liveTurnRunning(liveTurns[conversationId])
+      ? liveTurns[conversationId]
+      : null;
   bool get liveRunning => activeLive != null;
   bool get turnBusy => busy || liveRunning;
+
   /// Current step of the live turn, used instead of a generic loader.
   String? get livePhase {
     final turn = activeLive;
@@ -331,6 +336,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     if (content.isNotEmpty) return 'Sto scrivendo…';
     return null;
   }
+
   Set<String> get workingChats => {
     for (final entry in liveTurns.entries)
       if (liveTurnRunning(entry.value)) entry.key,
@@ -342,7 +348,8 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    push.foreground = WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    push.foreground =
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     composerFocus.addListener(() {
       if (composerFocus.hasFocus && libraryVisible) {
         setState(() => libraryVisible = false);
@@ -373,11 +380,15 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         deviceId ??=
             prefs.getString('device_${widget.user.uid}') ??
             devices.firstOrNull?['id'];
-        if (!busy) deviceId = onlineDeviceReplacement(devices, deviceId) ?? deviceId;
+        if (!busy) {
+          deviceId = onlineDeviceReplacement(devices, deviceId) ?? deviceId;
+        }
         loading = false;
       });
       if (previous != deviceId) {
-        if (deviceId != null) await prefs.setString('device_${widget.user.uid}', deviceId!);
+        if (deviceId != null) {
+          await prefs.setString('device_${widget.user.uid}', deviceId!);
+        }
         watchApprovals();
         watchLiveTurns();
         restoreRequest();
@@ -405,7 +416,9 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     push.visibleConversation = null;
     clock?.cancel();
-    for (final subscription in queueSubscriptions) { subscription.cancel(); }
+    for (final subscription in queueSubscriptions) {
+      subscription.cancel();
+    }
     deviceSubscription.cancel();
     indexSubscription.cancel();
     messageSubscription?.cancel();
@@ -413,7 +426,18 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     liveSubscription?.cancel();
     requestSubscription?.cancel();
     push.target.removeListener(openNotification);
-    if (micActive) speech.cancel();
+    micTimer?.cancel();
+    if (micActive) recorder.cancel();
+    unawaited(recorder.dispose());
+    final recording = micPath;
+    if (recording != null) {
+      final file = File(recording);
+      unawaited(
+        file.exists().then((exists) async {
+          if (exists) await file.delete();
+        }),
+      );
+    }
     composerFocus.dispose();
     composer.dispose();
     scroll.dispose();
@@ -487,13 +511,13 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     for (final lane in outbox.values.where((q) => q.device == watchedDevice)) {
       lane.liveKnown = false;
     }
-    liveSubscription = api.liveTurns(watchedDevice).listen((
-      snapshot,
-    ) {
+    liveSubscription = api.liveTurns(watchedDevice).listen((snapshot) {
       if (!mounted || deviceId != watchedDevice) return;
       setState(() {
         liveTurns = {for (final doc in snapshot.docs) doc.id: doc.data()};
-        for (final lane in outbox.values.where((q) => q.device == watchedDevice)) {
+        for (final lane in outbox.values.where(
+          (q) => q.device == watchedDevice,
+        )) {
           lane.observeLive(liveTurns[lane.conversation]);
         }
       });
@@ -527,27 +551,34 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     requestSubscription?.cancel();
     activeRequestId = id;
     final watchedDevice = deviceId!;
-    requestSubscription = api.requests(watchedDevice).doc(id).snapshots().listen((
-      snapshot,
-    ) {
-      if (!mounted || deviceId != watchedDevice || activeRequestId != id || snapshot.data() == null) {
-        return;
-      }
-      final data = snapshot.data()!;
-      setState(() {
-        final previous = requestStatus;
-        requestStatus = data['status'];
-        requestConversation = data['conversation_id'];
-        pendingText = busy ? data['content'] : null;
-        for (final lane in outbox.values.where((q) => q.device == watchedDevice)) {
-          lane.observeRequest(id, data['status'] as String?);
-        }
-        if (requestStatus == 'failed' && previous != 'failed') {
-          error = remoteError(data['error'] as String?);
-        }
-      });
-      flushQueues();
-    }, onError: fail);
+    requestSubscription = api
+        .requests(watchedDevice)
+        .doc(id)
+        .snapshots()
+        .listen((snapshot) {
+          if (!mounted ||
+              deviceId != watchedDevice ||
+              activeRequestId != id ||
+              snapshot.data() == null) {
+            return;
+          }
+          final data = snapshot.data()!;
+          setState(() {
+            final previous = requestStatus;
+            requestStatus = data['status'];
+            requestConversation = data['conversation_id'];
+            pendingText = busy ? data['content'] : null;
+            for (final lane in outbox.values.where(
+              (q) => q.device == watchedDevice,
+            )) {
+              lane.observeRequest(id, data['status'] as String?);
+            }
+            if (requestStatus == 'failed' && previous != 'failed') {
+              error = remoteError(data['error'] as String?);
+            }
+          });
+          flushQueues();
+        }, onError: fail);
   }
 
   Future<void> selectDevice(String id) async {
@@ -612,6 +643,11 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   }
 
   Future<void> send() async {
+    // Same as desktop: sending while dictating stops, transcribes, then sends.
+    if (micActive) {
+      await finishDictation(true);
+      return;
+    }
     final text = composer.text.trim();
     if (text.isEmpty || !online) {
       return;
@@ -620,8 +656,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       final target = conversationId;
       if (target == null) return;
       setState(() {
-        final lane = outbox.putIfAbsent((deviceId!, target),
-          () => ConversationQueue(deviceId!, target, projectId));
+        final lane = outbox.putIfAbsent((
+          deviceId!,
+          target,
+        ), () => ConversationQueue(deviceId!, target, projectId));
         if (lane.drafts.isEmpty && lane.operation == null) {
           lane.completed = false;
           lane.paused = null;
@@ -629,7 +667,9 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
           lane.waitingTurn = null;
           lane.observeLive(liveTurns[target]);
           // A failed request cannot authorize a later automatic retry.
-          if (requestStatus == 'failed') lane.paused = 'Controlla la chat prima di inviare la coda.';
+          if (requestStatus == 'failed') {
+            lane.paused = 'Controlla la chat prima di inviare la coda.';
+          }
         }
         lane.drafts.add(QueuedDraft(const Uuid().v4(), text));
         composer.clear();
@@ -660,14 +700,22 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         return;
       }
       if (composer.text.trim() == text) composer.clear();
-      for (final lane in outbox.values.where((q) => q.device == targetDevice && q.waitingRequest == null && !q.completed)) {
+      for (final lane in outbox.values.where(
+        (q) =>
+            q.device == targetDevice &&
+            q.waitingRequest == null &&
+            !q.completed,
+      )) {
         lane.waitingRequest = request;
       }
       if (isNew && conversationId == null && deviceId == targetDevice) {
         selectChat({'id': id, 'project_id': targetProject});
       }
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('request_${widget.user.uid}', '$targetDevice/$request');
+      await prefs.setString(
+        'request_${widget.user.uid}',
+        '$targetDevice/$request',
+      );
       if (!mounted) {
         return;
       }
@@ -686,22 +734,37 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   void flushQueues() {
     if (!mounted || busy || !online) return;
     for (final lane in outbox.values) {
-      if (lane.device == deviceId && lane.canFlush) {
-        dispatchQueued(lane, lane.drafts.first);
-        return;
-      }
+      if (lane.device != deviceId || !lane.canFlush) continue;
+      if (liveTurnRunning(liveTurns[lane.conversation])) continue;
+      dispatchQueued(lane, lane.drafts.first);
+      return;
     }
   }
 
-  Future<void> dispatchQueued(ConversationQueue lane, QueuedDraft draft, {bool guide = false}) async {
+  Future<void> dispatchQueued(
+    ConversationQueue lane,
+    QueuedDraft draft, {
+    bool guide = false,
+  }) async {
     if (!mounted || lane.device != deviceId || !online) return;
-    if (guide && (!liveTurnRunning(liveTurns[lane.conversation]) || busy && requestConversation != lane.conversation)) return;
+    if (guide &&
+        (!liveTurnRunning(liveTurns[lane.conversation]) ||
+            busy && requestConversation != lane.conversation)) {
+      return;
+    }
     if (!guide && busy) return;
     if (!lane.begin(draft, asGuide: guide)) return;
-    setState(() { if (!guide) sending = true; });
+    setState(() {
+      if (!guide) sending = true;
+    });
     try {
-      final request = await api.send(lane.device, lane.conversation, draft.text,
-        project: lane.project, action: guide ? 'steer' : 'chat');
+      final request = await api.send(
+        lane.device,
+        lane.conversation,
+        draft.text,
+        project: lane.project,
+        action: guide ? 'steer' : 'chat',
+      );
       if (!mounted) return;
       if (!guide) {
         lane.waitingRequest = request;
@@ -710,37 +773,62 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         requestStatus = 'pending';
         activeRequestId = request;
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('request_${widget.user.uid}', '${lane.device}/$request');
+        await prefs.setString(
+          'request_${widget.user.uid}',
+          '${lane.device}/$request',
+        );
       }
       // Keep watching late terminal receipts even if the user changes chat/device.
-      late final StreamSubscription<DocumentSnapshot<Map<String, dynamic>>> receipt;
-      receipt = api.requests(lane.device).doc(request).snapshots().listen((snapshot) {
-        if (!mounted) return;
-        final status = snapshot.data()?['status'] as String?;
-        if (!['completed', 'failed', 'cancelled'].contains(status)) return;
-        setState(() {
-          if (guide) {
-            lane.finishGuide(draft, accepted: status == 'completed');
-          } else {
-            lane.observeRequest(request, status);
-            if (activeRequestId == request) {
-              requestStatus = status;
-              pendingText = null;
-            }
-          }
-          if (status != 'completed') error = remoteError(snapshot.data()?['error'] as String?);
-        });
-        receipt.cancel();
-        queueSubscriptions.remove(receipt);
-        flushQueues();
-      }, onError: (Object e) {
-        // Unknown outcome: retain and lock the draft; never replay automatically.
-        if (mounted) setState(() => lane.paused = 'Esito da verificare sul PC. Il messaggio non verrà reinviato.');
-      });
+      late final StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>
+      receipt;
+      receipt = api
+          .requests(lane.device)
+          .doc(request)
+          .snapshots()
+          .listen(
+            (snapshot) {
+              if (!mounted) return;
+              final status = snapshot.data()?['status'] as String?;
+              if (!['completed', 'failed', 'cancelled'].contains(status)) {
+                return;
+              }
+              setState(() {
+                if (guide) {
+                  lane.finishGuide(draft, accepted: status == 'completed');
+                } else {
+                  lane.observeRequest(request, status);
+                  if (activeRequestId == request) {
+                    requestStatus = status;
+                    pendingText = null;
+                  }
+                }
+                if (status != 'completed') {
+                  error = remoteError(snapshot.data()?['error'] as String?);
+                }
+              });
+              receipt.cancel();
+              queueSubscriptions.remove(receipt);
+              flushQueues();
+            },
+            onError: (Object e) {
+              // Unknown outcome: retain the draft, unlock the queue and require
+              // an explicit resume; never replay automatically.
+              if (mounted) {
+                setState(() {
+                  lane.operation = null;
+                  lane.steering = false;
+                  lane.paused =
+                      'Esito da verificare sul PC. Il messaggio non verrà reinviato.';
+                });
+              }
+            },
+          );
       queueSubscriptions.add(receipt);
     } catch (e) {
       if (mounted) {
         setState(() {
+          lane.operation = null;
+          lane.steering = false;
           lane.paused =
               'Esito da verificare sul PC. Il messaggio non verrà reinviato.';
           error = friendlyError(e);
@@ -751,30 +839,79 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> editQueued(ConversationQueue lane, QueuedDraft draft) async {
-    if (lane.operation != null) return;
-    final editor = TextEditingController(text: draft.text);
-    final value = await showDialog<String>(context: context, builder: (context) => AlertDialog(
-      title: const Text('Modifica messaggio in coda'),
-      content: TextField(controller: editor, autofocus: true, minLines: 2, maxLines: 6, maxLength: 25000),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annulla')),
-        TextButton(onPressed: () => Navigator.pop(context, editor.text), child: const Text('Salva'))],
-    ));
-    // The route may still use its controller during its dismissal animation.
-    WidgetsBinding.instance.addPostFrameCallback((_) => editor.dispose());
-    if (mounted && value != null) setState(() => lane.edit(draft, value));
+  /// Removes the draft from the queue and returns it to the composer for
+  /// editing, like reopening your own queued message.
+  void editQueued(ConversationQueue lane, QueuedDraft draft) {
+    if (lane.operation != null || !lane.remove(draft)) return;
+    final base = composer.text.trimRight();
+    final merged = base.isEmpty ? draft.text : '$base\n${draft.text}';
+    setState(() {
+      composer.value = TextEditingValue(
+        text: merged,
+        selection: TextSelection.collapsed(offset: merged.length),
+      );
+    });
+    composerFocus.requestFocus();
+  }
+
+  /// Sends this draft now: as guidance while its turn is running, otherwise
+  /// immediately (ahead of the rest of the queue).
+  Future<void> sendQueuedNow(
+    ConversationQueue lane,
+    QueuedDraft draft,
+  ) async {
+    if (!mounted || lane.operation != null || !online || lane.device != deviceId) {
+      return;
+    }
+    if (liveTurnRunning(liveTurns[lane.conversation])) {
+      await dispatchQueued(lane, draft, guide: true);
+      return;
+    }
+    if (busy) {
+      setState(
+        () => error =
+            'Attendi che il turno corrente termini, poi riprova a inviare subito.',
+      );
+      return;
+    }
+    if (!lane.drafts.remove(draft)) return;
+    lane.drafts.insert(0, draft);
+    lane.paused = null;
+    lane.completed = true;
+    await dispatchQueued(lane, draft);
   }
 
   Future<void> resumeQueue(ConversationQueue lane) async {
     if (lane.operation != null || lane.running || busy || !online) return;
-    final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
-      title: const Text('Inviare la coda?'),
-      content: const Text('Controlla sul PC che questi messaggi non siano già stati elaborati. Verranno inviati in ordine.'),
-      actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Annulla')),
-        TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Invia'))],
-    ));
-    if (!mounted || confirmed != true || lane.operation != null || lane.running) return;
-    setState(() { lane.paused = null; lane.completed = true; });
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Inviare la coda?'),
+        content: const Text(
+          'Controlla sul PC che questi messaggi non siano già stati elaborati. Verranno inviati in ordine.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annulla'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Invia'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted ||
+        confirmed != true ||
+        lane.operation != null ||
+        lane.running) {
+      return;
+    }
+    setState(() {
+      lane.paused = null;
+      lane.completed = true;
+    });
     flushQueues();
   }
 
@@ -915,16 +1052,15 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         'Scegli modello';
   }
 
-  List<ComposerChoice> get modelChoices =>
-      ((device?['models'] as List?) ?? [])
-          .whereType<Map>()
-          .map(
-            (m) => ComposerChoice(
-              value: m['id'] as String,
-              label: (m['name'] ?? m['id']).toString(),
-            ),
-          )
-          .toList();
+  List<ComposerChoice> get modelChoices => ((device?['models'] as List?) ?? [])
+      .whereType<Map>()
+      .map(
+        (m) => ComposerChoice(
+          value: m['id'] as String,
+          label: (m['name'] ?? m['id']).toString(),
+        ),
+      )
+      .toList();
 
   String? get projectName => projects[projectId]?['name']?.toString();
 
@@ -940,7 +1076,8 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       const ComposerChoice(
         value: 'unsupported',
         label: 'Collega un desktop aggiornato',
-        description: 'Serve AuraChat aggiornato sul PC per modificare i permessi.',
+        description:
+            'Serve AuraChat aggiornato sul PC per modificare i permessi.',
         enabled: false,
       ),
     ComposerChoice(
@@ -1015,72 +1152,165 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     if (mounted) setState(() => changingPermission = false);
   }
 
+  static const speechLanguages = {
+    'ar',
+    'de',
+    'el',
+    'en',
+    'es',
+    'fr',
+    'it',
+    'ja',
+    'ko',
+    'nl',
+    'pl',
+    'pt',
+    'vi',
+    'zh',
+  };
+
+  String get dictationLanguage {
+    final code = WidgetsBinding.instance.platformDispatcher.locale.languageCode
+        .toLowerCase();
+    return speechLanguages.contains(code) ? code : 'en';
+  }
+
+  String dictationError(Object failure) {
+    final code = failure is DictationException
+        ? failure.code
+        : failure.toString();
+    if (code.contains('speech_model_missing')) {
+      return 'Scarica prima il modello vocale da AuraChat sul PC (Impostazioni › Voce).';
+    }
+    if (code.contains('speech_busy') || code.contains('speech_loading')) {
+      return 'Il modello vocale sul PC è occupato. Riprova tra poco.';
+    }
+    if (code.contains('speech_silence')) {
+      return 'Non ho sentito nulla. Riprova parlando più vicino al microfono.';
+    }
+    if (code.contains('speech_invalid_audio') ||
+        code.contains('invalid_audio') ||
+        code.contains('audio_missing')) {
+      return 'L’audio registrato non è valido. Riprova.';
+    }
+    if (code.contains('audio_too_large')) {
+      return 'La dettatura è troppo lunga. Registra un messaggio più breve.';
+    }
+    if (code.contains('speech_language')) {
+      return 'La lingua del telefono non è supportata dal modello vocale del PC.';
+    }
+    if (code.contains('TimeoutException')) {
+      return 'La trascrizione sta impiegando troppo tempo. Riprova tra poco.';
+    }
+    return 'Trascrizione non riuscita. Controlla che il PC sia collegato.';
+  }
+
   Future<void> toggleMic() async {
+    if (micTranscribing) return;
     if (micActive) {
-      await speech.stop();
-      if (mounted) setState(() => micActive = false);
+      await finishDictation(false);
       return;
     }
     if (!online) return;
-    if (!speechReady) {
-      try {
-        speechReady = await speech.initialize(
-          onStatus: (status) {
-            if (!mounted) return;
-            if (status == 'done' || status == 'notListening') {
-              setState(() => micActive = false);
-            }
-          },
-          onError: (error) {
-            if (!mounted) return;
-            setState(() {
-              micActive = false;
-              if (error.permanent) speechReady = false;
-            });
-          },
-        );
-      } catch (_) {
-        speechReady = false;
-      }
-      if (!mounted) return;
-      if (!speechReady) {
-        setState(
-          () => error =
-              'Dettatura non disponibile su questo dispositivo. Controlla i permessi del microfono.',
-        );
-        return;
-      }
-    }
-    micPrefix = composer.text;
-    var started = false;
-    try {
-      started = await speech.listen(
-        onResult: (result) {
-          if (!mounted) return;
-          final words = result.recognizedWords.trim();
-          final text = words.isEmpty
-              ? micPrefix
-              : micPrefix.isEmpty
-              ? words
-              : '$micPrefix $words';
-          composer.value = TextEditingValue(
-            text: text,
-            selection: TextSelection.collapsed(offset: text.length),
-          );
-          if (result.finalResult && micActive) {
-            setState(() => micActive = false);
-          }
-        },
+    final speech = device?['speech'];
+    if (speech is! Map) {
+      setState(
+        () => error = 'Aggiorna AuraChat sul PC per dettare dal telefono.',
       );
-    } catch (_) {
-      started = false;
-    }
-    if (!mounted) return;
-    if (!started) {
-      setState(() => error = 'Impossibile avviare la dettatura.');
       return;
     }
-    setState(() => micActive = true);
+    if (speech['ready'] != true) {
+      setState(
+        () => error =
+            'Scarica prima il modello vocale da AuraChat sul PC (Impostazioni › Voce).',
+      );
+      return;
+    }
+    if (speech['busy'] == true || speech['loading'] == true) {
+      setState(
+        () => error = 'Il modello vocale sul PC è occupato. Riprova tra poco.',
+      );
+      return;
+    }
+    try {
+      if (!await recorder.hasPermission()) {
+        if (mounted) {
+          setState(
+            () => error =
+                'Consenti l’accesso al microfono nelle impostazioni di sistema.',
+          );
+        }
+        return;
+      }
+      final path =
+          '${Directory.systemTemp.path}/aurachat-dictation-${DateTime.now().millisecondsSinceEpoch}.wav';
+      await recorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.wav,
+          sampleRate: 16000,
+          numChannels: 1,
+          echoCancel: true,
+          noiseSuppress: true,
+        ),
+        path: path,
+      );
+      micPath = path;
+      micTimer?.cancel();
+      // The desktop model accepts up to two minutes; keep the upload small.
+      micTimer = Timer(const Duration(seconds: 60), () {
+        if (micActive) unawaited(finishDictation(false));
+      });
+      if (mounted) setState(() => micActive = true);
+    } catch (_) {
+      if (mounted) {
+        setState(() => error = 'Impossibile avviare la registrazione.');
+      }
+    }
+  }
+
+  Future<void> finishDictation(bool sendAfter) async {
+    if (!micActive || micTranscribing) return;
+    micTimer?.cancel();
+    setState(() {
+      micActive = false;
+      micTranscribing = true;
+    });
+    final path = micPath;
+    micPath = null;
+    try {
+      final stopped = await recorder.stop();
+      final file = File(stopped ?? path ?? '');
+      if (!await file.exists()) throw DictationException('audio_missing');
+      final audio = await file.readAsBytes();
+      try {
+        await file.delete();
+      } catch (_) {}
+      if (audio.length <= 44) throw DictationException('speech_silence');
+      final target = deviceId;
+      if (target == null) throw DictationException('device_missing');
+      final text = await api.transcribe(
+        target,
+        conversationId ?? const Uuid().v4(),
+        audio,
+        dictationLanguage,
+      );
+      if (!mounted) return;
+      setState(() => micTranscribing = false);
+      final base = composer.text.trimRight();
+      final merged = base.isEmpty ? text : '$base $text';
+      composer.value = TextEditingValue(
+        text: merged,
+        selection: TextSelection.collapsed(offset: merged.length),
+      );
+      composerFocus.requestFocus();
+      if (sendAfter) await send();
+    } catch (failure) {
+      if (mounted) setState(() => error = dictationError(failure));
+    } finally {
+      if (mounted && micTranscribing) {
+        setState(() => micTranscribing = false);
+      }
+    }
   }
 
   Widget library({bool inDrawer = false, String query = ''}) => ChatLibrary(
@@ -1464,17 +1694,35 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                           ? library()
                           : messages.isEmpty &&
                                 !activeRequest &&
-                                activeLiveTurn == null && (currentQueue?.drafts.isEmpty ?? true)
+                                activeLiveTurn == null &&
+                                (currentQueue?.drafts.isEmpty ?? true)
                           ? const Center(
                               child: Padding(
                                 padding: EdgeInsets.all(32),
-                                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                                  Text('Da dove iniziamo?', textAlign: TextAlign.center,
-                                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w600, letterSpacing: -.5)),
-                                  SizedBox(height: 10),
-                                  Text('Scrivi un messaggio per iniziare.', textAlign: TextAlign.center,
-                                    style: TextStyle(color: muted, fontSize: 14, height: 1.5)),
-                                ]),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      'Da dove iniziamo?',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.w600,
+                                        letterSpacing: -.5,
+                                      ),
+                                    ),
+                                    SizedBox(height: 10),
+                                    Text(
+                                      'Scrivi un messaggio per iniziare.',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        color: muted,
+                                        fontSize: 14,
+                                        height: 1.5,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             )
                           : ListView(
@@ -1507,7 +1755,8 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                     },
                                   ),
                                 if (activeLiveTurn != null &&
-                                    (activeLiveTurn['user_content'] as String? ??
+                                    (activeLiveTurn['user_content']
+                                                as String? ??
                                             '')
                                         .trim()
                                         .isNotEmpty &&
@@ -1527,26 +1776,41 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                     },
                                   ),
                                 if (activeLiveTurn != null)
-                                  ...((activeLiveTurn['segments'] as List?) ?? const [])
-                                    .whereType<Map>()
-                                    .map((segment) => MessageView(message: Map<String, dynamic>.from(segment), live: true)),
+                                  ...((activeLiveTurn['segments'] as List?) ??
+                                          const [])
+                                      .whereType<Map>()
+                                      .map(
+                                        (segment) => MessageView(
+                                          message: Map<String, dynamic>.from(
+                                            segment,
+                                          ),
+                                          live: true,
+                                        ),
+                                      ),
                                 if (activeLiveTurn != null &&
                                     ((activeLiveTurn['content'] as String? ??
-                                                    '')
-                                                .trim()
-                                                .isNotEmpty ||
+                                                '')
+                                            .trim()
+                                            .isNotEmpty ||
                                         (activeLiveTurn['reasoning']
                                                     as String? ??
                                                 '')
                                             .trim()
                                             .isNotEmpty ||
-                                        ((activeLiveTurn['activity'] as List?) ??
+                                        ((activeLiveTurn['activity']
+                                                    as List?) ??
                                                 [])
                                             .isNotEmpty))
                                   MessageView(
                                     live: true,
-                                    onStopAgent: (id) => action('stop_agent', extra: {'agent_id': id}),
-                                    onStopShell: (id) => action('stop_shell', extra: {'shell_id': id}),
+                                    onStopAgent: (id) => action(
+                                      'stop_agent',
+                                      extra: {'agent_id': id},
+                                    ),
+                                    onStopShell: (id) => action(
+                                      'stop_shell',
+                                      extra: {'shell_id': id},
+                                    ),
                                     message: {
                                       'role': 'assistant',
                                       'content':
@@ -1556,23 +1820,37 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                       'activity':
                                           activeLiveTurn['activity'] ??
                                           const [],
-                                      'truncated': activeLiveTurn['truncated'] == true,
+                                      'truncated':
+                                          activeLiveTurn['truncated'] == true,
                                     },
                                   ),
                                 if (currentQueue case final lane?)
                                   for (final draft in lane.drafts)
                                     QueuedMessageBubble(
-                                      key: ValueKey(draft.id), text: draft.text,
+                                      key: ValueKey(draft.id),
+                                      text: draft.text,
                                       locked: lane.operation != null,
                                       status: lane.operation == draft
-                                        ? (lane.paused ?? (lane.steering ? 'Invio guida…' : 'Invio…'))
-                                        : 'In coda',
+                                          ? (lane.paused ??
+                                                (lane.steering
+                                                    ? 'Invio guida…'
+                                                    : 'Invio…'))
+                                          : 'In coda',
                                       warning: lane.paused,
                                       onEdit: () => editQueued(lane, draft),
-                                      onDelete: () => setState(() => lane.remove(draft)),
-                                      onGuide: liveRunning && online ? () => dispatchQueued(lane, draft, guide: true) : null,
-                                      onResume: lane.paused != null && !lane.running && !busy && online
-                                        ? () => resumeQueue(lane) : null,
+                                      onDelete: () =>
+                                          setState(() => lane.remove(draft)),
+                                      onSendNow:
+                                          online && lane.device == deviceId
+                                          ? () => sendQueuedNow(lane, draft)
+                                          : null,
+                                      onResume:
+                                          lane.paused != null &&
+                                              !lane.running &&
+                                              !busy &&
+                                              online
+                                          ? () => resumeQueue(lane)
+                                          : null,
                                     ),
                                 if (activeRequest || activeLiveTurn != null)
                                   Padding(
@@ -1693,32 +1971,46 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                   Padding(
                     key: const ValueKey('composer-area'),
                     padding: EdgeInsets.fromLTRB(12, 8, 12, keyboard ? 8 : 12),
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    SkillPicker(controller: composer, focus: composerFocus, enabled: !turnBusy && online,
-                      hasProject: projectId != null,
-                      skills: (((device?['project_skills'] as Map?)?[projectId] as Map?)?['skills'] as List? ?? [])
-                        .whereType<Map>().map((s) => Map<String,dynamic>.from(s)).toList()),
-                    AuraComposer(
-                      controller: composer,
-                      focusNode: composerFocus,
-                      online: online,
-                      busy: turnBusy,
-                      allowQueue: conversationId != null,
-                      onSend: send,
-                      onStop: () => action('stop'),
-                      onOptions: composerOptions,
-                      modelName: modelName,
-                      permissionLabel: permissionLabel,
-                      models: modelChoices,
-                      selectedModel: selectedModelId,
-                      onModelSelected: selectModel,
-                      permissions: permissionChoices,
-                      selectedPermission: permissionMode,
-                      onPermissionSelected: applyPermission,
-                      micActive: micActive,
-                      onMic: online ? toggleMic : null,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SkillPicker(
+                          controller: composer,
+                          focus: composerFocus,
+                          enabled: !turnBusy && online,
+                          hasProject: projectId != null,
+                          skills:
+                              (((device?['project_skills'] as Map?)?[projectId]
+                                              as Map?)?['skills']
+                                          as List? ??
+                                      [])
+                                  .whereType<Map>()
+                                  .map((s) => Map<String, dynamic>.from(s))
+                                  .toList(),
+                        ),
+                        AuraComposer(
+                          controller: composer,
+                          focusNode: composerFocus,
+                          online: online,
+                          busy: turnBusy,
+                          allowQueue: conversationId != null,
+                          onSend: send,
+                          onStop: () => action('stop'),
+                          onOptions: composerOptions,
+                          modelName: modelName,
+                          permissionLabel: permissionLabel,
+                          models: modelChoices,
+                          selectedModel: selectedModelId,
+                          onModelSelected: selectModel,
+                          permissions: permissionChoices,
+                          selectedPermission: permissionMode,
+                          onPermissionSelected: applyPermission,
+                          micActive: micActive,
+                          micBusy: micTranscribing,
+                          onMic: online && !micTranscribing ? toggleMic : null,
+                        ),
+                      ],
                     ),
-                    ]),
                   ),
                 ],
               ),
@@ -1790,9 +2082,7 @@ String _stepCommand(Map event) {
     final program = arguments['program'];
     if (program is String) {
       final args = arguments['arguments'];
-      final tail = args is List
-          ? args.whereType<String>().join(' ')
-          : '';
+      final tail = args is List ? args.whereType<String>().join(' ') : '';
       return '$program $tail'.trim();
     }
   }
@@ -1800,7 +2090,13 @@ String _stepCommand(Map event) {
 }
 
 class MessageView extends StatelessWidget {
-  const MessageView({super.key, required this.message, this.live = false, this.onStopAgent, this.onStopShell});
+  const MessageView({
+    super.key,
+    required this.message,
+    this.live = false,
+    this.onStopAgent,
+    this.onStopShell,
+  });
   final Map<String, dynamic> message;
   final bool live;
   final ValueChanged<String>? onStopAgent, onStopShell;
@@ -1810,8 +2106,12 @@ class MessageView extends StatelessWidget {
     if (!user) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 28),
-        child: TurnHistory(message: message, live: live,
-          onStopAgent: onStopAgent, onStopShell: onStopShell),
+        child: TurnHistory(
+          message: message,
+          live: live,
+          onStopAgent: onStopAgent,
+          onStopShell: onStopShell,
+        ),
       );
     }
     return Padding(

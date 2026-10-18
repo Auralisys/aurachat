@@ -58,13 +58,26 @@ bool deviceOnline(Map<String, dynamic> device, [int? now]) =>
             ((device['last_seen'] as num?)?.toInt() ?? 0) <
         45000;
 
-String? onlineDeviceReplacement(List<Map<String, dynamic>> devices, String? selected, [int? now]) {
-  final current = devices.where((device) => device['id'] == selected).firstOrNull;
+String? onlineDeviceReplacement(
+  List<Map<String, dynamic>> devices,
+  String? selected, [
+  int? now,
+]) {
+  final current = devices
+      .where((device) => device['id'] == selected)
+      .firstOrNull;
   if (current == null || deviceOnline(current, now)) return null;
   final name = (current['name'] as String? ?? '').trim().toLowerCase();
   if (name.isEmpty) return null;
-  final matches = devices.where((device) => device['id'] != selected && device['identity_version'] == 2 &&
-    (device['name'] as String? ?? '').trim().toLowerCase() == name && deviceOnline(device, now)).toList();
+  final matches = devices
+      .where(
+        (device) =>
+            device['id'] != selected &&
+            device['identity_version'] == 2 &&
+            (device['name'] as String? ?? '').trim().toLowerCase() == name &&
+            deviceOnline(device, now),
+      )
+      .toList();
   return matches.length == 1 ? matches.single['id'] as String : null;
 }
 
@@ -98,6 +111,14 @@ List<Map<String, dynamic>> chatIndex(Map<String, dynamic> tree) {
       (a['updated_at'] as num?) ?? 0,
     ),
   );
+}
+
+/// Error reported by the desktop speech model during remote dictation.
+class DictationException implements Exception {
+  DictationException(this.code);
+  final String code;
+  @override
+  String toString() => code;
 }
 
 class Companion {
@@ -142,6 +163,76 @@ class Companion {
       ...extra,
     });
     return request.id;
+  }
+
+  /// Uploads a 16 kHz mono WAV in Firestore-sized parts, asks the desktop to
+  /// transcribe it and returns the recognised text.
+  Future<String> transcribe(
+    String device,
+    String conversation,
+    Uint8List audio,
+    String language,
+  ) async {
+    const partBytes = 500000;
+    final parts = <String>[];
+    var terminal = false;
+    try {
+      for (var offset = 0; offset < audio.length; offset += partBytes) {
+        final end = offset + partBytes < audio.length
+            ? offset + partBytes
+            : audio.length;
+        final part = requests(device).doc();
+        await part.set({
+          'conversation_id': conversation,
+          'content': '',
+          'action': 'audio',
+          'status': 'audio',
+          'created_at': DateTime.now().millisecondsSinceEpoch,
+          'audio': base64Encode(audio.sublist(offset, end)),
+        });
+        parts.add(part.id);
+      }
+      final request = requests(device).doc();
+      await request.set({
+        'conversation_id': conversation,
+        'content': '',
+        'new_conversation': false,
+        'action': 'transcribe',
+        'created_at': DateTime.now().millisecondsSinceEpoch,
+        'status': 'pending',
+        'audio_parts': parts,
+        'language': language,
+      });
+      final snapshot = await request
+          .snapshots()
+          .firstWhere(
+            (value) =>
+                ['completed', 'failed'].contains(value.data()?['status']),
+          )
+          .timeout(const Duration(seconds: 180));
+      terminal = true;
+      final data = snapshot.data() ?? {};
+      if (data['status'] != 'completed') {
+        throw DictationException(
+          (data['error'] ?? 'transcription_failed').toString(),
+        );
+      }
+      final result = data['result'];
+      final text = result is Map ? result['text'] : null;
+      if (text is! String || text.trim().isEmpty) {
+        throw DictationException('speech_silence');
+      }
+      return text.trim();
+    } finally {
+      // On timeout the desktop may still be reading the parts: leave them.
+      if (terminal) {
+        for (final id in parts) {
+          try {
+            await requests(device).doc(id).delete();
+          } catch (_) {}
+        }
+      }
+    }
   }
 
   Future<List<Map<String, dynamic>>> decodeMessages(
@@ -220,7 +311,8 @@ class PushNotifications {
         if (_uid == null || message.data['uid'] != _uid) {
           return;
         }
-        if (foreground && visibleConversation != null &&
+        if (foreground &&
+            visibleConversation != null &&
             message.data['conversation_id'] == visibleConversation &&
             message.data['kind'] == 'chat') {
           return;
@@ -231,21 +323,21 @@ class PushNotifications {
         _shown.add(id);
         if (_shown.length > 500) _shown.remove(_shown.first);
         try {
-        await local.show(
-          id: id.hashCode & 0x7fffffff,
-          title: message.notification?.title ?? 'AuraChat',
-          body: message.notification?.body,
-          notificationDetails: const NotificationDetails(
-            android: AndroidNotificationDetails(
-              'aurachat_completion',
-              'Attività completate',
-              importance: Importance.high,
-              priority: Priority.high,
+          await local.show(
+            id: id.hashCode & 0x7fffffff,
+            title: message.notification?.title ?? 'AuraChat',
+            body: message.notification?.body,
+            notificationDetails: const NotificationDetails(
+              android: AndroidNotificationDetails(
+                'aurachat_completion',
+                'Attività completate',
+                importance: Importance.high,
+                priority: Priority.high,
+              ),
+              iOS: DarwinNotificationDetails(),
             ),
-            iOS: DarwinNotificationDetails(),
-          ),
-          payload: message.data['conversation_id'],
-        );
+            payload: message.data['conversation_id'],
+          );
         } catch (error) {
           _shown.remove(id);
           warning.value = 'Visualizzazione notifiche: ${friendlyError(error)}';
@@ -271,7 +363,9 @@ class PushNotifications {
           if (_registration?.isCompleted == false) _registration!.complete();
         } catch (error) {
           warning.value = 'Registrazione notifiche: ${friendlyError(error)}';
-          if (_registration?.isCompleted == false) _registration!.completeError(error);
+          if (_registration?.isCompleted == false) {
+            _registration!.completeError(error);
+          }
         }
       }),
     );
@@ -305,14 +399,20 @@ class PushNotifications {
           await Future<void>.delayed(const Duration(milliseconds: 500));
         }
         if (await FirebaseMessaging.instance.getAPNSToken() == null) {
-          warning.value = 'Registrazione Apple non disponibile. Riapri l’app e riprova; verifica Push Notifications e il profilo di firma iOS.';
+          warning.value =
+              'Registrazione Apple non disponibile. Riapri l’app e riprova; verifica Push Notifications e il profilo di firma iOS.';
           return;
         }
       }
       _registration = Completer<void>();
-      final confirmed = _registration!.future.timeout(const Duration(seconds: 20));
+      final confirmed = _registration!.future.timeout(
+        const Duration(seconds: 20),
+      );
       // Attach the error handler before native registration can emit an event.
-      final confirmation = confirmed.then<Object?>((_) => null, onError: (Object e) => e);
+      final confirmation = confirmed.then<Object?>(
+        (_) => null,
+        onError: (Object e) => e,
+      );
       await FirebaseMessaging.instance.register();
       if (_fid != null) {
         await _register(_fid!);
@@ -344,7 +444,9 @@ class PushNotifications {
         .doc(_installation)
         .set({
           'fid': fid,
-          'platform': defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+          'platform': defaultTargetPlatform == TargetPlatform.iOS
+              ? 'ios'
+              : 'android',
           'updated_at': DateTime.now().millisecondsSinceEpoch,
         });
   }

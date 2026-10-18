@@ -15,8 +15,11 @@ class ConversationQueue {
   QueuedDraft? operation;
   bool steering = false;
 
-  bool get canFlush => drafts.isNotEmpty && operation == null &&
-      paused == null && completed && liveKnown && !running;
+  /// A draft can move when this lane is not sending and its target turn is
+  /// idle. `completed` is informational: a lane queued while another chat was
+  /// running must still flush once that chat finishes.
+  bool get canFlush =>
+      drafts.isNotEmpty && operation == null && paused == null && !running;
 
   void observeLive(Map<String, dynamic>? live) {
     liveKnown = true;
@@ -25,9 +28,16 @@ class ConversationQueue {
     if (turn is! String || turn.isEmpty) return;
     if (running) waitingTurn ??= turn;
     if (turn != waitingTurn) return;
-    if (live?['status'] == 'completed') completed = true;
-    if (['failed', 'cancelled', 'stopped'].contains(live?['status'])) {
-      paused = 'Turno interrotto. Controlla la chat prima di inviare la coda.';
+    if (['completed', 'cancelled', 'stopped'].contains(live?['status'])) {
+      // The turn ended: the queue continues in FIFO order, as after a normal
+      // completion. A stop does not discard messages the user already wrote.
+      completed = true;
+      waitingTurn = null;
+    }
+    if (live?['status'] == 'failed') {
+      operation = null;
+      steering = false;
+      paused = 'Turno non riuscito. Controlla la chat prima di inviare la coda.';
     }
   }
 

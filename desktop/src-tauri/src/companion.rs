@@ -1,6 +1,7 @@
 //! Authenticated Firestore companion transport. Requests are claimed with a
 //! document-version precondition; an interrupted request is never replayed.
 use crate::{AppState, config::FirestoreAuth, data::{self, Conversation}};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::{Arc, Mutex}, time::Duration};
@@ -441,8 +442,9 @@ async fn heartbeat_once(app:&tauri::AppHandle)->Result<(),String>{
             skills.insert(project.clone(),catalog);
         }
     }
+    let speech=state.speech.status();
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/devices/{id}"),
-        &json!({"name":name,"platform":"windows","identity_version":2,"last_seen":data::now_millis(),"protocol":3,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"project_permissions":project_permissions,"project_skills":skills})).await?;
+        &json!({"name":name,"platform":"windows","identity_version":2,"last_seen":data::now_millis(),"protocol":3,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"speech":{"ready":speech.ready,"busy":speech.busy,"loading":speech.loading},"project_permissions":project_permissions,"project_skills":skills})).await?;
     let tree=state.data.lock().unwrap().storage_tree()?;
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/companion/state"),&json!({"tree":tree})).await?;
     let outbox=state.config_dir.join("notification-outbox").join(&uid);
@@ -482,7 +484,10 @@ async fn poll(app:&tauri::AppHandle,boot_time:u64)->Result<(),String>{
         tauri::async_runtime::spawn(async move {
             let result=execute(&app,&uid,&auth,&request).await;
             request["finished_at"]=json!(data::now_millis());
-            match result {Ok(())=>request["status"]=json!("completed"),Err(e)=>{request["status"]=json!("failed");request["error"]=json!(e);}}
+            match result {
+                Ok(value)=>{request["status"]=json!("completed");if !value.is_null(){request["result"]=value;}},
+                Err(e)=>{request["status"]=json!("failed");request["error"]=json!(e);}
+            }
             let state=app.state::<AppState>();
             if state.firestore.uid().as_deref()!=Some(&uid){return;}
             if let Err(e)=state.firestore.relay_upsert(&auth,&path,&request).await {eprintln!("Relay result publication failed: {e}");}
@@ -495,7 +500,7 @@ async fn poll(app:&tauri::AppHandle,boot_time:u64)->Result<(),String>{
     Ok(())
 }
 
-async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Value)->Result<(),String>{
+async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Value)->Result<Value,String>{
     let account_state=app.state::<AppState>();let account=account_state.account_lock.lock().await;
     if account_state.firestore.uid().as_deref()!=Some(uid){return Err("login_required".into());}
     let id=request["conversation_id"].as_str().ok_or("invalid_conversation_id")?;data::valid_id(id)?;
@@ -503,18 +508,38 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
     let created=request["created_at"].as_u64().ok_or("invalid_request_time")?;
     if data::now_millis().saturating_sub(created)>300_000{return Err("request_expired".into());}
     match request["action"].as_str().unwrap_or("chat") {
-        "stop"=>return state.chat_runs.stop(uid,id),
-        "steer"=>return crate::steer_chat(app.state::<AppState>(),id.into(),request["content"].as_str().ok_or("empty_message")?.into(),None),
-        "stop_agent"=>return crate::stop_subagent(app.state::<AppState>(),app.state::<crate::agent_runs::AgentRuns>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["agent_id"].as_str().ok_or("invalid_agent")?.into()).await,
-        "stop_shell"=>return crate::stop_shell(app.state::<AppState>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["shell_id"].as_str().ok_or("invalid_shell")?.into()).await.map(|_|()),
-        "approve"=>return app.state::<crate::approvals::Approvals>().resolve(uid,id,request["approval_id"].as_str().ok_or("invalid_approval")?,request["allow"].as_bool().ok_or("invalid_decision")?),
-        "model"=>return crate::set_conversation_model(app.state::<AppState>(),id.into(),request["model"].as_str().ok_or("invalid_model")?.into()).await.map(|_|()),
+        "stop"=>return state.chat_runs.stop(uid,id).map(|_|Value::Null),
+        "steer"=>return crate::steer_chat(app.state::<AppState>(),id.into(),request["content"].as_str().ok_or("empty_message")?.into(),None).map(|_|Value::Null),
+        "stop_agent"=>return crate::stop_subagent(app.state::<AppState>(),app.state::<crate::agent_runs::AgentRuns>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["agent_id"].as_str().ok_or("invalid_agent")?.into()).await.map(|_|Value::Null),
+        "stop_shell"=>return crate::stop_shell(app.state::<AppState>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["shell_id"].as_str().ok_or("invalid_shell")?.into()).await.map(|_|Value::Null),
+        "approve"=>return app.state::<crate::approvals::Approvals>().resolve(uid,id,request["approval_id"].as_str().ok_or("invalid_approval")?,request["allow"].as_bool().ok_or("invalid_decision")?).map(|_|Value::Null),
+        "model"=>return crate::set_conversation_model(app.state::<AppState>(),id.into(),request["model"].as_str().ok_or("invalid_model")?.into()).await.map(|_|Value::Null),
         "permission"=>{
             let mode=remote_permission_mode(request)?;
             let project=request["project_id"].as_str().ok_or("project_not_found")?;
             crate::project_permission_mode(app.state::<AppState>(),project.into(),Some(mode)).await?;
             let _=app.emit("companion-permissions",json!({"project_id":project}));
-            return Ok(());
+            return Ok(Value::Null);
+        },
+        "transcribe"=>{
+            let language=request["language"].as_str().unwrap_or("en").to_string();
+            let parts:Vec<&str>=request["audio_parts"].as_array().ok_or("invalid_audio")?.iter().filter_map(Value::as_str).collect();
+            if parts.is_empty()||parts.len()>8{return Err("invalid_audio".into());}
+            let (device,_)=identity();
+            let mut bytes=Vec::new();
+            for part in parts {
+                data::valid_id(part)?;
+                let path=format!("users/{uid}/devices/{device}/requests/{part}");
+                let Some(doc)=state.firestore.relay_get(auth,&path).await? else{return Err("audio_missing".into());};
+                let audio=doc["audio"].as_str().ok_or("invalid_audio")?;
+                let decoded=BASE64.decode(audio).map_err(|_|"invalid_audio".to_string())?;
+                if bytes.len()+decoded.len()>4_000_000{return Err("speech_invalid_audio".into());}
+                bytes.extend_from_slice(&decoded);
+            }
+            drop(account);
+            let speech=state.speech.clone();
+            let text=tauri::async_runtime::spawn_blocking(move||speech.transcribe_wav(bytes,&language)).await.map_err(|e|e.to_string())??;
+            return Ok(json!({"text":text}));
         },
         "chat"=>(),
         _=>return Err("unsupported_remote_action".into())
@@ -545,7 +570,7 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
     }
     let _=app.emit("companion-started",json!({"conversation_id":id,"content":content}));
     drop(account);
-    crate::run_chat(app.clone(),app.state::<AppState>(),id.into(),content.into(),None,None,None,Some(uid.into())).await.map(|_|())
+    crate::run_chat(app.clone(),app.state::<AppState>(),id.into(),content.into(),None,None,None,Some(uid.into())).await.map(|_|Value::Null)
 }
 
 fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,String>{

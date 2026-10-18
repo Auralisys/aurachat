@@ -993,9 +993,13 @@ function stopTimer() {
 async function requestChat(payload) {
   const id = payload.conversation_id;
   if (state.runs.get(id)?.pending || voice.pending || voice.recording || voice.transcribing || voice.nativeOperation) return false;
-  const run = {pending:true, since:Date.now(), messages:structuredClone(state.messages), usage:null, failedSend:null, stopping:false, initialMessageCount:state.messages.length, pendingGuidance:[], guidanceEvents:[]};
-  state.runs.set(id, run);state.messages = run.messages;state.failedSend = null;state.unread.delete(id);
-  closeChoiceMenus();startTimer();renderMessages();renderSidebar();
+  // A queue can start a background conversation: never seed it (or the UI)
+  // with the messages of the chat that happens to be open.
+  const isActive = id === state.activeConversationId;
+  const seed = isActive ? state.messages : (findConversation(id)?.conversation?.messages || []);
+  const run = {pending:true, since:Date.now(), messages:structuredClone(seed), usage:null, failedSend:null, stopping:false, initialMessageCount:seed.length, pendingGuidance:[], guidanceEvents:[]};
+  state.runs.set(id, run);if (isActive) {state.messages = run.messages;state.failedSend = null;}state.unread.delete(id);
+  closeChoiceMenus();startTimer();if (isActive) renderMessages();renderSidebar();
   try {
     const result = await invoke('chat',payload);
     await finishLiveTurn(run);
@@ -1022,7 +1026,10 @@ async function requestChat(payload) {
       renderMessages();updateContextInfo();
     }
     renderSidebar();updateComposerControls();
-    if (run.queueOutcome === 'completed') flushQueue(id); else if (state.queues.get(id)?.length) queuedTurns.paused.add(id);
+    // Completed or stopped: the user's drafts continue in FIFO order. Only an
+    // unknown failure pauses the queue to avoid replaying a lost request.
+    if (run.queueOutcome === 'failed') {if (state.queues.get(id)?.length) queuedTurns.paused.add(id);}
+    else flushQueue(id);
   }
 }
 
@@ -1121,11 +1128,13 @@ async function send() {
   nameConversationFromMessage(id, text, attachments, editIndex);
   input.focus();
   const message = {content:text, attachments, edit_index:editIndex};
-  if (state.runs.get(id)?.pending) {
-    const queue = state.queues.get(id) || [];
-    queue.push(message);state.queues.set(id, queue);
+  const existing = state.queues.get(id) || [];
+  if (existing.length || state.runs.get(id)?.pending) {
+    existing.push(message);state.queues.set(id, existing);
     composerStatus(t('chat.queued'));
     updateComposerControls();
+    // Drain older drafts first; a new message never jumps the FIFO queue.
+    if (!state.runs.get(id)?.pending) flushQueue(id);
     return;
   }
   await dispatchMessage(id, message);
@@ -1497,6 +1506,8 @@ async function init() {
       if (run?.external) {run.messages=conversationInData(data,payload.conversation_id)?.messages || run.messages;stopTimer();}
       if (run?.external && state.activeConversationId !== payload.conversation_id) state.unread.add(payload.conversation_id);
       renderSidebar();updateComposerControls();
+      // The turn ended elsewhere: continue this chat's local FIFO queue.
+      if (run?.external) flushQueue(payload.conversation_id);
     } catch (error) { showError(localizeError(error)); }
   });
   await appWindow.listen('window-geometry-changed', () => {
