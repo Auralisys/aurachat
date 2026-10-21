@@ -348,11 +348,13 @@ function positionTreeOverlay(panel, row, point) {
 }
 
 function closeTreeMenu(restoreFocus = false) {
+  const resumeTurn = !!treeMenuTrigger?.closest('.msg--queued');
   $('#tree-menu').hidden = true;
   treeMenuTrigger?.setAttribute('aria-expanded', 'false');
   treeMenuTrigger?.closest('.tree-project__head, .tree-conv, .sidebar__section-head, .chat-header')?.classList.remove('is-menu-open');
   if (restoreFocus) treeMenuTrigger?.focus();
   treeMenuTrigger = null;
+  if (resumeTurn) requestAnimationFrame(() => updateLiveTurn());
 }
 
 function showTreeMenu(row, trigger, heading, entries, point) {
@@ -451,8 +453,12 @@ function setupTreeOverlays() {
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') hideProjectPreview(); });
   document.addEventListener('scroll', e => {
+    if (e.target === $('#messages') && treeMenuTrigger?.closest('.msg--queued')) return;
     if (!e.target.closest?.('#tree-menu, #project-preview')) { closeTreeMenu(); hideProjectPreview(); }
   }, true);
+  $('#messages').addEventListener('wheel', () => {
+    if (treeMenuTrigger?.closest('.msg--queued')) closeTreeMenu();
+  }, {passive:true});
   window.addEventListener('resize', () => { closeTreeMenu(); hideProjectPreview(); });
 }
 
@@ -957,13 +963,13 @@ function renderMessages() {
     return;
   }
   state.messages.forEach((message,index) => box.appendChild(messageEl(message,index)));
-  renderQueuedMessages(box, state.activeConversationId);
   if (state.busy) {
     const pending = document.createElement('article');pending.className = 'msg msg--assistant msg--stream';
     pending.setAttribute('aria-label', t('chat.assistant'));
     const body = document.createElement('div');body.className = 'msg__text markdown';pending.append(body);box.append(pending);
     updateLiveTurn();
   }
+  renderQueuedMessages(box, state.activeConversationId);
   renderThinkingStatus();
   if (follow) box.scrollTop = box.scrollHeight;
   updateThinkingTimer();
@@ -1134,7 +1140,7 @@ async function send() {
   if (existing.length || state.runs.get(id)?.pending) {
     existing.push(message);state.queues.set(id, existing);
     composerStatus(t('chat.queued'));
-    updateComposerControls();
+    refreshQueue(id);
     // Drain older drafts first; a new message never jumps the FIFO queue.
     if (!state.runs.get(id)?.pending) flushQueue(id);
     return;

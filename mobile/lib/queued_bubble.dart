@@ -69,7 +69,7 @@ class QueuedMessageBubble extends StatelessWidget {
                     PopupMenuItem(
                       value: _QueueAction.sendNow,
                       enabled: !locked && onSendNow != null,
-                      child: const Text('Manda subito'),
+                      child: const Text('Invia subito'),
                     ),
                     PopupMenuItem(
                       value: _QueueAction.edit,
@@ -93,22 +93,24 @@ class QueuedMessageBubble extends StatelessWidget {
                 constraints: BoxConstraints(
                   maxWidth: constraints.maxWidth * .88,
                 ),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 13,
-                  ),
-                  decoration: BoxDecoration(
-                    color: bubble,
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(color: orchid.withValues(alpha: .28)),
-                  ),
-                  child: Text(
-                    text,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      height: 1.6,
-                      color: textColor,
+                child: CustomPaint(
+                  foregroundPainter: const _QueuedBorder(),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 13,
+                    ),
+                    decoration: BoxDecoration(
+                      color: bubble,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Text(
+                      text,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        height: 1.6,
+                        color: textColor,
+                      ),
                     ),
                   ),
                 ),
@@ -153,3 +155,30 @@ class QueuedMessageBubble extends StatelessWidget {
 }
 
 enum _QueueAction { sendNow, edit, delete }
+
+class _QueuedBorder extends CustomPainter {
+  const _QueuedBorder();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()
+      ..addRRect(
+        RRect.fromRectAndRadius(
+          (Offset.zero & size).deflate(.5),
+          const Radius.circular(17.5),
+        ),
+      );
+    final paint = Paint()
+      ..color = orchid
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    for (final metric in path.computeMetrics()) {
+      for (var start = 0.0; start < metric.length; start += 6) {
+        canvas.drawPath(metric.extractPath(start, start + 3), paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _QueuedBorder oldDelegate) => false;
+}

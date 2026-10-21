@@ -21,7 +21,14 @@ Vedi `../AuraChat's vault/` per le decisioni: `Overview.md`,
   aspettare la risposta. Mentre il modello pensa il composer resta utilizzabile: con il
   campo vuoto compare solo **Stop**, che chiude il turno conservando la parte di risposta
   gia mostrata; con testo o allegati compaiono **Stop** e **Invia** e l'invio accoda il
-  messaggio, che parte appena il turno corrente si chiude. Anche la dettatura resta
+  messaggio, che parte appena il turno corrente si chiude. Il messaggio accodato
+  compare subito come balloon con bordo tratteggiato, etichetta **In coda** e azioni
+  nel menu **…** accanto all'etichetta: **Invia subito**, **Modifica**, **Cancella**,
+  come su mobile. Invia subito lo passa come
+  guida al turno attivo. Durante l'apertura del menu, l'aggiornamento visivo dello
+  stream resta sospeso per mantenere ferme le azioni; il testo ricevuto viene
+  mostrato alla chiusura senza interrompere il modello.
+  Modifica lo riporta nel compositore. Anche la dettatura resta
   disponibile (`stop_chat` ferma il turno solo per il proprietario della conversazione).
 - **Barra delle applicazioni Windows**: indicatore nativo indeterminato durante
   l'elaborazione AI, anche con finestra minimizzata. Rimane attivo mentre almeno

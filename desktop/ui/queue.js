@@ -44,19 +44,18 @@ function queuedMessageEl(id, message) {
   el.dataset.queueId = message.queue_id;
   const meta = document.createElement('div');meta.className = 'msg__queue-meta';
   const label = document.createElement('span');label.className = 'msg__state';label.textContent = t('queue.queued');
-  el.querySelector('.msg-actions')?.replaceChildren();
+  el.querySelector('.msg-actions')?.remove();
   const locked = queueLocked(id) || state.preparing || state.loadingConversation;
-  const more = messageAction('more','sidebar.options', () => {
+  const more = messageAction('more','queue.actions', () => {
     if (queueLocked(id)) return;
-    const run = state.runs.get(id);
     showTreeMenu(el, more, t('queue.queued'), [
-      ['send','queue.send_now', () => sendQueuedNow(id,message)],
-      ['rename','queue.edit', () => editQueuedMessage(id,message)],
-      ['delete','queue.delete', () => {if (queueLocked(id)) return;removeQueuedMessage(id,message);refreshQueue(id);}],
+      ['send','queue.send_now',()=>sendQueuedNow(id,message)],
+      ['rename','queue.edit',()=>editQueuedMessage(id,message)],
+      ['delete','queue.delete',()=>{if (queueLocked(id)) return;removeQueuedMessage(id,message);refreshQueue(id);}],
     ]);
-    if (run?.pending && run.stopping) $('#tree-menu button:first-of-type')?.setAttribute('disabled','');
+    if (state.runs.get(id)?.stopping) $('#tree-menu button:first-of-type')?.setAttribute('disabled','');
   });
-  more.disabled = locked;
+  configureMenuTrigger(more);more.disabled = locked;
   meta.append(label, more);el.prepend(meta);
   if (message.steer_error) {
     const error = document.createElement('p');error.className = 'queue-note';error.setAttribute('role','status');error.textContent = t('queue.steer_failed');el.append(error);

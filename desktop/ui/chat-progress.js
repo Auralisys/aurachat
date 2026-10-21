@@ -134,6 +134,8 @@ function renderThinkingStatus() {
 }
 
 function updateLiveTurn() {
+  // Keep queued-message actions stationary; incoming deltas remain buffered.
+  if (treeMenuTrigger?.closest('.msg--queued')) return;
   const run = state.runs.get(state.activeConversationId);
   if (!run?.pending) return;
   const stream = run.stream ||= {content:'', shown:0, activity:[], frame:null};

@@ -624,7 +624,7 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 
 /* Queued drafts and steering guidance */
 .msg--queued { align-items:flex-end; position:relative; }
-.msg--queued .msg__text { max-width:min(85%,560px); background:var(--c-user); border:1px solid var(--c-glow); border-radius:18px; padding:var(--space-3) var(--space-4); }
+.msg--queued .msg__text { max-width:min(85%,560px); background:var(--c-user); border:1px dashed var(--c-glow); border-radius:18px; padding:var(--space-3) var(--space-4); }
 .msg__state { position:absolute; top:-20px; right:4px; font-size:11px; font-weight:600; letter-spacing:.02em; color:var(--c-text-muted); }
 .msg__state--guide { color:var(--c-glow); }
 .msg__queue-meta { position:absolute; top:-26px; right:2px; display:flex; align-items:center; gap:2px; }
