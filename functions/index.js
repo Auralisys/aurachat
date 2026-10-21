@@ -23,6 +23,7 @@ exports.completionPush = onDocumentCreated({
     console.warn('Ignoring invalid completion event', eventId);
     return;
   }
+  if (payload === null) return;
   const db = getFirestore();
   const phones = await db.collection(`users/${uid}/phones`).get();
   if (phones.empty) console.warn('Push has no registered devices', { eventId });

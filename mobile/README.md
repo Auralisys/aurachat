@@ -49,11 +49,26 @@ firebase functions:artifacts:setpolicy --location europe-west3 --days 1 --projec
 ```
 
 FCM viene registrato dopo l'accesso; Android chiede il permesso notifiche.
-La funzione invia una notifica per risposta, agente, comando, strumento,
-trascrizione e download del modello vocale, anche per esito fallito/interrotto.
+La funzione invia una notifica per risposta completa (compresi gli strumenti e
+sub-agenti del turno) e download del modello vocale, anche per esito fallito/interrotto.
+La dettatura non invia notifiche di trascrizione completata o fallita: testo ed
+errori sono già nel compositore. Il mittente scarta anche gli eventi
+`transcription` rimasti nelle code dei desktop precedenti.
 Le richieste di approvazione generano anch'esse una notifica. Android visualizza
 le push di sistema in background e dopo normale chiusura del processo; in primo
-piano il client usa lo stesso canale locale. Il tap apre la conversazione.
+piano il client usa lo stesso canale locale nativo ad alta priorità, non un banner
+custom. Le altre chat notificano anche con l'app aperta; solo la risposta della
+chat effettivamente aperta sullo stesso PC viene soppressa, mentre le approvazioni
+notificano sempre. iOS disabilita la presentazione automatica foreground di FCM
+per non duplicare il banner locale.
+Il tap di una push di sistema o locale conserva account, PC e conversazione:
+funziona da avvio a freddo, background o app aperta su un'altra chat. La destinazione
+attende login, dispositivi e indice aggiornato (fino a 20 secondi), chiude
+menu/impostazioni e apre la chat nel suo progetto e sul PC della notifica.
+Una notifica di un altro account non apre chat nell'account corrente; destinazioni
+rimosse/non sincronizzate mostrano un avviso, senza aprire una chat diversa.
+Le vecchie notifiche locali con il solo ID chat non sono riutilizzate come link
+perché non identificano il proprietario: usare una nuova notifica.
 Le impostazioni del sistema (permesso negato, Non disturbare o arresto forzato)
 possono impedire la visualizzazione. Il logout rimuove la registrazione push.
 

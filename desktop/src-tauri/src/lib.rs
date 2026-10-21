@@ -5,7 +5,9 @@ mod firestore;
 mod llm;
 mod window_state;
 mod speech;
+mod media;
 mod project_files;
+mod git;
 mod managed_shells;
 mod permissions;
 mod approvals;
@@ -105,6 +107,16 @@ async fn download_speech_model(app: tauri::AppHandle, state: tauri::State<'_, Ap
 #[tauri::command]
 fn cancel_speech_download(state: tauri::State<'_, AppState>) { state.speech.cancel(); }
 #[tauri::command]
+async fn pause_dictation_media(media:tauri::State<'_,std::sync::Arc<media::Media>>, id:String)->Result<(),String> {
+    let media=media.inner().clone();
+    tauri::async_runtime::spawn_blocking(move||media.pause(id)).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+async fn resume_dictation_media(media:tauri::State<'_,std::sync::Arc<media::Media>>, id:String)->Result<(),String> {
+    let media=media.inner().clone();
+    tauri::async_runtime::spawn_blocking(move||media.resume(&id)).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
 async fn remove_speech_model(state: tauri::State<'_, AppState>) -> Result<speech::ModelStatus, String> {
     let speech = state.speech.clone();
     tauri::async_runtime::spawn_blocking(move || speech.remove()).await.map_err(|e| e.to_string())?
@@ -118,11 +130,9 @@ async fn prepare_speech_model(app: tauri::AppHandle, state: tauri::State<'_, App
     result
 }
 #[tauri::command]
-async fn transcribe_audio(app: tauri::AppHandle, state: tauri::State<'_, AppState>, samples: Vec<f32>, language: String) -> Result<String, String> {
+async fn transcribe_audio(state: tauri::State<'_, AppState>, samples: Vec<f32>, language: String) -> Result<String, String> {
     let speech = state.speech.clone();
-    let result=tauri::async_runtime::spawn_blocking(move || speech.transcribe(samples, language)).await.map_err(|e| e.to_string())?;
-    companion::notify(&app,"transcription",&data::now_millis().to_string(),"","Trascrizione terminata",if result.is_ok(){"Il testo dettato è pronto."}else{"La trascrizione non è riuscita."});
-    result
+    tauri::async_runtime::spawn_blocking(move || speech.transcribe(samples, language)).await.map_err(|e| e.to_string())?
 }
 
 fn clean(s: &str) -> String {
@@ -779,6 +789,53 @@ async fn project_folder_access(state: tauri::State<'_, AppState>, project_id: St
 }
 
 #[tauri::command(rename_all = "snake_case")]
+async fn project_git(state: tauri::State<'_,AppState>, project_id:String, root:String, action:String,
+    paths:Option<Vec<String>>, revision:Option<String>, message:Option<String>, conversation_id:Option<String>) -> Result<serde_json::Value,String> {
+    let _account=state.account_lock.lock().await;
+    let auth=firebase_auth(&state)?;
+    let uid=ensure_uid(&state,&auth).await?;
+    {
+        let tree=state.data.lock().unwrap();
+        let project=tree.projects.iter().find(|p|p.id==project_id).ok_or("project_not_found")?;
+        if !project.source_folders.contains(&root) || !state.folder_access.lock().unwrap().paths(&uid,&project_id).contains(&root) {
+            return Err("folder_permission_required".into());
+        }
+        if matches!(action.as_str(),"stage"|"unstage"|"commit"|"push") && !state.running_chats.lock().unwrap().is_empty() {
+            return Err("Wait for running conversations to finish before staging, committing or pushing.".into());
+        }
+        if let Some(id)=&conversation_id {
+            if !project.conversations.iter().any(|c|&c.id==id) {return Err("conversation_not_found".into());}
+        }
+    }
+    let paths=paths.unwrap_or_default();
+    let revision=revision.unwrap_or_default();
+    let message=message.unwrap_or_default();
+    let generate=action=="generate";
+    let read_only=action=="status";
+    // Polling a local repository must not hold up unrelated account/chat operations.
+    if read_only {drop(_account);}
+    let root=PathBuf::from(root);
+    let result=tauri::async_runtime::spawn_blocking(move||match action.as_str() {
+        "status"=>git::status(&root),
+        "stage"=>git::stage(&root,&paths,&revision,false),
+        "unstage"=>git::stage(&root,&paths,&revision,true),
+        "preview"|"generate"=>git::preview(&root),
+        "commit"=>git::commit(&root,&revision,&message),
+        "push_preview"=>git::push_preview(&root),
+        "push"=>git::push(&root,&revision),
+        _=>Err("Unsupported Git action.".into()),
+    }).await.map_err(|e|e.to_string())??;
+    if state.firestore.uid().as_deref()!=Some(uid.as_str()) {return Err("account_changed".into());}
+    if !generate {return Ok(result);}
+    let user=load_user_cached(&state,&auth,&uid).await?;
+    let model_id=conversation_id.and_then(|id|state.data.lock().unwrap().find_conversation(&id).and_then(|c|c.model.clone())).unwrap_or_else(||user.active_model.clone());
+    let model=user.models.get(&model_id).ok_or("model_not_found")?;
+    if user.model_key(model).is_empty() {return Err("no_api_key".into());}
+    let message=llm::commit_message(&state.client,&model.base_url,&model.model,user.model_key(model),result["diff"].as_str().ok_or("Invalid Git preview.")?).await?;
+    let mut result=result;result["message"]=serde_json::json!(message);Ok(result)
+}
+
+#[tauri::command(rename_all = "snake_case")]
 async fn project_permission_mode(state: tauri::State<'_, AppState>, project_id: String, mode: Option<permissions::Mode>) -> Result<permissions::Mode, String> {
     let auth = firebase_auth(&state)?;
     let uid = ensure_uid(&state, &auth).await?;
@@ -963,6 +1020,7 @@ pub fn run() {
             if let Some(window)=app.get_webview_window("main") {let _=window.show();let _=window.set_focus();}
         }))
         .manage(std::sync::Arc::new(managed_shells::Shells::default()))
+        .manage(std::sync::Arc::new(media::Media::default()))
         .manage(approvals::Approvals::default())
         .manage(questions::Questions::default())
         .manage(agent_runs::AgentRuns::default())
@@ -1016,6 +1074,7 @@ pub fn run() {
                 if !quitting {
                     // La chiusura della finestra nasconde nel tray: il processo
                     // resta in background. Si esce solo dal menu del tray ("Esci").
+                    if let Err(error)=window.emit("dictation-cancel",()) {eprintln!("Cannot cancel dictation on close: {error}");}
                     let _ = window.hide();
                     api.prevent_close();
                 }
@@ -1044,6 +1103,7 @@ pub fn run() {
             save_window_state,
             choose_project_folder,
             project_folder_access,
+            project_git,
             project_permission_mode,
             list_approvals, resolve_approval, stop_subagent,
             list_questions, answer_question,
@@ -1052,10 +1112,16 @@ pub fn run() {
             open_external_url
             ,list_shells, stop_shell
             ,speech_model_status, download_speech_model, cancel_speech_download, remove_speech_model, prepare_speech_model, transcribe_audio
+            ,pause_dictation_media, resume_dictation_media
         ])
         .build(tauri::generate_context!())
         .expect("errore durante l'avvio di AuraChat")
         .run(|app, event| {
-            if matches!(event, tauri::RunEvent::Exit) { app.state::<std::sync::Arc<managed_shells::Shells>>().stop_all(); }
+            if matches!(event, tauri::RunEvent::Exit) {
+                app.state::<std::sync::Arc<managed_shells::Shells>>().stop_all();
+                let media=app.state::<std::sync::Arc<media::Media>>().inner().clone();
+                // The window thread is STA; media restoration runs in its own MTA.
+                if std::thread::spawn(move||media.restore()).join().is_err() {eprintln!("Dictation media restore thread failed");}
+            }
         });
 }

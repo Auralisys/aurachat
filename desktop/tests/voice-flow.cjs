@@ -17,6 +17,7 @@ const assert=require('node:assert/strict');
  const initScript=({locales,warm,total})=>{
   window.__calls=[];window.__listeners={};window.__model=warm?{ready:true,busy:false,loading:false,loaded:false,downloaded:total,total}:{ready:false,busy:false,loading:false,loaded:false,downloaded:0,total};window.__tracks=[];
   window.__delayPrepare=!!warm;
+  window.__playing=true;window.__pausedMedia=new Set();window.__plays=0;
   const getMedia=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
   navigator.mediaDevices.getUserMedia=async constraints=>{if(window.__denyMedia)throw new DOMException('Denied','NotAllowedError');const stream=await getMedia(constraints);window.__tracks.push(...stream.getTracks());return stream;};
   const config={firebase_email:'demo@example.com',firebase_project_id:'demo',firebase_api_key:'demo',firebase_auth_set:true,api_key_set:true,models:['test'],active_model:'test'};
@@ -31,6 +32,15 @@ const assert=require('node:assert/strict');
    if(cmd==='prepare_speech_model'){
     if(window.__delayPrepare){window.__model={...window.__model,busy:true,loading:true};return new Promise(resolve=>window.__finishPrepare=()=>{window.__model={...window.__model,busy:false,loading:false,loaded:true};resolve();});}
     window.__model={...window.__model,loaded:true};return;
+   }
+   if(cmd==='pause_dictation_media'){
+    if(window.__delayMedia)await new Promise(resolve=>window.__finishMedia=resolve);
+    if(window.__playing){window.__pausedMedia.add(args.id);window.__playing=false;}
+    return;
+   }
+   if(cmd==='resume_dictation_media'){
+    if(window.__pausedMedia.delete(args.id)){window.__playing=true;window.__plays++;}
+    return;
    }
    if(cmd==='download_speech_model'){
     window.__model={...window.__model,busy:true,downloaded:1000000000};window.__listeners['speech-model-progress']?.({payload:window.__model});
@@ -90,6 +100,7 @@ const assert=require('node:assert/strict');
  await page.waitForFunction(()=>!voice.nativeOperation);
  assert.equal(await page.evaluate(()=>window.__tracks.length),0);
  await record();
+ assert.equal(await page.evaluate(()=>__playing),false,'Playing media pauses while recording');
  await page.waitForFunction(()=>voice.waveform.some(value=>value>0.05));
  const waveTiming=await page.evaluate(()=>({bars:voice.waveform.length,seconds:voice.recording.count/voice.recording.context.sampleRate}));
  assert.equal(waveTiming.bars,Math.min(200,Math.floor(waveTiming.seconds*10)));
@@ -106,6 +117,10 @@ const assert=require('node:assert/strict');
  assert.equal(await page.locator('#composer-send').evaluate(el=>el.getBoundingClientRect().right<innerWidth),true);
  await page.setViewportSize({width:1080,height:880});
  await page.click('#voice-stop');await page.waitForFunction(()=>document.querySelector('#composer-input').value.includes('test dettatura'));
+ assert.equal(await page.evaluate(()=>__playing),true);
+ assert.equal(await page.evaluate(()=>__plays),1);
+ const mediaOrder=await page.evaluate(()=>__calls.map(call=>call.cmd));
+ assert(mediaOrder.indexOf('resume_dictation_media')<mediaOrder.indexOf('transcribe_audio'),'Resume occurs before local inference');
  assert.equal(await page.locator('#composer-input').inputValue(),'Testo già scritto test dettatura');
  assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='chat').length),0);
  assert.equal(await page.evaluate(()=>window.__tracks.every(t=>t.readyState==='ended')),true);
@@ -119,10 +134,13 @@ const assert=require('node:assert/strict');
  await page.fill('#composer-input','Da conservare');await record();
  const calls=await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='transcribe_audio').length);
  await page.click('#voice-recording-cancel');assert.equal(await page.locator('#composer-input').inputValue(),'Da conservare');
+ await page.waitForFunction(()=>!voice.mediaOperation);
+ assert.equal(await page.evaluate(()=>__playing),true,'Cancel restores playback');
  assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='transcribe_audio').length),calls);
  // Late inference results cannot land in a different draft.
  await page.evaluate(()=>window.__delayTranscript=true);await record();await page.click('#voice-stop');await page.waitForFunction(()=>window.__finishTranscript);
  await page.click('#nav-home');await page.fill('#composer-input','Nuova bozza');
+ assert.equal(await page.evaluate(()=>__playing),true,'Playback has already resumed during delayed transcription');
  assert.equal(await page.locator('#composer-mic').isVisible(),false);
  assert.match(await page.locator('#voice-recording-status').textContent(),/annullata/);
  await page.evaluate(()=>window.__finishTranscript());
@@ -135,6 +153,24 @@ const assert=require('node:assert/strict');
  assert.equal(await page.locator('#composer-input').inputValue(),'Nuova bozza test dettatura');
  await page.evaluate(()=>window.__denyMedia=true);await page.click('#composer-mic');await page.locator('#composer-status').waitFor({state:'visible'});
  assert.match(await page.locator('#composer-status').textContent(),/negato/);assert.equal(await page.locator('#composer-mic').isEnabled(),true);
+ assert.equal(await page.evaluate(()=>window.__tracks.every(t=>t.readyState==='ended')),true);
+ await page.evaluate(()=>{window.__denyMedia=false;window.__playing=false;});
+ const plays=await page.evaluate(()=>__plays);
+ await record();await page.click('#voice-recording-cancel');await page.waitForFunction(()=>!voice.mediaOperation);
+ assert.equal(await page.evaluate(()=>__playing),false,'Initially paused playback must stay paused');
+ assert.equal(await page.evaluate(()=>__plays),plays);
+ // Cancel while Windows is still acknowledging pause must restore exactly once afterwards.
+ await page.evaluate(()=>{window.__playing=true;window.__delayMedia=true;});
+ await page.click('#composer-mic');await page.waitForFunction(()=>window.__finishMedia);
+ await page.click('#voice-recording-cancel');
+ await page.evaluate(()=>{window.__delayMedia=false;window.__finishMedia();});
+ await page.waitForFunction(()=>!voice.pending&&!voice.mediaOperation);
+ assert.equal(await page.evaluate(()=>__playing),true);
+ assert.equal(await page.evaluate(()=>__plays),plays+1);
+ assert.equal(await page.evaluate(()=>window.__tracks.every(t=>t.readyState==='ended')),true);
+ await record();await page.evaluate(()=>__listeners['dictation-cancel']());
+ await page.waitForFunction(()=>!voice.mediaOperation);
+ assert.equal(await page.evaluate(()=>__playing),true,'Closing to tray restores playback and stops capture');
  assert.equal(await page.evaluate(()=>window.__tracks.every(t=>t.readyState==='ended')),true);
  // Modello già installato: il caricamento parte da solo all'avvio, con loader sul microfono e click inerte.
  const micPage=await browser.newPage({viewport:{width:1080,height:880}});

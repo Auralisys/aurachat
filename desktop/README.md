@@ -52,23 +52,70 @@ Vedi la sezione finale e `../mobile/README.md` per lo stato delle verifiche.
 
 ### Card attività e pannello destro
 
-La card **Artefatti / Agenti / Fonti** (più la sezione **Shell** quando serve) compare
+La card **Output / Agenti / Fonti** (più **Cambiamenti** nei progetti e **Shell** quando serve) compare
 quando la conversazione contiene messaggi, allegati o attività. Il pulsante
 nell'intestazione la nasconde e la riapre. Su desktop l'ingresso e l'uscita animano
 anche lo spazio della conversazione; sotto i 1000 px il pannello si sovrappone alla
 chat per mantenere leggibile il contenuto. Con `prefers-reduced-motion` gli
 spostamenti sono immediati.
 
-Gli **Artefatti** sono solo ciò che il modello ha prodotto: immagini, documenti,
-codice, dati, log e file scritti nel progetto. Le risposte in prosa, i ragionamenti e
-gli output grezzi degli strumenti non entrano nella lista: un evento
-`artifact-created` senza `path` e senza `url` viene scartato, a meno che il `kind` sia
-`image` o `document`. Ogni riga mostra il tipo con icona o miniatura, l'azione
-(`write_project_file` crea, `edit_project_file` aggiorna), la dimensione e il
-sub-agente che l'ha prodotto; il pannello aggiunge i filtri per tipo con i conteggi,
-così molti file di testo non nascondono le immagini. Le scritture del turno attivo
-compaiono subito come «In creazione…» e diventano artefatti quando lo strumento
-completa, senza duplicati per nome file.
+Gli **Output** sono i file finali che il modello pubblica esplicitamente con
+`publish_project_output`, dopo averli completati. Scritture, modifiche al codice,
+script temporanei e appunti intermedi non vengono elencati automaticamente.
+Non esiste una blacklist di estensioni: un report Markdown o uno script richiesto
+come risultato finale è un output valido. La pubblicazione verifica file e
+consenso locale e si ricostruisce dalle attività salvate, anche dei sub-agenti.
+Le vecchie scritture senza pubblicazione esplicita non vengono più elencate.
+Ogni riga mostra tipo, dimensione e agente; il pannello conserva i filtri per tipo.
+Per le integrazioni native `artifact-created` richiede `final_output: true`,
+oltre a un percorso/link o un documento/immagine valido.
+
+**Cambiamenti +N −N** mostra branch, upstream e conteggi locali (senza fetch).
+Nella card Attività il recap è una singola riga di testo, senza chip:
+**Cambiamenti +N −N**, sopra Output e con colori verde/rosso più netti. Il clic apre
+un menu con **Commit…**, **Commit e push…** e **Apri dettaglio completo**, senza
+allargare immediatamente la sidebar. Il menu resta fermo anche durante gli aggiornamenti.
+Il recap si aggiorna dopo le scritture del modello/sub-agenti e la fine dei comandi;
+un controllo ogni 2 secondi rileva anche le modifiche esterne, durante i turni attivi.
+Gli aggiornamenti invariati non ricreano il modulo o chiudono il menu.
+
+Il dettaglio separa **Staged** e **Non staged**, con statistiche per ciascun gruppo
+di modifiche. Non usa checkbox: **+** aggiunge un file allo stage reale di Git,
+**−** lo rimuove dallo stage, **Stage tutti** e **Unstage tutti** operano sui rispettivi
+gruppi senza cancellare i file. Lo stesso file parzialmente staged appare in entrambi.
+Il clic aggiorna immediatamente il gruppo con **In corso…**, senza bloccare chat o
+gli altri file: i clic successivi sono accodati e applicati in ordine. Git conferma
+solo la revisione dell'indice, senza ripetere tutte le scansioni/statistiche; una
+sola riconciliazione finale ripristina conteggi e modifiche parzialmente staged.
+In caso di errore la coda si ferma, lo stato reale viene riletto e il problema
+rimane visibile. Commit/push attendono la conferma delle operazioni pendenti.
+Il commit usa solo l'indice: modifiche non staged, anche negli stessi file, restano
+nel working tree. I comandi rapidi non aggiungono automaticamente tutti i file:
+senza stage aprono il dettaglio e indicano come prepararlo.
+**Genera con AI** invia solo quel diff al modello configurato nella conversazione,
+senza strumenti; il messaggio rimane modificabile e il commit richiede
+**Conferma commit**. **Push** ha una conferma separata della destinazione.
+Il menu **…** contiene **Commit e push…**: se il push fallisce il commit resta locale.
+Non vengono eseguiti force push, pull, reset o configurazioni automatiche del remoto.
+Un upstream esistente è necessario per il push. Le credenziali usano Git già
+configurato; i prompt interattivi sono disabilitati e gli errori sono mostrati.
+
+Git opera solo su una root di repository collegata e autorizzata nel progetto,
+mai sul repository antenato di una sottocartella autorizzata. Tutti i file già
+staged fanno parte del commit: controllare l'intero gruppo Staged, non solo le
+ultime aggiunte. Cambiamenti esterni dello stage o di HEAD invalidano l'anteprima
+senza perdere il messaggio scritto; modifiche solo al working tree non la invalidano.
+Conflitti, merge/rebase in corso e HEAD scollegato bloccano il commit; stage,
+unstage, commit e push attendono che le conversazioni siano ferme. Controllare lo stage prima della
+conferma: cambiamenti di programmi esterni e hook Git restano responsabilità
+del repository. Limiti espliciti: 1000 file modificati, diff fino a 64 KB,
+output Git/file non tracciati fino a 2 MiB; submodule da gestire esternamente.
+Questa sezione è nel desktop, anche nella disposizione compatta; non aggiunge
+una nuova superficie Git al companion Flutter.
+Verifiche dedicate: `tests/git-panel.cjs` per UI e conferme simulate; test Rust
+`git::tests` su repository temporanei e remoto bare locale, mai sul repository
+di lavoro; `llm::tests::commit_message_sends_only_the_selected_diff_without_tools_and_reports_errors`
+usa un provider HTTP locale simulato.
 
 Le **Fonti** contengono gli allegati dell'utente e i link HTTP(S) nei suoi messaggi;
 le letture del progetto e i link citati dal modello non sono fonti. `user-source`
@@ -304,6 +351,19 @@ invia insieme al testo già scritto e agli allegati. Cambiare chat scarta i
 risultati tardivi; tutte le tracce del microfono vengono chiuse. Annullare mentre
 il motore elabora scarta il risultato; il blocco CPU in corso può terminare.
 
+Su Windows, all'avvio effettivo della cattura vengono messe in pausa soltanto le
+sessioni multimediali già in riproduzione che espongono i controlli di sistema
+(per esempio Spotify). Non viene inviato un tasto play/pausa globale: un lettore
+già fermo non viene mai avviato. Alla fine della registrazione la musica riparte
+prima dell'inferenza, quindi durante la trascrizione, anche dopo annullamento,
+cambio chat, chiusura nel tray o logout. Riprendono soltanto le sessioni sospese
+da questa registrazione, ancora presenti, in pausa e sullo stesso brano; un
+lettore chiuso, fermato, già riavviato o passato ad altro brano non viene forzato.
+L'uscita normale ripristina la riproduzione anche dal nativo; un arresto forzato
+del processo non può eseguire questa pulizia. Lettori senza integrazione Windows
+non sono controllabili; gli errori dei controlli sono segnalati senza impedire
+la dettatura. Sul companion mobile non viene aggiunto controllo musicale remoto.
+
 Le chat di progetto espongono al modello `list_project_files` e
 `read_project_file`, con ID root, percorsi relativi, controllo canonico anche
 su link/junction, limiti di dimensione per singolo file. L’esplorazione prosegue fino alla risposta del modello, senza soglie arbitrarie sul numero di passaggi o sul totale letto. Vengono consultati
@@ -410,7 +470,8 @@ SHA-256 restituita dall'ultima lettura (oppure previous_content per compatibilit
 Le sostituzioni puntuali devono corrispondere una sola volta. Il backend verifica
 nuovamente percorso e contenuto dopo l'approvazione e serializza le scritture
 interne, scrivendo le sostituzioni su un file temporaneo prima della rinomina.
-Gli artefatti file sono mostrati in Artefatti e ricostruiti dalle attività salvate.
+Le scritture non popolano Output: solo `publish_project_output` pubblica un file
+finale e lo rende ricostruibile dalle attività salvate.
 
 I sub-agenti usano il modello e i permessi del progetto, senza nuove autorizzazioni.
 Il pannello conserva il testo progressivo, il reasoning effettivamente restituito

@@ -9,7 +9,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
     window.__events={};window.__calls=[];window.__pending={};
     const data={projects:[{id:'p',name:'AuraChat',source_folders:['C:/work/AuraChat'],conversations:[{id:'c',title:'Gestione operativa',created_at:2,updated_at:2,messages:[{role:'user',content:'Aggiorna il progetto con un agente.'}]}]}],conversations:[{id:'other',title:'Altra conversazione',created_at:1,updated_at:1,messages:[]}]};
     const config={firebase_email:'demo@example.com',firebase_project_id:'demo',firebase_api_key:'demo',firebase_auth_set:true,api_key_set:true,models:['deepseek-flash'],active_model:'deepseek-flash'};
-    window.__TAURI__={window:{getCurrentWindow:()=>({minimize(){},close(){},async listen(name,fn){window.__events[name]=fn;return()=>{};}})},core:{invoke:async(cmd,args)=>{
+    window.__TAURI__={window:{getCurrentWindow:()=>({minimize(){},close(){},async listen(name,fn){const previous=window.__events[name];window.__events[name]=event=>{previous?.(event);fn(event);};return()=>{};}})},core:{invoke:async(cmd,args)=>{
       window.__calls.push({cmd,args});
       if(cmd==='get_locale')return JSON.stringify(locales);
       if(['get_local_config','get_config'].includes(cmd))return config;
@@ -49,12 +49,14 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   await page.evaluate(()=>__emitApproval({...__pending['command-2'],status:'pending',reason:'review_unavailable'}));
   await page.getByRole('button',{name:'Consenti una volta',exact:true}).waitFor();assert.match(await page.locator('.approval-card__reason').innerText(),/non è disponibile/);
   await page.getByRole('button',{name:'Consenti una volta',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.approval-card').length===0);
-  // A file the running turn is writing is an artifact in progress, never model prose.
+  // Working files stay hidden; only an explicit final publication is an Output.
   await page.evaluate(()=>__events['chat-progress']({payload:{conversation_id:'c',kind:'__activity',text:JSON.stringify({kind:'tool',id:'write-live',action:'write_project_file',arguments:{root:0,path:'report.md'},status:'running'})}}));
   await page.locator('[data-activity-focus="group:outputs"]').click();
+  assert.equal(await page.locator('#activity-panel-content .activity-row').count(),0);
+  await page.evaluate(()=>__events['chat-progress']({payload:{conversation_id:'c',kind:'__activity',text:JSON.stringify({kind:'tool',id:'publish-live',action:'publish_project_output',status:'completed',output:JSON.stringify({path:'C:\\work\\AuraChat\\report.md',written_bytes:200,final_output:true})})}}));
   await page.locator('#activity-panel-content .activity-row').first().waitFor();
   assert.equal(await page.locator('#activity-panel-content .activity-row__title').innerText(),'report.md');
-  assert.equal(await page.locator('#activity-panel-content .activity-row.is-pending').count(),1);
+  assert.equal(await page.locator('#activity-panel-content .activity-row.is-pending').count(),0);
   await page.click('#activity-close');
   await page.evaluate(()=>__events['agent-activity']({payload:{conversation_id:'c',id:'a',title:'Aggiorna note',status:'running',summary:'Modifica del file in corso',task:'Aggiorna note.md',model:'deepseek-flash',content:'Prima parte.',reasoning_content:'Verifico il contenuto originale.',activity:[{kind:'tool',id:'tool-a',action:'edit_project_file',path:'note.md',status:'completed',output:'written',arguments:{path:'note.md'}}]}}));
   await page.locator('[data-activity-focus="all:agents"]').click();await page.getByRole('button',{name:/Aggiorna note/}).click();

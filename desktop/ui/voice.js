@@ -1,4 +1,4 @@
-const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: null, transcribing: false, downloading: false, loading: false, loaded: false, nativeOperation: null };
+const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: null, capture: null, mediaOperation: null, transcribing: false, downloading: false, loading: false, loaded: false, nativeOperation: null };
 
 async function speechRequest(command, args) {
   const operation = {};
@@ -65,7 +65,7 @@ async function warmSpeechModel() {
 
 function voiceUi(message = '') {
   const mic = $('#composer-mic');
-  const finishing = !!voice.nativeOperation && !voice.pending && !voice.transcribing;
+  const finishing = !!(voice.nativeOperation || voice.mediaOperation) && !voice.pending && !voice.transcribing && !voice.recording;
   const active = !!voice.recording || voice.pending || voice.transcribing || finishing;
   const loading = voice.loading;
   mic.hidden = active;
@@ -94,13 +94,27 @@ function releaseRecording(recording) {
   recording.stream?.getTracks().forEach(track => track.stop());
   recording.node?.disconnect(); recording.source?.disconnect();
   if (recording.context && recording.context.state !== 'closed') recording.context.close().catch(() => {});
+  if (voice.capture === recording) voice.capture = null;
+  if (recording.release) return recording.release;
+  const operation = recording.release = (async () => {
+    if (await recording.mediaPause) {
+      try { await invoke('resume_dictation_media', {id:recording.mediaId}); }
+      catch (error) { console.error('Dictation media resume failed', error);composerStatus(t('voice.media_error')); }
+    }
+  })();
+  voice.mediaOperation = operation;
+  operation.finally(() => {
+    if (voice.mediaOperation === operation) {voice.mediaOperation = null;voiceUi();}
+  });
+  return operation;
 }
 
 function cancelVoice() {
   voice.epoch++;
-  if (voice.recording) releaseRecording(voice.recording);
+  const released = voice.recording || voice.capture ? releaseRecording(voice.recording || voice.capture) : voice.mediaOperation;
   voice.recording = null; voice.pending = false; voice.transcribing = false;
   if ($('#voice-recording')) voiceUi();
+  return released;
 }
 
 // Capture at the device rate if it cannot supply 16 kHz; downsample before local IPC.
@@ -134,7 +148,7 @@ function drawVoiceWave() {
 }
 
 async function startVoice() {
-  if (voice.pending || voice.transcribing || voice.loading || voice.nativeOperation || state.preparing || state.loadingConversation) return;
+  if (voice.pending || voice.transcribing || voice.loading || voice.nativeOperation || voice.mediaOperation || state.preparing || state.loadingConversation) return;
   if (voice.recording) return stopVoice();
   const epoch = ++voice.epoch;
   voice.pending = true; voiceUi(t('voice.preparing'));
@@ -153,6 +167,7 @@ async function startVoice() {
     voiceUi(t('voice.preparing'));
     voice.waveform = [];
     recording = { chunks: [], count: 0, waveEnergy: 0, waveSamples: 0, epoch };
+    voice.capture = recording;
     recording.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false });
     if (epoch !== voice.epoch) { releaseRecording(recording); return; }
     recording.context = new AudioContext({ sampleRate: 16000 });
@@ -177,6 +192,12 @@ async function startVoice() {
       }
       voice.waveform = voice.waveform.slice(-200);
     };
+    recording.mediaId = crypto.randomUUID();
+    recording.mediaPause = invoke('pause_dictation_media', {id:recording.mediaId}).then(() => true, error => {
+      console.error('Dictation media pause failed', error);composerStatus(t('voice.media_error'));return false;
+    });
+    await recording.mediaPause;
+    if (epoch !== voice.epoch) { await releaseRecording(recording);return; }
     recording.source.connect(recording.node); recording.node.connect(recording.context.destination);
     await recording.context.resume();
     if (epoch !== voice.epoch) { releaseRecording(recording); return; }
@@ -202,7 +223,7 @@ async function stopVoice(sendAfter = false) {
       recording.flushed = () => { clearTimeout(timeout); resolve(); };
       recording.node.port.postMessage('flush');
     });
-    releaseRecording(recording);
+    await releaseRecording(recording);
     if (epoch !== voice.epoch) return;
     const samples = speechSamples(recording.chunks, recording.context.sampleRate);
     recording.chunks = [];
@@ -213,7 +234,7 @@ async function stopVoice(sendAfter = false) {
     autoGrow(input); input.focus(); composerStatus();
     if (sendAfter) { voice.transcribing = false; voiceUi(); await send(); }
   } catch (error) {
-    releaseRecording(recording);
+    await releaseRecording(recording);
     if (epoch === voice.epoch) composerStatus(voiceError(error));
   } finally {
     if (epoch === voice.epoch) { voice.transcribing = false; voiceUi();flushQueue(state.activeConversationId); }
@@ -246,6 +267,7 @@ function setupLocalVoice() {
     try { voice.loaded = false; renderSpeechModel(await invoke('remove_speech_model')); } catch (error) { $('#voice-error').textContent = voiceError(error); }
   };
   appWindow.listen('speech-model-progress', event => renderSpeechModel(event.payload)).catch(() => {});
+  appWindow.listen('dictation-cancel', cancelVoice).catch(error => console.error('Dictation close listener failed', error));
   window.addEventListener('pagehide', cancelVoice);
   // Installed model: warm it up right away so the microphone is never a guessing game.
   warmSpeechModel().catch(() => {});

@@ -14,8 +14,14 @@ test('routes completion to the correct account and conversation, with stable ret
   assert.equal(result.data.uid, 'owner');
   assert.equal(result.data.kind, 'chat');
   assert.equal(result.data.conversation_id, 'chat1');
+  assert.equal(result.data.device_id, 'pc1');
   assert.equal(result.android.notification.tag, 'event1');
   assert.equal(result.android.notification.channelId, 'aurachat_completion');
   assert.ok(!JSON.stringify(result).includes('never-copy-this'));
   assert.throws(() => notificationPayload('owner', 'event1', {}));
+});
+test('dictation completion from older desktops never sends a push, including failures', () => {
+  for (const body of ['Il testo dettato è pronto.', 'La trascrizione non è riuscita.']) {
+    assert.equal(notificationPayload('owner', 'event1', {kind:'transcription', title:'Trascrizione terminata', body}), null);
+  }
 });

@@ -349,12 +349,14 @@ function positionTreeOverlay(panel, row, point) {
 
 function closeTreeMenu(restoreFocus = false) {
   const resumeTurn = !!treeMenuTrigger?.closest('.msg--queued');
+  const resumeGit = !!treeMenuTrigger?.closest('.git-group, .git-panel');
   $('#tree-menu').hidden = true;
   treeMenuTrigger?.setAttribute('aria-expanded', 'false');
   treeMenuTrigger?.closest('.tree-project__head, .tree-conv, .sidebar__section-head, .chat-header')?.classList.remove('is-menu-open');
   if (restoreFocus) treeMenuTrigger?.focus();
   treeMenuTrigger = null;
   if (resumeTurn) requestAnimationFrame(() => updateLiveTurn());
+  if (resumeGit) scheduleActivityRender();
 }
 
 function showTreeMenu(row, trigger, heading, entries, point) {
@@ -363,13 +365,13 @@ function showTreeMenu(row, trigger, heading, entries, point) {
   const title = document.createElement('p');
   title.className = 'tree-menu__title';title.textContent = heading;
   panel.replaceChildren(title);
-  for (const [glyph, key, action] of entries) {
+  for (const [glyph, key, action, disabled = false] of entries) {
     const button = document.createElement('button');
     button.className = 'tree-menu__item' + (glyph === 'delete' ? ' tree-menu__item--danger' : '');
     button.setAttribute('role', 'menuitem');
     const conversationId = row.closest('.tree-conv')?.dataset.conversationId;
     const projectId = row.closest('.tree-project')?.dataset.projectId;
-    button.disabled = state.preparing || !!state.runs.get(conversationId)?.pending || !!state.data.projects.find(p => p.id === projectId)?.conversations.some(c => state.runs.get(c.id)?.pending);
+    button.disabled = disabled || state.preparing || !!state.runs.get(conversationId)?.pending || !!state.data.projects.find(p => p.id === projectId)?.conversations.some(c => state.runs.get(c.id)?.pending);
     const label = document.createElement('span');label.textContent = t(key);
     button.append(icon(glyph), label);
     button.onclick = () => { closeTreeMenu(true);action(); };
@@ -435,7 +437,8 @@ function scheduleProjectPreview(row, id) {
 function setupTreeOverlays() {
   const menu = $('#tree-menu'), preview = $('#project-preview');
   menu.addEventListener('keydown', e => {
-    const items = [...menu.querySelectorAll('button')];
+    const items = [...menu.querySelectorAll('button:not(:disabled)')];
+    if (!items.length) return;
     const index = items.indexOf(document.activeElement);
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
       e.preventDefault();

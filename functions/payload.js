@@ -7,6 +7,8 @@ function notificationPayload(uid, eventId, event) {
   if (!uid || !eventId || !event || typeof event.title !== 'string' || typeof event.body !== 'string') {
     throw new Error('Invalid completion event');
   }
+  // Older desktops/outboxes may still publish dictation completion events.
+  if (event.kind === 'transcription') return null;
   return {
     notification: { title: event.title.slice(0, 120), body: event.body.slice(0, 400) },
     data: { uid, event_id: eventId, kind: String(event.kind || ''), conversation_id: String(event.conversation_id || ''), device_id: String(event.device_id || '') },

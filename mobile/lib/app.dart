@@ -297,6 +297,9 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       error,
       pendingText;
   bool loading = true, sending = false, loadingMessages = false;
+  bool notificationIndexReady = false, notificationDevicesReady = false;
+  Timer? notificationWait;
+  NotificationTarget? waitingNotification;
   int loadVersion = 0;
   Timer? clock;
   bool get busy =>
@@ -383,7 +386,9 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         if (!busy) {
           deviceId = onlineDeviceReplacement(devices, deviceId) ?? deviceId;
         }
+        push.visibleDevice = deviceId;
         loading = false;
+        notificationDevicesReady = true;
       });
       if (previous != deviceId) {
         if (deviceId != null) {
@@ -393,6 +398,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         watchLiveTurns();
         restoreRequest();
       }
+      openNotification();
     }, onError: fail);
     indexSubscription = api.index.listen((snapshot) {
       if (!mounted) {
@@ -401,6 +407,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       setState(() {
         tree = Map<String, dynamic>.from(snapshot.data()?['tree'] ?? {});
         chats = chatIndex(tree);
+        notificationIndexReady = true;
       });
       openNotification();
     }, onError: fail);
@@ -415,6 +422,8 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     push.visibleConversation = null;
+    push.visibleDevice = null;
+    notificationWait?.cancel();
     clock?.cancel();
     for (final subscription in queueSubscriptions) {
       subscription.cancel();
@@ -462,14 +471,51 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
 
   void openNotification() {
     final target = push.target.value;
-    if (target == null || target.isEmpty || !mounted) {
+    if (target == null || !mounted) {
+      notificationWait?.cancel();
+      notificationWait = null;
+      waitingNotification = null;
       return;
     }
-    final chat = chats.where((c) => c['id'] == target).firstOrNull;
-    if (chat != null) {
-      push.target.value = null;
-      selectChat(chat);
+    if (waitingNotification != target) {
+      notificationWait?.cancel();
+      notificationWait = null;
+      waitingNotification = target;
     }
+    if (target.uid != widget.user.uid) {
+      push.target.value = null;
+      push.warning.value =
+          'Questa notifica appartiene a un altro account. Accedi con l’account che l’ha ricevuta.';
+      return;
+    }
+    final chat = chats.where((c) => c['id'] == target.conversation).firstOrNull;
+    if (!notificationIndexReady || !notificationDevicesReady || chat == null) {
+      // A completion may reach FCM before the desktop publishes the updated index.
+      notificationWait ??= Timer(const Duration(seconds: 20), () {
+        if (!mounted || push.target.value != target) return;
+        push.target.value = null;
+        push.warning.value =
+            'La chat della notifica non è disponibile. Controlla la connessione o riaprila dall’elenco chat.';
+      });
+      return;
+    }
+    if (target.device.isNotEmpty &&
+        !devices.any((device) => device['id'] == target.device)) {
+      push.target.value = null;
+      push.warning.value =
+          'Il PC della notifica non è più disponibile per questo account.';
+      return;
+    }
+    push.target.value = null;
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    scaffoldKey.currentState?.closeDrawer();
+    composerFocus.unfocus();
+    if (target.device.isNotEmpty && target.device != deviceId) {
+      unawaited(
+        selectDevice(target.device, fromNotification: true).catchError(fail),
+      );
+    }
+    selectChat(chat);
   }
 
   void watchApprovals() {
@@ -581,19 +627,35 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         }, onError: fail);
   }
 
-  Future<void> selectDevice(String id) async {
-    if (busy) {
+  Future<void> selectDevice(String id, {bool fromNotification = false}) async {
+    if (busy && !fromNotification) {
       return;
     }
-    setState(() => deviceId = id);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('device_${widget.user.uid}', id);
+    setState(() {
+      deviceId = id;
+      push.visibleDevice = id;
+      requestStatus = null;
+      activeRequestId = null;
+      pendingText = null;
+    });
+    requestSubscription?.cancel();
     watchApprovals();
     watchLiveTurns();
+    restoreRequest();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('device_${widget.user.uid}', id);
   }
 
   void selectChat(Map<String, dynamic>? chat) {
+    push.target.value = null;
+    if (micActive) {
+      micTimer?.cancel();
+      micActive = false;
+      micPath = null;
+      unawaited(recorder.cancel().catchError(fail));
+    }
     push.visibleConversation = chat?['id'] as String?;
+    push.visibleDevice = deviceId;
     final version = ++loadVersion;
     messageSubscription?.cancel();
     setState(() {
@@ -719,8 +781,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       if (!mounted) {
         return;
       }
-      setState(() => requestStatus = 'pending');
-      watchRequest(request);
+      if (deviceId == targetDevice) {
+        setState(() => requestStatus = 'pending');
+        watchRequest(request);
+      }
     } catch (e) {
       fail(e);
     } finally {
@@ -856,11 +920,11 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
 
   /// Sends this draft now: as guidance while its turn is running, otherwise
   /// immediately (ahead of the rest of the queue).
-  Future<void> sendQueuedNow(
-    ConversationQueue lane,
-    QueuedDraft draft,
-  ) async {
-    if (!mounted || lane.operation != null || !online || lane.device != deviceId) {
+  Future<void> sendQueuedNow(ConversationQueue lane, QueuedDraft draft) async {
+    if (!mounted ||
+        lane.operation != null ||
+        !online ||
+        lane.device != deviceId) {
       return;
     }
     if (liveTurnRunning(liveTurns[lane.conversation])) {
@@ -1270,6 +1334,9 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
 
   Future<void> finishDictation(bool sendAfter) async {
     if (!micActive || micTranscribing) return;
+    final version = loadVersion;
+    final target = deviceId;
+    final targetConversation = conversationId ?? const Uuid().v4();
     micTimer?.cancel();
     setState(() {
       micActive = false;
@@ -1286,15 +1353,14 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         await file.delete();
       } catch (_) {}
       if (audio.length <= 44) throw DictationException('speech_silence');
-      final target = deviceId;
       if (target == null) throw DictationException('device_missing');
       final text = await api.transcribe(
         target,
-        conversationId ?? const Uuid().v4(),
+        targetConversation,
         audio,
         dictationLanguage,
       );
-      if (!mounted) return;
+      if (!mounted || version != loadVersion) return;
       setState(() => micTranscribing = false);
       final base = composer.text.trimRight();
       final merged = base.isEmpty ? text : '$base $text';
@@ -1305,7 +1371,9 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       composerFocus.requestFocus();
       if (sendAfter) await send();
     } catch (failure) {
-      if (mounted) setState(() => error = dictationError(failure));
+      if (mounted && version == loadVersion) {
+        setState(() => error = dictationError(failure));
+      }
     } finally {
       if (mounted && micTranscribing) {
         setState(() => micTranscribing = false);

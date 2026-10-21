@@ -94,6 +94,16 @@ impl ProjectFiles {
             if name == "load_project_skill" {return self.load_skill(args["root"].as_u64().ok_or("root index required")? as usize,args["path"].as_str().ok_or("skill path required")?);}
             let path = self.resolve_path(&args, name == "write_project_file")?;
             match name {
+                "publish_project_output" => {
+                    if !path.is_file() {return Err("Output must be an existing regular file.".into());}
+                    let bytes=std::fs::metadata(&path).map_err(|e|e.to_string())?.len();
+                    let title=path.file_name().ok_or("invalid output file")?.to_string_lossy().to_string();
+                    use tauri::Emitter;
+                    let execution=self.execution.as_ref().ok_or("output publication unavailable")?;
+                    let output=json!({"path":path,"written_bytes":bytes,"final_output":true});
+                    execution.app.emit("artifact-created",json!({"conversation_id":execution.conversation,"id":format!("file:{}",path.display()),"title":title,"kind":"file","path":path,"bytes":bytes,"final_output":true})).map_err(|e|e.to_string())?;
+                    Ok(output)
+                }
                 "write_project_file" | "edit_project_file" => {
                     let execution = self.execution.as_ref().ok_or("write access unavailable")?;
                     if path.is_file() && std::fs::metadata(&path).map_err(|e|e.to_string())?.len()>1048576 {return Err("file exceeds 1 MiB".into());}
@@ -110,8 +120,6 @@ impl ProjectFiles {
                     let checked = self.resolve_path(&args, true)?;
                     if checked != path { return Err("file path changed; retry after reading".into()); }
                     write_file(&path, &content, previous.as_deref())?;
-                    use tauri::Emitter;
-                    let _=execution.app.emit("artifact-created",json!({"conversation_id":execution.conversation,"id":format!("file:{}",path.display()),"title":path.file_name().unwrap_or_default().to_string_lossy(),"kind":"file","path":path,"summary":format!("{} bytes",content.len())}));
                     Ok(json!({"path":path,"written_bytes":content.len(),"file_sha256":revision(&content)}))
                 }
                 "execute_project_command" => {
@@ -195,6 +203,7 @@ pub fn definitions() -> Value {
     let root = json!({"type":"integer","minimum":0,"description":"Index of an authorized project root from the system context"});
     let path = json!({"type":"string","description":"Relative path inside that root. Use . to list the root"});
     json!([
+        {"type":"function","function":{"name":"publish_project_output","description":"Publish an existing FINAL deliverable you produced for the user in the Output sidebar, only after finishing it. Never publish scratch scripts, temporary notes, logs, intermediate files or ordinary source edits. A final Markdown report or script explicitly requested by the user is valid. Writing a file alone does not publish it.","parameters":{"type":"object","properties":{"root":root,"path":path},"required":["root","path"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"list_project_skills","description":"Discover project-local SKILL.md instructions in authorized roots. Returns names, descriptions, root indices and paths; does not activate them.","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
         {"type":"function","function":{"name":"load_project_skill","description":"Load a discovered skill when explicitly requested or relevant to the task. Apply its instructions subject to user instructions and existing permissions. Relative resources use the skill folder.","parameters":{"type":"object","properties":{"root":root,"path":path},"required":["root","path"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"write_project_file","description":"Create or replace a UTF-8 file, creating parent folders. Existing files require expected_sha256 from the last read (preferred) or exact previous_content without line-number prefixes. Native permission checks may ask the user for approval.","parameters":{"type":"object","properties":{"root":root,"path":path,"content":{"type":"string"},"previous_content":{"type":"string"},"expected_sha256":{"type":"string"}},"required":["root","path","content"],"additionalProperties":false}}},

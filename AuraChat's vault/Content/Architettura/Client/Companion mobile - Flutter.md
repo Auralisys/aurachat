@@ -16,11 +16,35 @@ minuti. La presenza è aggiornata ogni 15 secondi e scade sul telefono dopo 45.
 
 Notifiche selettive: un solo esito per turno di chat (risposta pronta, errore o
 interruzione), richieste di approvazione e operazioni esplicite dell'utente
-(trascrizione, download del modello vocale). Tool, sub-agenti e comandi intermedi
+(download del modello vocale). La dettatura non genera notifiche di fine
+trascrizione: testo ed errori sono già nel compositore. Tool, sub-agenti e comandi intermedi
 non generano push. La funzione `functions/completionPush` inoltra gli eventi a
 FCM anche in background; il tap apre la conversazione. Il focus desktop sopprime solo il toast Windows; la push viene comunque
 pubblicata. Sul telefono il banner foreground viene evitato solo se quella chat
 è aperta sul telefono stesso.
+
+## Routing delle notifiche — 21 ottobre 2026
+
+Il tap conserva UID, PC e chat sia per FCM (avvio a freddo/rientro dal background)
+sia per le notifiche locali mostrate in primo piano. La destinazione resta in
+attesa del login e dei dati del workspace; il caricamento dell'indice può
+richiedere fino a 20 secondi. Menu e impostazioni vengono chiusi, viene selezionato
+il PC corretto e aperta la conversazione con il proprio progetto. Account diverso
+o destinazione non più disponibile producono un avviso senza aprire altre chat.
+Le vecchie notifiche locali con il solo ID conversazione non sono link sicuri:
+per provare il routing utilizzare notifiche nuove.
+
+Quando il telefono mostra un'altra chat, la notifica arriva comunque sul canale
+nativo ad alta priorità, senza banner custom. Si sopprime solo la fine risposta
+della stessa chat sullo stesso PC attualmente aperti; le approvazioni restano
+sempre notificate. Su iOS il banner automatico foreground di FCM è disabilitato
+per non duplicare quello locale. Permessi OS/Non disturbare restano prevalenti.
+
+La funzione Cloud è stata aggiornata per scartare anche i vecchi eventi
+`transcription` ancora inviati dalle installazioni precedenti. Regressioni
+account/destinazioni e selezione foreground in `mobile/test/notifications_test.dart`;
+filtro del mittente in `functions/payload.test.js`. La nuova navigazione
+va ancora provata dal tap reale su telefono/iPhone.
 
 Durante un turno il telefono segue `live_turns`: mostra il testo assistant in
 streaming, **Ragionamento** e **Attività** espansi con etichette italiane,

@@ -224,6 +224,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "transcribe-rs",
+ "windows",
 ]
 
 [[package]]

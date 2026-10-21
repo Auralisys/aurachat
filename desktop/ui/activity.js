@@ -61,15 +61,16 @@ function artifactMeta(item) { return ARTIFACT_META[artifactType(item)] || ARTIFA
 // An artifact references something the model produced; inline prose has no path or link.
 function nativeArtifact(item) {
   if (!item || typeof item.title !== 'string' || !item.title) return null;
+  if (item.final_output !== true) return null;
   if (!item.path && !item.url && !['image','document'].includes(item.kind)) return null;
   return item;
 }
 
 function artifactFromTool(item, agent) {
-  if (item?.kind !== 'tool' || !['write_project_file','edit_project_file'].includes(item.action) || item.status !== 'completed') return null;
+  if (item?.kind !== 'tool' || item.action !== 'publish_project_output' || item.status !== 'completed') return null;
   try {
     const output = JSON.parse(item.output);
-    if (typeof output?.path !== 'string' || !Number.isFinite(output.written_bytes)) return null;
+    if (output?.final_output !== true || typeof output.path !== 'string' || !Number.isFinite(output.written_bytes)) return null;
     const path = output.path;
     return { id:`file:${path}`, title:path.split(/[\\/]/).at(-1) || path, kind:'file', path,
       bytes:output.written_bytes, sha256:output.file_sha256, action:item.action, agent };
@@ -77,14 +78,12 @@ function artifactFromTool(item, agent) {
   return null;
 }
 
-// Files the running turn is writing right now, so the panel answers "what is it doing".
+// Completed publication tools are visible before the full turn is saved.
 function activityLiveTools() {
   const run = state.runs?.get(state.activeConversationId);
   if (!run?.pending) return [];
   return (run.stream?.activity || []).filter(item => item?.kind === 'tool');
 }
-
-function artifactName(item) { return (item?.path || '').split(/[\\/]/).at(-1) || ''; }
 
 function activityArtifacts(record) {
   const artifacts = new Map();
@@ -104,14 +103,8 @@ function activityArtifacts(record) {
     }
   }
   for (const [, item] of record?.outputs || []) add(nativeArtifact(item));
-  const known = new Set([...artifacts.values()].map(artifactName).filter(Boolean));
   for (const item of activityLiveTools()) {
-    if (item.status === 'completed') { add(artifactFromTool(item, null)); continue; }
-    const relative = typeof item.arguments?.path === 'string' ? item.arguments.path : '';
-    if (!relative) continue;
-    const title = relative.split(/[\\/]/).at(-1) || relative;
-    if (known.has(title)) continue;
-    add({ id:`live:${item.id}`, title, kind:'file', path:relative, action:item.action, pending:true });
+    if (item.status === 'completed') add(artifactFromTool(item, null));
   }
   return [...artifacts.values()];
 }
@@ -378,6 +371,7 @@ function closeActivityPanel() {
 
 function renderActivity() {
   if (!$('#activity-dock')) return;
+  if (treeMenuTrigger?.closest('.git-group, .git-panel') && !$('#tree-menu').hidden) return;
   const focusKey = document.activeElement?.dataset.activityFocus;
   const restoreFocus = () => {
     if (focusKey) [...$('#activity-dock').querySelectorAll('[data-activity-focus]')].find(el => el.dataset.activityFocus === focusKey)?.focus({preventScroll:true});
@@ -402,6 +396,7 @@ function renderActivity() {
   heading.append(activityText('span', t('activity.title')), activityButton(t('activity.hide'), 'minimize', () => {
     activity.visible = false;renderActivity();$('#activity-toggle').focus();
   }));card.append(heading);
+  renderGitCard(card);
   const sections = ['outputs', 'agents', 'sources'];
   if (items.shells.length || activity.section === 'shells') sections.push('shells');
   for (const section of sections) {
@@ -425,6 +420,11 @@ function renderActivity() {
     card.append(group);
   }
   if (!activity.section) {restoreFocus();return;}
+  if (activity.section === 'git') {
+    $('#activity-panel-title').textContent = t('git.changes');
+    $('#activity-back').hidden = true;$('#activity-tabs').hidden = true;
+    renderGitPanel($('#activity-panel-content'));restoreFocus();return;
+  }
   const section = activity.section, selected = items[section].find(item => item.id === activity.selected);
   $('#activity-panel-title').textContent = selected
     ? (section === 'shells' ? shellCommand(selected) : selected.title || t(`activity.${section}`))
@@ -638,10 +638,13 @@ async function stopActivityShell(shell) {
 }
 
 async function setupActivity() {
+  await setupGitEvents();
   for (const [event, collection] of [['artifact-created','outputs'], ['user-source','sources']]) {
     await appWindow.listen(event, ({payload}) => {
       if (!payload?.conversation_id || typeof payload.id !== 'string' || typeof payload.title !== 'string') return;
       const item = {id:payload.id, title:payload.title};
+      item.final_output = payload.final_output === true;
+      if (Number.isFinite(payload.bytes)) item.bytes = payload.bytes;
       for (const key of ['summary','content','path','kind']) if (typeof payload[key] === 'string') item[key] = payload[key];
       if (payload.url) item.url = safeActivityURL(payload.url);
       item.plain = payload.kind !== 'document';
@@ -659,7 +662,7 @@ async function setupActivity() {
     refreshShellProgress(payload.conversation_id);
     if (payload.conversation_id === state.activeConversationId) renderActivity();
   });
-  // Live writes become artifacts while the turn is still running.
+  // Explicit final publications are shown while the turn is still running.
   await appWindow.listen('chat-progress', ({payload}) => {
     if (payload?.conversation_id !== state.activeConversationId || ['__delta','__reasoning'].includes(payload?.kind)) return;
     scheduleActivityRender();

@@ -6,6 +6,18 @@ tags: [aurachat, backend, firebase, firestore, fcm]
 
 ← [[Architettura - Overview]]
 
+## Aggiornamento push — 21 ottobre 2026
+
+`completionPush` (europe-west3, codebase aurachat) scarta gli eventi
+`kind: transcription`, anche da desktop precedenti o code locali ritardate.
+La funzione aggiornata è stata distribuita. Le altre push conservano UID,
+`device_id` e `conversation_id`; nessuna modifica alle regole o ai permessi.
+Il mobile conserva questi campi anche nel payload della notifica locale per
+il routing dopo avvio/login. Banner foreground solo per sessioni non già
+visibili, salvo le approvazioni che notificano sempre. Dettagli correnti:
+[[Companion mobile - Flutter]] e `mobile/README.md`; le sezioni datate sotto
+documentano le fasi precedenti dello schema.
+
 **Stato: in uso (decisione 17 ottobre 2026).** Progetto `auralisys-chat`,
 Firestore abilitato (database `(default)`, `europe-west3`), web app con API key,
 account email/password creato e provider abilitato, regole

@@ -168,6 +168,39 @@ Dettagli UI in [[UI desktop - Refactor flat]]. Test browser con AudioWorklet
 reale e microfono simulato; trascrizione CPU di un campione pubblico verificata.
 Il microfono fisico e il dialogo permessi del WebView restano da provare manualmente.
 
+## Output finali e Git — 21 ottobre 2026
+
+La sidebar mostra **Cambiamenti +N −N** sopra **Output**. Solo
+`publish_project_output` pubblica un file finale, con `final_output: true`:
+scritture sorgente, script e note temporanee non compaiono automaticamente.
+Nessuna blacklist di estensioni: Markdown e script richiesti come deliverable
+restano pubblicabili. Le pubblicazioni si ricostruiscono anche dai sub-agenti.
+
+Il menu Cambiamenti offre Commit, Commit e push e dettaglio completo. Il dettaglio
+separa stage reale/non staged, con azioni +/− e operazioni su tutto il gruppo.
+Il commit usa esclusivamente l'indice esistente, preserva le modifiche non staged
+e richiede conferma; il modello genera un messaggio modificabile dal solo diff.
+Push separato con destinazione esplicita e nessuna operazione forzata.
+Revisioni dell'indice/HEAD/branch invalidano le anteprime obsolete.
+
+Stage/unstage spostano immediatamente i file con **In corso…** senza bloccare
+gli altri controlli; i clic sono accodati e confermati in ordine. Git restituisce
+la nuova revisione senza ripetere tutte le statistiche. La riconciliazione finale
+ripristina anche le modifiche parzialmente staged; errori espliciti interrompono
+la coda e ricaricano lo stato reale. Poll locale ogni 2 secondi e invalidazione
+sulle scritture del modello. Dettagli/limiti in `desktop/README.md`.
+
+## Musica durante la dettatura — 21 ottobre 2026
+
+Le API Media Control di Windows sospendono soltanto le sessioni già in
+riproduzione. Nessun tasto globale play/pausa: lettori inizialmente fermi non
+vengono avviati. Ripresa a registrazione conclusa, prima dell'inferenza, anche
+su annullamento, cambio chat, logout e chiusura nel tray; uscita normale con
+pulizia nativa. Riprendono solo le sessioni sospese da quella registrazione,
+ancora in pausa sullo stesso brano. Un arresto forzato non può eseguire la pulizia.
+Spotify è stato provato e confermato funzionante dall'utente. La trascrizione
+non pubblica più notifiche desktop o push; gli errori restano nel compositore.
+
 ## Provider e correzione dettatura — 17 ottobre 2026
 
 La configurazione supporta più provider, chiavi indipendenti e modelli/endpoint

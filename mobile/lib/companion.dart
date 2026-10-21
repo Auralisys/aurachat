@@ -264,8 +264,75 @@ class Companion {
   }
 }
 
+class NotificationTarget {
+  const NotificationTarget({
+    required this.uid,
+    required this.conversation,
+    required this.device,
+  });
+  final String uid, conversation, device;
+
+  static NotificationTarget? fromData(Map<String, dynamic> data) {
+    final uid = data['uid'], conversation = data['conversation_id'];
+    final device = data['device_id'] ?? '';
+    bool valid(Object? value) =>
+        value is String &&
+        value.isNotEmpty &&
+        value.length <= 1500 &&
+        !value.contains('/') &&
+        value != '.' &&
+        value != '..';
+    if (!valid(uid) ||
+        !valid(conversation) ||
+        device is! String ||
+        device.isNotEmpty && !valid(device) ||
+        data['kind'] == 'transcription') {
+      return null;
+    }
+    return NotificationTarget(
+      uid: uid as String,
+      conversation: conversation as String,
+      device: device,
+    );
+  }
+
+  static NotificationTarget? fromPayload(String? payload) {
+    if (payload == null) return null;
+    try {
+      final data = jsonDecode(payload);
+      return data is Map<String, dynamic> ? fromData(data) : null;
+    } on FormatException {
+      return null;
+    }
+  }
+
+  String get payload => jsonEncode({
+    'uid': uid,
+    'conversation_id': conversation,
+    'device_id': device,
+  });
+}
+
+bool showForegroundNotification(
+  Map<String, dynamic> data, {
+  required String? uid,
+  required bool foreground,
+  required String? visibleConversation,
+  required String? visibleDevice,
+}) =>
+    uid != null &&
+    data['uid'] == uid &&
+    data['kind'] != 'transcription' &&
+    !(foreground &&
+        data['kind'] == 'chat' &&
+        visibleConversation != null &&
+        data['conversation_id'] == visibleConversation &&
+        (data['device_id'] == null ||
+            data['device_id'] == '' ||
+            data['device_id'] == visibleDevice));
+
 class PushNotifications {
-  final target = ValueNotifier<String?>(null);
+  final target = ValueNotifier<NotificationTarget?>(null);
   final warning = ValueNotifier<String?>(null);
   final local = FlutterLocalNotificationsPlugin();
   final _subscriptions = <StreamSubscription<dynamic>>[];
@@ -273,9 +340,13 @@ class PushNotifications {
   String? _fid;
   Completer<void>? _registration;
   bool _binding = false;
-  String? visibleConversation;
+  String? visibleConversation, visibleDevice;
   bool foreground = true;
   final _shown = <String>{};
+  void open(NotificationTarget? notification) {
+    if (notification != null) target.value = notification;
+  }
+
   static const channel = AndroidNotificationChannel(
     'aurachat_completion',
     'Attività completate',
@@ -294,7 +365,7 @@ class PushNotifications {
         ),
       ),
       onDidReceiveNotificationResponse: (response) =>
-          target.value = response.payload,
+          open(NotificationTarget.fromPayload(response.payload)),
     );
     await local
         .resolvePlatformSpecificImplementation<
@@ -303,18 +374,20 @@ class PushNotifications {
         ?.createNotificationChannel(channel);
     final launch = await local.getNotificationAppLaunchDetails();
     if (launch?.didNotificationLaunchApp == true) {
-      target.value = launch?.notificationResponse?.payload;
+      open(
+        NotificationTarget.fromPayload(launch?.notificationResponse?.payload),
+      );
     }
     FirebaseMessaging.onBackgroundMessage(backgroundMessage);
     _subscriptions.add(
       FirebaseMessaging.onMessage.listen((message) async {
-        if (_uid == null || message.data['uid'] != _uid) {
-          return;
-        }
-        if (foreground &&
-            visibleConversation != null &&
-            message.data['conversation_id'] == visibleConversation &&
-            message.data['kind'] == 'chat') {
+        if (!showForegroundNotification(
+          message.data,
+          uid: _uid,
+          foreground: foreground,
+          visibleConversation: visibleConversation,
+          visibleDevice: visibleDevice,
+        )) {
           return;
         }
         final id =
@@ -327,16 +400,17 @@ class PushNotifications {
             id: id.hashCode & 0x7fffffff,
             title: message.notification?.title ?? 'AuraChat',
             body: message.notification?.body,
-            notificationDetails: const NotificationDetails(
+            notificationDetails: NotificationDetails(
               android: AndroidNotificationDetails(
                 'aurachat_completion',
                 'Attività completate',
                 importance: Importance.high,
                 priority: Priority.high,
+                tag: id,
               ),
-              iOS: DarwinNotificationDetails(),
+              iOS: const DarwinNotificationDetails(),
             ),
-            payload: message.data['conversation_id'],
+            payload: NotificationTarget.fromData(message.data)?.payload,
           );
         } catch (error) {
           _shown.remove(id);
@@ -346,14 +420,13 @@ class PushNotifications {
     );
     _subscriptions.add(
       FirebaseMessaging.onMessageOpenedApp.listen((message) {
-        if (_uid != null && message.data['uid'] == _uid) {
-          target.value = message.data['conversation_id'];
-        }
+        // A tap can precede auth restoration; the workspace checks ownership.
+        open(NotificationTarget.fromData(message.data));
       }),
     );
     final initial = await FirebaseMessaging.instance.getInitialMessage();
-    if (initial != null) {
-      target.value = initial.data['conversation_id'];
+    if (initial != null && target.value == null) {
+      open(NotificationTarget.fromData(initial.data));
     }
     _subscriptions.add(
       FirebaseMessaging.instance.onRegistered.listen((fid) async {
@@ -384,6 +457,13 @@ class PushNotifications {
         badge: true,
         sound: true,
       );
+      // Foreground delivery uses our local native notification on both platforms.
+      await FirebaseMessaging.instance
+          .setForegroundNotificationPresentationOptions(
+            alert: false,
+            badge: false,
+            sound: false,
+          );
       if (permission.authorizationStatus == AuthorizationStatus.denied) {
         warning.value =
             'Notifiche disattivate. Abilitale nelle impostazioni di sistema di AuraChat.';
@@ -466,6 +546,7 @@ class PushNotifications {
     _uid = null;
     _fid = null;
     visibleConversation = null;
+    visibleDevice = null;
     target.value = null;
     await FirebaseAuth.instance.signOut();
   }
