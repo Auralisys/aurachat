@@ -1530,9 +1530,6 @@ async function init() {
   await setupQuestions();
   setupShell();
 
-  // Controlli finestra
-  $('#btn-minimize').addEventListener('click', () => appWindow.minimize());
-  $('#btn-close').addEventListener('click', () => appWindow.close());
   $('#btn-settings').addEventListener('click', openSettings);
   $('#modal-close').addEventListener('click', closeSettings);
   $('#settings-overlay').addEventListener('click', (e) => {

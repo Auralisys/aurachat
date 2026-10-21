@@ -243,6 +243,20 @@ cargo tauri dev
 cargo tauri build   # produce l'installer NSIS in src-tauri/target/release/bundle/
 ```
 
+Su macOS servono Rust e gli strumenti da riga di comando di Xcode. La configurazione
+`src-tauri/tauri.macos.conf.json` genera invece `AuraChat.app`, con icona macOS e
+descrizione/entitlement per il microfono. Per compilare e installare localmente:
+
+```bash
+cd desktop
+npm exec --yes --package @tauri-apps/cli@2 -- tauri build --bundles app
+ditto src-tauri/target/release/bundle/macos/AuraChat.app /Applications/AuraChat.app
+open /Applications/AuraChat.app
+```
+
+È una build release per il Mac corrente. La distribuzione ad altri utenti richiede
+separatamente firma Developer ID e notarizzazione Apple.
+
 ## Avvio da VS Code
 
 Apri la cartella `desktop/` in VS Code:
@@ -274,9 +288,17 @@ I valori iniziali sono definiti in `src-tauri/src/config.rs`; il preset dell’e
 
 ## Icone
 
-`src-tauri/icons/` contiene PNG/ICO derivate da `assets/logo-auralisys.svg`.
-Per rigenerarle: `cargo tauri icon ../assets/logo-auralisys.svg` (o lo script
-una-tantum usato per crearle).
+`src-tauri/icons/` contiene PNG/ICO/ICNS derivate da `../mobile/assets/app-icon.svg`,
+con lo stesso logo lavanda e sfondo scuro del mobile. Per rigenerarle da `desktop/`:
+`cargo tauri icon ../mobile/assets/app-icon.svg --output /tmp/aurachat-icons`, poi
+copiare i PNG, ICO e ICNS desktop in `src-tauri/icons/`. `tray.png` rimane separata
+e trasparente per la barra di sistema.
+
+La finestra usa la cornice nativa del sistema: semafori a sinistra su macOS,
+riduzione/ingrandimento/chiusura a destra su Windows. La chiusura continua a
+nascondere l'app nel tray. Il companion pubblica la piattaforma effettiva e il
+nome del computer; su macOS legge il nome configurato in Impostazioni di Sistema.
+Gli identificatori Windows esistenti restano invariati.
 
 ## Localizzazione
 

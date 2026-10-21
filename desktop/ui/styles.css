@@ -101,10 +101,7 @@ input,textarea { caret-color:var(--c-glow); }
 .app-menu__panel { position:absolute; top:calc(100% + var(--space-1)); left:0; width:230px; z-index:15; padding:var(--space-2); background:var(--c-panel); border-radius:var(--radius-md); box-shadow:var(--shadow-overlay); }
 .app-menu__item { width:100%; min-height:36px; padding:var(--space-2); display:flex; align-items:center; justify-content:space-between; gap:var(--space-4); border-radius:var(--radius-sm); text-align:left; font-size:var(--fs-label); }
 .app-menu__item kbd { color:var(--c-text-muted); font:inherit; white-space:nowrap; }
-.titlebar__controls { height:100%; display:flex; }
-.win-btn { width:44px; display:grid; place-items:center; color:var(--c-text-muted); }
-.win-btn svg,.modal__close svg { width:16px; height:16px; }
-.win-btn--close:hover { background:var(--c-destructive); color:var(--c-text); }
+.modal__close svg { width:16px; height:16px; }
 .content { flex:1; min-height:0; display:flex; background:var(--c-shell); padding:var(--space-1) var(--space-2) var(--space-2) 0; }
 .workspace { position:relative; flex:1; display:flex; min-width:0; overflow:hidden; border:1px solid var(--c-border); border-radius:var(--radius-xl); background:var(--c-surface); }
 .app-rail { width:52px; flex:none; display:flex; flex-direction:column; align-items:center; padding:var(--space-2) var(--space-1) 0; }

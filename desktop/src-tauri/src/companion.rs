@@ -15,22 +15,39 @@ pub fn notification_preview(text: &str, limit: usize) -> String {
     preview
 }
 
-fn device_identity_id(computer:&str,user:&str)->String {
-    // Windows computer/user names are case-insensitive, unlike the hash input.
-    format!("windows-{:x}",Sha256::digest(format!("{}/{}",computer.trim().to_lowercase(),user.trim().to_lowercase()).as_bytes()))
+fn device_identity_id(platform:&str,computer:&str,user:&str)->String {
+    // Preserve existing Windows IDs; Unix user names are case-sensitive.
+    let identity=format!("{}/{}",computer.trim(),user.trim());
+    let identity=if platform=="windows" {identity.to_lowercase()} else {identity};
+    format!("{platform}-{:x}",Sha256::digest(identity.as_bytes()))
+}
+
+fn system_name(program:&str,args:&[&str])->Option<String> {
+    let mut command=std::process::Command::new(program);
+    command.args(args);
+    #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000000);}
+    command.output().ok().filter(|result|result.status.success())
+        .and_then(|result|String::from_utf8(result.stdout).ok())
+        .map(|name|name.trim().to_string()).filter(|name|!name.is_empty())
 }
 
 pub fn identity() -> (String, String) {
     static IDENTITY:std::sync::OnceLock<(String,String)>=std::sync::OnceLock::new();
     IDENTITY.get_or_init(|| {
-    let computer = std::env::var("COMPUTERNAME").ok().filter(|name|!name.is_empty()).unwrap_or_else(|| {
+    #[cfg(windows)]
+    let computer = std::env::var("COMPUTERNAME").ok().filter(|name|!name.trim().is_empty()).or_else(|| {
         let root=std::env::var("SystemRoot").unwrap_or_else(|_|"C:\\Windows".into());
-        let mut command=std::process::Command::new(std::path::Path::new(&root).join("System32/hostname.exe"));
-        #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000000);}
-        command.output().ok().filter(|result|result.status.success()).and_then(|result|String::from_utf8(result.stdout).ok()).map(|name|name.trim().to_string()).filter(|name|!name.is_empty()).unwrap_or_else(||"PC".into())
-    });
-    let user = std::env::var("USERNAME").unwrap_or_else(|_| "Windows".into());
-    let id = device_identity_id(&computer,&user);
+        system_name(&std::path::Path::new(&root).join("System32/hostname.exe").to_string_lossy(),&[])
+    }).unwrap_or_else(||"PC".into());
+    #[cfg(target_os="macos")]
+    let computer=system_name("/usr/sbin/scutil",&["--get","ComputerName"])
+        .or_else(||system_name("/bin/hostname",&[])).unwrap_or_else(||"Mac".into());
+    #[cfg(not(any(windows,target_os="macos")))]
+    let computer=system_name("/bin/hostname",&[]).unwrap_or_else(||"PC".into());
+    let user = std::env::var(if cfg!(windows) {"USERNAME"} else {"USER"})
+        .ok().filter(|name|!name.trim().is_empty())
+        .unwrap_or_else(||if cfg!(windows) {"Windows".into()} else {"Account".into()});
+    let id = device_identity_id(std::env::consts::OS,&computer,&user);
     (id, format!("{user} · {computer}"))
     }).clone()
 }
@@ -228,7 +245,7 @@ pub fn notify(app: &tauri::AppHandle, kind: &str, id: &str, conversation: &str, 
     let auth=match crate::firebase_auth(&state) {Ok(a)=>a,Err(_)=>return};
     // Desktop attention only controls the local toast; phones have their own visibility.
     if kind != "chat" || !chat_visible(app,&state,conversation) {
-        if let Err(e)=app.notification().builder().title(title).body(body).show() { eprintln!("Windows notification: {e}"); }
+        if let Err(e)=app.notification().builder().title(title).body(body).show() { eprintln!("Desktop notification: {e}"); }
     }
     let (device_id, device_name)=identity();
     let event_id=format!("{:x}", Sha256::digest(format!("{uid}/{device_id}/{kind}/{id}").as_bytes()));
@@ -444,7 +461,7 @@ async fn heartbeat_once(app:&tauri::AppHandle)->Result<(),String>{
     }
     let speech=state.speech.status();
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/devices/{id}"),
-        &json!({"name":name,"platform":"windows","identity_version":2,"last_seen":data::now_millis(),"protocol":3,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"speech":{"ready":speech.ready,"busy":speech.busy,"loading":speech.loading},"project_permissions":project_permissions,"project_skills":skills})).await?;
+        &json!({"name":name,"platform":std::env::consts::OS,"identity_version":2,"last_seen":data::now_millis(),"protocol":3,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"speech":{"ready":speech.ready,"busy":speech.busy,"loading":speech.loading},"project_permissions":project_permissions,"project_skills":skills})).await?;
     let tree=state.data.lock().unwrap().storage_tree()?;
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/companion/state"),&json!({"tree":tree})).await?;
     let outbox=state.config_dir.join("notification-outbox").join(&uid);
@@ -596,8 +613,19 @@ fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,Strin
     }
     #[test]fn identity_stays_stable(){let (id,name)=identity();assert!(data::valid_id(&id).is_ok());assert!(!name.is_empty());assert_eq!(identity().0,id);}
     #[test]fn windows_identity_is_independent_of_launch_environment_case(){
-        assert_eq!(device_identity_id("Ridney","lofio"),device_identity_id("RIDNEY","LOFIO"));
-        assert_ne!(device_identity_id("Ridney","lofio"),device_identity_id("other","lofio"));
+        assert_eq!(device_identity_id("windows","Ridney","lofio"),device_identity_id("windows","RIDNEY","LOFIO"));
+        assert_eq!(device_identity_id("windows","Ridney","lofio"),format!("windows-{:x}",Sha256::digest(b"ridney/lofio")));
+        assert_ne!(device_identity_id("windows","Ridney","lofio"),device_identity_id("windows","other","lofio"));
+    }
+    #[test]fn device_identity_separates_platforms_and_unix_users(){
+        assert_ne!(device_identity_id("macos","Mac","lorenzo"),device_identity_id("windows","Mac","lorenzo"));
+        assert_ne!(device_identity_id("macos","Mac","lorenzo"),device_identity_id("macos","Mac","Lorenzo"));
+        assert!(identity().0.starts_with(&format!("{}-",std::env::consts::OS)));
+    }
+    #[cfg(target_os="macos")]
+    #[test]fn mac_identity_uses_the_system_computer_name(){
+        let name=system_name("/usr/sbin/scutil",&["--get","ComputerName"]).unwrap();
+        assert!(identity().1.ends_with(&format!(" · {name}")));
     }
     #[test]fn completion_notice_skips_only_the_focused_open_chat(){
         assert!(viewing_match(Some("c"),true,"c"));
