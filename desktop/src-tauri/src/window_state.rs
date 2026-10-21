@@ -1,6 +1,15 @@
 use serde::{Deserialize, Serialize};
 use tauri::{PhysicalPosition, PhysicalSize};
 
+#[cfg(target_os = "windows")]
+pub fn chat_progress(active_chats: usize) -> tauri::window::ProgressBarState {
+    use tauri::window::ProgressBarStatus;
+    tauri::window::ProgressBarState {
+        status: Some(if active_chats == 0 { ProgressBarStatus::None } else { ProgressBarStatus::Indeterminate }),
+        progress: None,
+    }
+}
+
 /// Normal bounds are physical pixels; maximizing never replaces them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowGeometry {
@@ -40,6 +49,18 @@ impl WindowGeometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn taskbar_progress_stays_active_until_the_last_chat_finishes() {
+        use tauri::window::ProgressBarStatus;
+        for active in [1, 2, 1] {
+            let progress = chat_progress(active);
+            assert!(matches!(progress.status, Some(ProgressBarStatus::Indeterminate)));
+            assert!(progress.progress.is_none());
+        }
+        assert!(matches!(chat_progress(0).status, Some(ProgressBarStatus::None)));
+    }
 
     #[test]
     fn restore_keeps_window_visible_after_monitor_changes() {

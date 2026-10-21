@@ -23,6 +23,9 @@ Vedi `../AuraChat's vault/` per le decisioni: `Overview.md`,
   gia mostrata; con testo o allegati compaiono **Stop** e **Invia** e l'invio accoda il
   messaggio, che parte appena il turno corrente si chiude. Anche la dettatura resta
   disponibile (`stop_chat` ferma il turno solo per il proprietario della conversazione).
+- **Barra delle applicazioni Windows**: indicatore nativo indeterminato durante
+  l'elaborazione AI, anche con finestra minimizzata. Rimane attivo mentre almeno
+  una chat sta lavorando e si spegne al termine, in caso di errore o dopo Stop.
 - **Logo Auralisys** come icona della finestra e del tray.
 
 La persistenza Firestore usa `users/{uid}`: `config`, `tree` e `window` sono mappe native,
@@ -299,6 +302,14 @@ I file letti per la richiesta vengono inviati al provider LLM configurato;
 non avviene scansione o caricamento automatico dell'intera root. Le modifiche verificano la revisione del file e i comandi passano dal controllo
 permessi. Solo Accesso completo abilita percorsi assoluti esterni. Il provider
 deve supportare tool calling.
+
+Se il modello vede solo `create_subagent`, la chat non appartiene a un progetto
+con cartelle autorizzate su questo dispositivo. I consensi sono locali e non
+arrivano dalla sincronizzazione cloud: aprire **Modifica progetto**, aggiungere
+o riselezionare la cartella, consentire la lettura e salvare; usare poi una chat
+di quel progetto. Le modalita Ask/Auto/Full non sostituiscono il consenso iniziale.
+Il contesto del modello distingue questo caso dalla chat senza progetto e indica
+il percorso di ripristino, anche quando delegare non puo fornire accesso ai file.
 
 ## Cronologia Firestore v2
 

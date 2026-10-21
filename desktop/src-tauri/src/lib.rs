@@ -55,9 +55,33 @@ pub struct AppState {
     viewing_chat: Mutex<Option<String>>,
 }
 
-struct ConversationRun<'a> { active: &'a Mutex<std::collections::HashSet<String>>, id: String }
+struct ConversationRun<'a> { active: &'a Mutex<std::collections::HashSet<String>>, id: String, app: tauri::AppHandle }
 impl Drop for ConversationRun<'_> {
-    fn drop(&mut self) { self.active.lock().unwrap().remove(&self.id); }
+    fn drop(&mut self) {
+        self.active.lock().unwrap().remove(&self.id);
+        update_taskbar_progress(&self.app);
+    }
+}
+
+fn update_taskbar_progress(app: &tauri::AppHandle) {
+    #[cfg(target_os = "windows")]
+    {
+        let handle = app.clone();
+        // Read the current count on the UI thread so concurrent completions cannot leave stale progress.
+        if let Err(error) = app.run_on_main_thread(move || {
+            let state = handle.state::<AppState>();
+            let active = state.running_chats.lock().unwrap();
+            if let Some(window) = handle.get_webview_window("main") {
+                if let Err(error) = window.set_progress_bar(window_state::chat_progress(active.len())) {
+                    eprintln!("Taskbar progress update failed: {error}");
+                }
+            }
+        }) {
+            eprintln!("Taskbar progress dispatch failed: {error}");
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
 }
 
 fn app_icon() -> tauri::image::Image<'static> {
@@ -471,7 +495,8 @@ async fn chat_inner(
 ) -> Result<ChatResponse, String> {
     let account=state.account_lock.lock().await;
     if !state.running_chats.lock().unwrap().insert(conversation_id.clone()) { return Err("chat_in_progress".into()); }
-    let _run = ConversationRun {active:&state.running_chats, id:conversation_id.clone()};
+    let _run = ConversationRun {active:&state.running_chats, id:conversation_id.clone(), app:app.clone()};
+    update_taskbar_progress(&app);
     let content = clean(&content);
     let attachments = attachments.unwrap_or_default();
     llm::validate_attachments(&attachments)?;
