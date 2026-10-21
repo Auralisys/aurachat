@@ -72,12 +72,16 @@ function questionCard(item) {
   customLabel.append(customTitle, custom);fieldset.append(customLabel);
   const error = document.createElement('p');error.className = 'question-error';error.setAttribute('role', 'alert');error.hidden = true;
   const actions = document.createElement('div');actions.className = 'approval-card__actions';
-  const discuss = document.createElement('button');discuss.type = 'button';discuss.className = 'approval-deny';discuss.textContent = t('questions.discuss');
+  const discuss = document.createElement('button');discuss.type = 'button';discuss.className = 'question-discuss';discuss.textContent = t('questions.discuss');
   const skip = document.createElement('button');skip.type = 'button';skip.className = 'approval-deny';skip.textContent = t('questions.skip');
   const back = document.createElement('button');back.type = 'button';back.className = 'approval-deny';back.textContent = t('questions.back');back.hidden = index===0;
   const submit = document.createElement('button');submit.type = 'submit';submit.className = 'approval-allow';submit.textContent = t(index<questions.length-1 ? 'questions.next' : 'questions.submit');
   submit.disabled = !draft.selected.length && !draft.custom.trim();
-  const replaceCard = () => {form.replaceWith(questionCard(item));$('#question-requests legend')?.focus({preventScroll:true});};
+  const replaceCard = () => {
+    const messages = $('#messages'), follow = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 90;
+    form.replaceWith(questionCard(item));$('#question-requests legend')?.focus({preventScroll:true});
+    if (follow) messages.scrollTop = messages.scrollHeight;
+  };
   back.onclick = () => {item.draft.index--;replaceCard();};
   const respond = async action => {
     const selected = action === 'answer' ? [...fieldset.querySelectorAll('input:checked')].map(input => input.value) : [];
@@ -109,11 +113,12 @@ function questionCard(item) {
   skip.onclick = () => respond('skip');close.onclick = () => respond('cancel');
   legend.tabIndex = -1;
   const content = document.createElement('div');content.className = 'question-content';content.append(fieldset);
-  actions.append(back, discuss, skip, submit);form.append(content, error, actions);
+  actions.append(discuss, back, skip, submit);form.append(content, error, actions);
   return form;
 }
 
 function renderQuestions() {
+  const messages = $('#messages'), follow = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 90;
   let tray = $('#question-requests');
   if (!tray) {
     tray = document.createElement('section');tray.id = 'question-requests';tray.setAttribute('aria-label', t('questions.waiting'));tray.setAttribute('aria-live','polite');$('.composer').prepend(tray);
@@ -127,6 +132,7 @@ function renderQuestions() {
   }
   for (const card of existing.values()) card.remove();
   tray.hidden = !items.length;
+  if (follow) messages.scrollTop = messages.scrollHeight;
   if (focused && !tray.contains(document.activeElement)) $('#composer-input').focus({preventScroll:true});
 }
 

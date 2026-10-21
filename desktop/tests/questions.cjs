@@ -134,9 +134,28 @@ const assert=require('node:assert/strict');
   await tray.getByRole('radio',{name:'B',exact:true}).check();
   await tray.getByRole('button',{name:'Avanti',exact:true}).click();
   assert.equal(await tray.getByRole('checkbox',{name:long,exact:true}).isChecked(),true);
+  const checkDiscuss = async () => {
+   const style = await tray.locator('.question-discuss').evaluate(button => {
+    const computed=getComputedStyle(button);
+    return {background:computed.backgroundColor,color:computed.color,first:button===button.parentElement.firstElementChild};
+   });
+   assert.deepEqual(style,{background:'rgb(255, 255, 255)',color:'rgb(0, 0, 0)',first:true});
+   const discussBox=await tray.getByRole('button',{name:'Parliamone',exact:true}).boundingBox();
+   const backBox=await tray.getByRole('button',{name:'Indietro',exact:true}).boundingBox();
+   assert.ok(discussBox.x+discussBox.width<=backBox.x,'Discuss is separated on the left of the other actions');
+   const headerBox=await tray.locator('.question-header').boundingBox();
+   const stepBox=await tray.locator('.question-step').boundingBox();
+   assert.ok(Math.abs(stepBox.x+stepBox.width/2-headerBox.x-headerBox.width/2)<1,'Step label and progress are horizontally centered in the header');
+   const labelBox=await tray.locator('.question-step > span').boundingBox();
+   const progressBox=await tray.getByRole('progressbar').boundingBox();
+   assert.ok(progressBox.y>=labelBox.y+labelBox.height,'Progress sits below the step label');
+   assert.ok(Math.abs(progressBox.x+progressBox.width/2-labelBox.x-labelBox.width/2)<1,'Progress and step label share the same horizontal center');
+  };
   await page.setViewportSize({width:1440,height:960});
+  await checkDiscuss();
   await page.screenshot({path:resolve(shots,'batch-desktop.png')});
   await page.setViewportSize({width:720,height:680});
+  await checkDiscuss();
   await page.screenshot({path:resolve(shots,'batch-compact.png')});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await tray.getByRole('button',{name:'Avanti',exact:true}).click();
@@ -184,6 +203,21 @@ const assert=require('node:assert/strict');
   assert.equal(await page.evaluate(()=>state.runs.get('a').messages[0].content),'Prima del questionario');
   await page.evaluate(()=>{state.runs.get('a').pending=false;renderMessages();});
   await page.screenshot({path:resolve(shots,'recap-compact.png')});
+  // Opening a question shrinks the message viewport: retain bottom-follow, not history-reading.
+  await page.evaluate(()=>{
+   state.messages.splice(0,state.messages.length,...Array.from({length:25},(_,i)=>({role:i%2?'assistant':'user',content:`Messaggio ${i}\n\n${'Contenuto della cronologia. '.repeat(10)}`})));
+   renderMessages();
+   const box=document.querySelector('#messages');box.scrollTop=box.scrollHeight;
+  });
+  await page.evaluate(()=>window.__ask('scroll-bottom'));
+  assert.ok(await page.evaluate(()=>{const box=document.querySelector('#messages');return box.scrollHeight-box.scrollTop-box.clientHeight<2;}),'Opening ask_user follows the bottom after the composer grows');
+  await tray.getByRole('button',{name:'Salta',exact:true}).click();await tray.waitFor({state:'hidden'});
+  const historyTop=await page.evaluate(()=>{
+   const box=document.querySelector('#messages');box.scrollTop=100;return box.scrollTop;
+  });
+  await page.evaluate(()=>window.__ask('scroll-history'));
+  assert.ok(Math.abs(await page.locator('#messages').evaluate(box=>box.scrollTop)-historyTop)<2,'Opening ask_user does not pull the reader out of history');
+  await tray.getByRole('button',{name:'Salta',exact:true}).click();await tray.waitFor({state:'hidden'});
   await page.evaluate(()=>window.__ask('background',false,'b',[]));
   assert.equal(await tray.isVisible(),false);
   await page.getByRole('button',{name:'Chat b',exact:true}).click();await tray.waitFor({state:'visible'});
