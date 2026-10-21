@@ -89,6 +89,17 @@ solo la revisione dell'indice, senza ripetere tutte le scansioni/statistiche; un
 sola riconciliazione finale ripristina conteggi e modifiche parzialmente staged.
 In caso di errore la coda si ferma, lo stato reale viene riletto e il problema
 rimane visibile. Commit/push attendono la conferma delle operazioni pendenti.
+Nel gruppo **Non staged**, il cestino su ogni file e **Scarta tutti…** aprono una
+conferma con l'elenco esatto: i file tracciati vengono ripristinati dall'indice
+corrente, non da HEAD; i file nuovi non tracciati vengono eliminati definitivamente
+senza Cestino. Lo stage resta intatto, anche per file parzialmente staged o su un
+branch senza commit. Annulla non modifica nulla. Se contenuti, indice, HEAD o
+branch cambiano dopo l'anteprima, la conferma viene rifiutata e lo stato riletto.
+La selezione è limitata ai file non staged visualizzati; file ignorati e cartelle
+non vengono eliminati ricorsivamente. Link, junction, submodule e file oltre 2 MiB
+vanno gestiti esternamente. L'operazione non è annullabile e non è una transazione
+atomica contro programmi esterni: evitare modifiche concorrenti; un errore può
+lasciare un ripristino parziale, segnalato esplicitamente e riconciliato nella UI.
 Il commit usa solo l'indice: modifiche non staged, anche negli stessi file, restano
 nel working tree. I comandi rapidi non aggiungono automaticamente tutti i file:
 senza stage aprono il dettaglio e indicano come prepararlo.
@@ -105,8 +116,8 @@ mai sul repository antenato di una sottocartella autorizzata. Tutti i file già
 staged fanno parte del commit: controllare l'intero gruppo Staged, non solo le
 ultime aggiunte. Cambiamenti esterni dello stage o di HEAD invalidano l'anteprima
 senza perdere il messaggio scritto; modifiche solo al working tree non la invalidano.
-Conflitti, merge/rebase in corso e HEAD scollegato bloccano il commit; stage,
-unstage, commit e push attendono che le conversazioni siano ferme. Controllare lo stage prima della
+Conflitti, merge/rebase in corso e HEAD scollegato bloccano le mutazioni; stage,
+unstage, scarta, commit e push attendono che le conversazioni siano ferme. Controllare lo stage prima della
 conferma: cambiamenti di programmi esterni e hook Git restano responsabilità
 del repository. Limiti espliciti: 1000 file modificati, diff fino a 64 KB,
 output Git/file non tracciati fino a 2 MiB; submodule da gestire esternamente.

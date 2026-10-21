@@ -10,6 +10,7 @@ function gitContext() {
   const key = project ? `${state.config.firebase_email}:${project.id}:${(project.source_folders || []).join('|')}` : null;
   if (gitView.key !== key) {
     if ($('#git-push-confirm')?.open) $('#git-push-confirm').close('cancel');
+    if ($('#git-discard-confirm')?.open) $('#git-discard-confirm').close('cancel');
     Object.assign(gitView, {key, root:project?.source_folders?.[0], epoch:gitView.epoch + 1, data:null, error:'', statusError:'', loading:false, working:false, staging:null, preview:null, message:'', panel:null, editor:null});
     if (project && gitView.root) queueMicrotask(() => refreshGit());
   }
@@ -137,13 +138,39 @@ function renderQueuedStaging(queue) {
   gitView.panel = null;renderActivity();
 }
 
+async function gitDiscard(paths) {
+  if (gitView.working || gitView.staging || state.busy || !paths.length) return;
+  const epoch = gitView.epoch;
+  await gitWork(async () => {
+    const preview = await gitRequest('discard_preview', {paths, revision:gitView.data.revision});
+    const dialog = $('#git-discard-confirm');
+    $('#git-discard-files').replaceChildren(...preview.files.map(file =>
+      activityText('li', `${file.path}${file.untracked ? ` · ${t('git.discard_delete_new')}` : ''}`)));
+    const accepted = await new Promise(resolve => {
+      dialog.returnValue = 'cancel';
+      dialog.addEventListener('close', () => resolve(dialog.returnValue === 'discard'), {once:true});
+      dialog.showModal();
+    });
+    if (!accepted || epoch !== gitView.epoch) return;
+    await gitRequest('discard', {paths, revision:preview.revision});
+    composerStatus(t('git.discarded'));
+  });
+  if (epoch === gitView.epoch) scheduleGitRefresh();
+}
+
 function renderGitFiles(panel, side) {
   const files = gitFiles(side);
   const section = activityText('section', '', 'git-file-group');section.dataset.gitSide = side;
   const header = activityText('div', '', 'git-file-heading');
   header.append(activityText('h3', `${t(`git.${side}`)} · ${files.length}`));
   const actionKey = side === 'staged' ? 'git.unstage_all' : 'git.stage_all';
-  header.append(gitButton(actionKey, () => gitStage(side, files.map(file => file.path)), !files.some(file => !gitPending(file.path)) || state.busy));
+  const buttons = activityText('div', '', 'git-file-actions');
+  if (side === 'unstaged') {
+    const discard = gitButton('git.discard_all', () => gitDiscard(files.map(file => file.path)), !files.length || !!gitView.staging || state.busy);
+    discard.classList.add('git-discard-action');buttons.append(discard);
+  }
+  buttons.append(gitButton(actionKey, () => gitStage(side, files.map(file => file.path)), !files.some(file => !gitPending(file.path)) || state.busy));
+  header.append(buttons);
   section.append(header);
   if (!files.length) section.append(activityText('p', t(`git.empty_${side}`), 'activity-empty'));
   for (const file of files) {
@@ -160,7 +187,15 @@ function renderGitFiles(panel, side) {
     action.dataset.activityFocus = `${side}:${file.path}`;
     row.append(path);
     if (pending) row.append(activityText('span', t('git.staging_pending'), 'git-file-pending'));
-    row.append(stats.binary ? activityText('span', t('git.binary'), 'git-file-stats') : gitStats(stats), action);
+    row.append(stats.binary ? activityText('span', t('git.binary'), 'git-file-stats') : gitStats(stats));
+    if (side === 'unstaged') {
+      const discard = activityButton(`${t('git.discard')} · ${file.path}`, 'trash', () => gitDiscard([file.path]));
+      discard.classList.add('git-discard-action');
+      discard.disabled = gitView.working || !!gitView.staging || state.busy;
+      discard.dataset.activityFocus = `discard:${file.path}`;
+      row.append(discard);
+    }
+    row.append(action);
     section.append(row);
   }
   panel.append(section);

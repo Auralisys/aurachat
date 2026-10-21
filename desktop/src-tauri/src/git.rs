@@ -203,6 +203,97 @@ pub fn stage(root: &Path, paths: &[String], revision: &str, unstage: bool) -> Re
     Ok(json!({"revision":index_revision(&root,&head(&root)?)?}))
 }
 
+fn discard_snapshot(root: &Path, paths: &[String]) -> Result<Value,String> {
+    ready(root)?;
+    if paths.is_empty() || paths.len()>1000 {return Err("Choose between 1 and 1000 unstaged files.".into());}
+    let index=index_revision(root,&head(root)?)?;
+    let files=parse_changes(&run(root,None,&["status","--porcelain=v1","-z","--untracked-files=all"])?)?;
+    let mut args=vec!["ls-files","--stage","-z","--"];args.extend(paths.iter().map(String::as_str));
+    if run(root,None,&args)?.split('\0').any(|entry|entry.starts_with("160000 ")||entry.starts_with("120000 ")) {
+        return Err("Discard submodules/links with an external Git client.".into());
+    }
+    let mut selected=Vec::new();
+    let mut digest=Sha256::new();
+    digest.update(index.as_bytes());
+    for (i,path) in paths.iter().enumerate() {
+        let relative=Path::new(path);
+        if paths[..i].contains(path) || path.contains(['\r','\n']) ||
+            relative.components().any(|c|!matches!(c,std::path::Component::Normal(_))) {
+            return Err("Invalid discard selection.".into());
+        }
+        let file=files.iter().find(|f|f["path"]==*path && !f["unstaged"].is_null())
+            .ok_or("Unstaged files changed. Review the discard selection again.")?;
+        let full=root.join(relative);
+        // Do not let restore/deletion traverse a junction or link outside the grant.
+        let mut component=root.to_path_buf();
+        for part in relative.components() {
+            component.push(part);
+            match std::fs::symlink_metadata(&component) {
+                Ok(meta)=>{
+                    #[cfg(windows)]
+                    let reparse={use std::os::windows::fs::MetadataExt;meta.file_attributes()&0x400!=0};
+                    #[cfg(not(windows))]
+                    let reparse=false;
+                    if meta.file_type().is_symlink() || reparse {return Err("Discard links/junctions with an external Git client.".into());}
+                    if !component.canonicalize().map_err(|e|e.to_string())?.starts_with(root) {
+                        return Err("Discard path is outside the authorized repository.".into());
+                    }
+                },
+                Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},
+                Err(e)=>return Err(e.to_string()),
+            }
+        }
+        let content=match std::fs::symlink_metadata(&full) {
+            Ok(meta)=>{
+                if !meta.is_file() {return Err("Discard directories/submodules with an external Git client.".into());}
+                let mut bytes=Vec::new();
+                std::fs::File::open(&full).map_err(|e|e.to_string())?.take(LIMIT as u64+1)
+                    .read_to_end(&mut bytes).map_err(|e|e.to_string())?;
+                if bytes.len()>LIMIT {return Err("Discard files larger than 2 MiB with an external Git client.".into());}
+                format!("{:x}:{:?}",Sha256::digest(&bytes),meta.permissions())
+            },
+            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>"missing".into(),
+            Err(e)=>return Err(e.to_string()),
+        };
+        let entry=json!({"path":path,"untracked":file["status"]=="??"});
+        digest.update(serde_json::to_vec(&json!([entry,file["status"],content])).map_err(|e|e.to_string())?);
+        selected.push(entry);
+    }
+    if index_revision(root,&head(root)?)?!=index {
+        return Err("Staging or HEAD changed while inspecting files. Review the discard selection again.".into());
+    }
+    Ok(json!({"revision":format!("{:x}",digest.finalize()),"index_revision":index,"files":selected}))
+}
+
+pub fn discard_preview(root: &Path, paths: &[String], revision: &str) -> Result<Value,String> {
+    let _lock=OPERATIONS.lock().map_err(|_|"Git lock failed")?;
+    let snapshot=discard_snapshot(&repository(root)?,paths)?;
+    if snapshot["index_revision"]!=revision {return Err("Staging or HEAD changed. Refresh before discarding.".into());}
+    Ok(snapshot)
+}
+
+pub fn discard(root: &Path, paths: &[String], revision: &str) -> Result<Value,String> {
+    let _lock=OPERATIONS.lock().map_err(|_|"Git lock failed")?;
+    let root=repository(root)?;
+    let snapshot=discard_snapshot(&root,paths)?;
+    if snapshot["revision"]!=revision {return Err("Files, staging or HEAD changed after confirmation. Review the discard selection again.".into());}
+    let files=snapshot["files"].as_array().ok_or("Invalid discard selection")?;
+    let tracked:Vec<_>=files.iter().filter(|f|f["untracked"]==false).filter_map(|f|f["path"].as_str()).collect();
+    let result=(||->Result<(),String>{
+        if !tracked.is_empty() {
+            // Restore from the index, not HEAD: preserve partially staged work.
+            let mut args=vec!["restore","--worktree","--"];args.extend(tracked);
+            run(&root,None,&args)?;
+        }
+        for file in files.iter().filter(|f|f["untracked"]==true) {
+            std::fs::remove_file(root.join(file["path"].as_str().ok_or("Invalid discard path")?)).map_err(|e|e.to_string())?;
+        }
+        Ok(())
+    })();
+    result.map_err(|e|format!("{e}\nDiscard may have partially completed. Refresh and inspect the remaining files before retrying."))?;
+    Ok(json!({}))
+}
+
 fn staged_preview(root: &Path) -> Result<(String,String),String> {
     ready(root)?;
     let tree=run(root,None,&["write-tree"])?;
@@ -344,6 +435,101 @@ mod tests {
         assert!(!f.0.join("b.txt").exists());
         assert_eq!(std::fs::read_to_string(f.0.join("a.txt")).unwrap(),"new\n");
         assert!(preview(&f.0).is_err());
+    }
+
+    #[test]
+    fn discard_one_and_all_preserve_the_index_and_restore_deleted_files() {
+        let f=Fixture::new("discard");
+        f.write("partial.txt","original\n");f.write("deleted.txt","restore me\n");f.write(".gitignore","ignored.txt\n");
+        stage_files(&f.0,&["partial.txt","deleted.txt",".gitignore"],false);commit_staged(&f.0,"Initial");
+        f.write("partial.txt","staged\n");stage_files(&f.0,&["partial.txt"],false);
+        f.write("partial.txt","unstaged\n");f.write("new.txt","delete me\n");f.write("ignored.txt","keep\n");
+        std::fs::remove_file(f.0.join("deleted.txt")).unwrap();
+        let index=run(&f.0,None,&["ls-files","--stage","-z"]).unwrap();
+        let revision=status(&f.0).unwrap()["revision"].as_str().unwrap().to_string();
+        let one=discard_preview(&f.0,&paths(&["partial.txt"]),&revision).unwrap();
+        discard(&f.0,&paths(&["partial.txt"]),one["revision"].as_str().unwrap()).unwrap();
+        assert_eq!(std::fs::read_to_string(f.0.join("partial.txt")).unwrap(),"staged\n");
+        assert!(f.0.join("new.txt").exists());
+        let all=paths(&["deleted.txt","new.txt"]);
+        let preview=discard_preview(&f.0,&all,&revision).unwrap();
+        assert_eq!(preview["files"][1]["untracked"],true);
+        discard(&f.0,&all,preview["revision"].as_str().unwrap()).unwrap();
+        assert_eq!(std::fs::read_to_string(f.0.join("deleted.txt")).unwrap(),"restore me\n");
+        assert!(!f.0.join("new.txt").exists());
+        assert_eq!(std::fs::read_to_string(f.0.join("ignored.txt")).unwrap(),"keep\n");
+        assert_eq!(run(&f.0,None,&["ls-files","--stage","-z"]).unwrap(),index);
+        assert!(status(&f.0).unwrap()["files"].as_array().unwrap().iter().all(|file|file["unstaged"].is_null()));
+    }
+
+    #[test]
+    fn discard_rejects_stale_content_index_and_branch_before_touching_files() {
+        let f=Fixture::new("discard-stale");
+        f.write("a.txt","base\n");stage_files(&f.0,&["a.txt"],false);commit_staged(&f.0,"Initial");
+        f.write("a.txt","working\n");f.write("new.txt","new\n");
+        let selected=paths(&["a.txt","new.txt"]);
+        let revision=status(&f.0).unwrap()["revision"].as_str().unwrap().to_string();
+        let p=discard_preview(&f.0,&selected,&revision).unwrap();
+        f.write("new.txt","edited after preview\n");
+        assert!(discard(&f.0,&selected,p["revision"].as_str().unwrap()).is_err());
+        assert_eq!(std::fs::read_to_string(f.0.join("a.txt")).unwrap(),"working\n");
+        f.write("new.txt","new\n");
+        stage_files(&f.0,&["new.txt"],false);
+        assert!(discard(&f.0,&selected,p["revision"].as_str().unwrap()).is_err());
+        assert!(discard_preview(&f.0,&paths(&["a.txt"]),&revision).is_err());
+        let revision=status(&f.0).unwrap()["revision"].as_str().unwrap().to_string();
+        let p=discard_preview(&f.0,&paths(&["a.txt"]),&revision).unwrap();
+        run(&f.0,None,&["checkout","-b","another"]).unwrap();
+        assert!(discard(&f.0,&paths(&["a.txt"]),p["revision"].as_str().unwrap()).is_err());
+        assert_eq!(std::fs::read_to_string(f.0.join("a.txt")).unwrap(),"working\n");
+        assert!(discard_preview(&f.0,&paths(&["../outside"]),&revision).is_err());
+        assert!(discard_preview(&f.0,&paths(&["a.txt","a.txt"]),&revision).is_err());
+    }
+
+    #[test]
+    fn discard_on_unborn_branch_preserves_staged_new_files() {
+        let f=Fixture::new("discard-unborn");
+        f.write("staged.txt","staged\n");stage_files(&f.0,&["staged.txt"],false);
+        f.write("staged.txt","edited\n");f.write("untracked.txt","new\n");
+        let selected=paths(&["staged.txt","untracked.txt"]);
+        let revision=status(&f.0).unwrap()["revision"].as_str().unwrap().to_string();
+        let p=discard_preview(&f.0,&selected,&revision).unwrap();
+        discard(&f.0,&selected,p["revision"].as_str().unwrap()).unwrap();
+        assert!(!f.0.join("untracked.txt").exists());
+        assert_eq!(std::fs::read_to_string(f.0.join("staged.txt")).unwrap(),"staged\n");
+        assert_eq!(status(&f.0).unwrap()["revision"],revision);
+    }
+
+    #[test]
+    fn discard_rejects_missing_links_submodules_directories_and_oversized_files() {
+        let f=Fixture::new("discard-special");
+        f.write("a.txt","base\n");stage_files(&f.0,&["a.txt"],false);commit_staged(&f.0,"Initial");
+        let blob=run(&f.0,None,&["hash-object","-w","--","a.txt"]).unwrap();
+        run(&f.0,None,&["update-index","--add","--cacheinfo",&format!("120000,{},missing-link",blob.trim())]).unwrap();
+        let revision=index_revision(&f.0,&head(&f.0).unwrap()).unwrap();
+        assert!(discard_preview(&f.0,&paths(&["missing-link"]),&revision).unwrap_err().contains("links"));
+        run(&f.0,None,&["update-index","--add","--cacheinfo",&format!("160000,{},missing-submodule",head(&f.0).unwrap())]).unwrap();
+        let revision=index_revision(&f.0,&head(&f.0).unwrap()).unwrap();
+        assert!(discard_preview(&f.0,&paths(&["missing-submodule"]),&revision).unwrap_err().contains("submodules"));
+        std::fs::remove_file(f.0.join("a.txt")).unwrap();std::fs::create_dir(f.0.join("a.txt")).unwrap();
+        assert!(discard_preview(&f.0,&paths(&["a.txt"]),&revision).unwrap_err().contains("directories"));
+        std::fs::write(f.0.join("large.bin"),vec![0;LIMIT+1]).unwrap();
+        assert!(discard_preview(&f.0,&paths(&["large.bin"]),&revision).unwrap_err().contains("2 MiB"));
+        assert!(f.0.join("large.bin").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn discard_does_not_follow_junctions_to_other_folders() {
+        let f=Fixture::new("discard-junction");let outside=Fixture::new("discard-outside");
+        outside.write("private.txt","keep\n");
+        let output=std::process::Command::new("cmd").args(["/C","mklink","/J"])
+            .arg(f.0.join("link")).arg(&outside.0).output().unwrap();
+        assert!(output.status.success(),"Cannot create fixture junction");
+        let revision=status(&f.0).unwrap()["revision"].as_str().unwrap().to_string();
+        assert!(discard_preview(&f.0,&paths(&["link/private.txt"]),&revision).is_err());
+        assert_eq!(std::fs::read_to_string(outside.0.join("private.txt")).unwrap(),"keep\n");
+        std::fs::remove_dir(f.0.join("link")).unwrap();
     }
 
     #[test]

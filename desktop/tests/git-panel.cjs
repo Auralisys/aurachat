@@ -10,7 +10,7 @@ const assert=require('node:assert/strict');
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
     const locales=JSON.parse(readFileSync(resolve(__dirname,'../ui/locales/it.json'),'utf8'));
     await page.addInitScript(({locales})=>{
-      window.__events={};window.__calls=[];window.__pushed=false;window.__committed=false;window.__index=new Set();window.__revision=0;
+      window.__events={};window.__calls=[];window.__pushed=false;window.__committed=false;window.__index=new Set();window.__revision=0;window.__discarded=new Set();
       const data={projects:[{id:'p',name:'Progetto Git',source_folders:['C:\\fixture'],conversations:[{id:'c',title:'Git test',created_at:1,updated_at:1,messages:[
         {role:'user',content:'Prepara i file finali.'},
         {role:'assistant',content:'Fatto.',activity:[
@@ -26,7 +26,7 @@ const assert=require('node:assert/strict');
         {path:'src/app.js',status:__index.has('src/app.js')?'MM':' M',added:2,removed:3,binary:false,
           staged:__index.has('src/app.js')?{added:1,removed:1,binary:false}:null,unstaged:{added:1,removed:2,binary:false}},
         ...(window.__newFile?[{path:'new.txt',status:__index.has('new.txt')?'A ':'??',added:1,removed:0,binary:false,staged:__index.has('new.txt')?{added:1,removed:0,binary:false}:null,unstaged:__index.has('new.txt')?null:{added:1,removed:0,binary:false}}]:[])
-      ]});
+      ].flatMap(file=>__discarded.has(file.path)?(__index.has(file.path)?[{...file,unstaged:null}]:[]):[file])});
       window.__TAURI__={window:{getCurrentWindow:()=>({minimize(){},close(){},async listen(name,fn){const previous=window.__events[name];window.__events[name]=event=>{previous?.(event);fn(event);};return()=>{};}})},core:{invoke:async(cmd,args)=>{
         window.__calls.push({cmd,args});
         if(cmd==='get_locale')return JSON.stringify(locales);
@@ -45,6 +45,12 @@ const assert=require('node:assert/strict');
             __revision++;return {revision:String(__revision)};
           }
           if(args.action==='preview')return {revision:'abc:tree',index_revision:String(__revision),diff:'diff --git a/report.md b/report.md\n+Final report'};
+          if(args.action==='discard_preview')return {revision:'discard-revision',files:args.paths.map(path=>({path,untracked:!__index.has(path)&&path!=='src/app.js'}))};
+          if(args.action==='discard'){
+            if(window.__discardFail)throw Error('Files changed after confirmation');
+            for(const path of args.paths)__discarded.add(path);
+            return {};
+          }
           if(args.action==='generate')return {revision:'abc:tree',index_revision:String(__revision),diff:'diff --git a/report.md b/report.md\n+Final report',message:'Add final report'};
           if(args.action==='commit'){if(window.__stale)throw new Error('Staging/HEAD changed after preview.');window.__committed=true;__index.clear();__revision++;return {head:'new'};}
           if(args.action==='push_preview')return {revision:'push-revision',remote:'origin',target:'refs/heads/main',head:'new'};
@@ -88,6 +94,8 @@ const assert=require('node:assert/strict');
     });
     assert(feedback.ms<100,`Immediate feedback took ${feedback.ms}ms`);assert(feedback.pending);assert.equal(feedback.working,false);
     assert.equal(await page.getByRole('button',{name:'Aggiungi allo stage · new.txt',exact:true}).isEnabled(),true);
+    assert.equal(await page.getByRole('button',{name:'Scarta tutti…',exact:true}).isDisabled(),true);
+    assert.equal(await page.getByRole('button',{name:'Scarta modifiche · new.txt',exact:true}).isDisabled(),true);
     await page.getByRole('button',{name:'Aggiungi allo stage · new.txt',exact:true}).click();
     assert.equal(await page.locator('.git-file[aria-busy=true]').count(),2);
     assert.equal(await page.getByRole('button',{name:'Commit…',exact:true}).isDisabled(),true);
@@ -185,7 +193,50 @@ const assert=require('node:assert/strict');
     await page.getByRole('menuitem',{name:'Apri dettaglio completo',exact:true}).waitFor();
     await page.screenshot({path:resolve(shots,'changes-menu-compact.png')});
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    await page.getByRole('menuitem',{name:'Apri dettaglio completo',exact:true}).click();
+    await page.setViewportSize({width:1440,height:960});
+    await page.getByRole('button',{name:'Aggiungi allo stage · src/app.js',exact:true}).click();
+    await page.waitForFunction(()=>!gitView.staging&&gitView.data.files.find(f=>f.path==='src/app.js')?.unstaged);
+    assert.equal(await page.locator('[data-git-side=staged]').getByRole('button',{name:/Scarta/}).count(),0);
+    await page.getByRole('button',{name:'Scarta modifiche · src/app.js',exact:true}).click();
+    await page.locator('#git-discard-confirm').waitFor();
+    assert.match(await page.locator('#git-discard-note').innerText(),/staged restano intatte/);
+    assert.equal(await page.locator('#git-discard-files').innerText(),'src/app.js');
+    assert.equal(await page.locator('#git-discard-confirm button[value=cancel]').evaluate(el=>el===document.activeElement),true);
+    assert.equal(await page.evaluate(()=>__calls.filter(c=>c.args?.action==='discard').length),0);
+    await page.locator('#git-discard-confirm button[value=cancel]').click();
+    await page.waitForFunction(()=>!gitView.working);
+    assert.equal(await page.evaluate(()=>__discarded.size),0);
+    await page.getByRole('button',{name:'Scarta modifiche · src/app.js',exact:true}).click();
+    await page.locator('#git-discard-confirm button[value=discard]').click();
+    await page.waitForFunction(()=>!gitView.working&&!gitView.loading&&gitView.data.files.find(f=>f.path==='src/app.js')?.unstaged===null);
+    assert.equal(await page.locator('[data-git-side=staged] .git-file').filter({hasText:'src/app.js'}).count(),1);
+    await page.getByRole('button',{name:'Scarta tutti…',exact:true}).click();
+    await page.locator('#git-discard-confirm').waitFor();
+    assert.match(await page.locator('#git-discard-files').innerText(),/new.txt.*file nuovo da eliminare/);
+    await page.locator('#git-discard-confirm button[value=discard]').hover();
+    assert.equal(await page.locator('#git-discard-confirm button[value=discard]').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(255, 89, 110)','Destructive confirmation remains readable on hover');
+    await page.screenshot({path:resolve(shots,'discard-confirm-desktop.png')});
+    await page.setViewportSize({width:720,height:820});await page.screenshot({path:resolve(shots,'discard-confirm-compact.png')});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    await page.evaluate(()=>window.__discardFail=true);
+    await page.locator('#git-discard-confirm button[value=discard]').click();
+    await page.getByRole('alert').filter({hasText:'Files changed after confirmation'}).waitFor();
+    assert.equal(await page.evaluate(()=>__discarded.has('new.txt')),false);
+    await page.evaluate(()=>window.__discardFail=false);
+    await page.getByRole('button',{name:'Scarta tutti…',exact:true}).click();
+    await page.locator('#git-discard-confirm button[value=discard]').click();
+    await page.waitForFunction(()=>!gitView.working&&!gitView.loading&&gitView.data.files.every(f=>!f.unstaged));
+    assert.equal(await page.evaluate(()=>__index.has('report.md')&&__index.has('src/app.js')),true);
+    assert.equal(await page.getByRole('button',{name:'Scarta tutti…',exact:true}).isDisabled(),true);
+    await page.evaluate(async()=>{__discarded.delete('new.txt');await refreshGit(true);});
+    await page.getByRole('button',{name:'Scarta modifiche · new.txt',exact:true}).click();
+    await page.locator('#git-discard-confirm').waitFor();
+    const discardCount=await page.evaluate(()=>__calls.filter(c=>c.args?.action==='discard').length);
+    await page.evaluate(()=>{state.config.firebase_email='changed@example.com';renderActivity();});
+    await page.locator('#git-discard-confirm').waitFor({state:'hidden'});
+    assert.equal(await page.evaluate(()=>__calls.filter(c=>c.args?.action==='discard').length),discardCount,'Context change cancels pending confirmation');
     assert.deepEqual(errors,[]);
-    console.log('PASS Git dropdown above Output, padded hover, prompt active-turn/event and external-file updates, real stage/unstage groups and bulk actions without checkboxes, partial staging, stable editable messages, stale protection, confirmed commit/push and compact layout.');
+    console.log('PASS Git recap, staging queues, partial staging, commit/push, single/all unstaged discard, protected cancellation/context changes, stale errors and compact layout.');
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

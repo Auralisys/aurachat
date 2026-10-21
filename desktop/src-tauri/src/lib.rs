@@ -800,8 +800,8 @@ async fn project_git(state: tauri::State<'_,AppState>, project_id:String, root:S
         if !project.source_folders.contains(&root) || !state.folder_access.lock().unwrap().paths(&uid,&project_id).contains(&root) {
             return Err("folder_permission_required".into());
         }
-        if matches!(action.as_str(),"stage"|"unstage"|"commit"|"push") && !state.running_chats.lock().unwrap().is_empty() {
-            return Err("Wait for running conversations to finish before staging, committing or pushing.".into());
+        if matches!(action.as_str(),"stage"|"unstage"|"discard_preview"|"discard"|"commit"|"push") && !state.running_chats.lock().unwrap().is_empty() {
+            return Err("Wait for running conversations to finish before staging, discarding, committing or pushing.".into());
         }
         if let Some(id)=&conversation_id {
             if !project.conversations.iter().any(|c|&c.id==id) {return Err("conversation_not_found".into());}
@@ -819,6 +819,8 @@ async fn project_git(state: tauri::State<'_,AppState>, project_id:String, root:S
         "status"=>git::status(&root),
         "stage"=>git::stage(&root,&paths,&revision,false),
         "unstage"=>git::stage(&root,&paths,&revision,true),
+        "discard_preview"=>git::discard_preview(&root,&paths,&revision),
+        "discard"=>git::discard(&root,&paths,&revision),
         "preview"|"generate"=>git::preview(&root),
         "commit"=>git::commit(&root,&revision,&message),
         "push_preview"=>git::push_preview(&root),

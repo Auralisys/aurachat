@@ -178,6 +178,14 @@ restano pubblicabili. Le pubblicazioni si ricostruiscono anche dai sub-agenti.
 
 Il menu Cambiamenti offre Commit, Commit e push e dettaglio completo. Il dettaglio
 separa stage reale/non staged, con azioni +/− e operazioni su tutto il gruppo.
+Nel gruppo Non staged, cestino per singolo file e Scarta tutti richiedono conferma
+con l'elenco dei file. Il ripristino usa l'indice corrente: lo stage, anche
+parziale, resta intatto. I file nuovi non tracciati selezionati vengono eliminati
+definitivamente senza Cestino; nessuna cancellazione ricorsiva o di file ignorati.
+Contenuti/indice/HEAD/branch cambiati invalidano la conferma; errori rileggono
+lo stato reale e segnalano eventuali operazioni parziali. Link/junction,
+submodule e file oltre 2 MiB vanno gestiti esternamente. Evitare editor concorrenti:
+il controllo prima dell'azione non rende atomico il working tree.
 Il commit usa esclusivamente l'indice esistente, preserva le modifiche non staged
 e richiede conferma; il modello genera un messaggio modificabile dal solo diff.
 Push separato con destinazione esplicita e nessuna operazione forzata.
