@@ -11,6 +11,7 @@ mod permissions;
 mod approvals;
 mod agent_runs;
 mod chat_runs;
+mod questions;
 mod companion;
 
 use std::path::PathBuf;
@@ -555,7 +556,7 @@ async fn chat_inner(
     let segments = std::sync::Mutex::new(Vec::<ChatMessage>::new());
     let progress = |action:&str,text:&str| {
         let mut events = turn_activity.lock().unwrap();
-        if action == "__steering" {
+        if matches!(action,"__steering"|"__question_summary") {
             if let Ok(message) = serde_json::from_str::<ChatMessage>(text) {
                 let content=std::mem::take(&mut *streamed.lock().unwrap());
                 let activity=std::mem::take(&mut *events);
@@ -801,6 +802,16 @@ fn resolve_approval(state:tauri::State<'_,AppState>, approvals:tauri::State<'_,a
     let owner=state.firestore.uid().ok_or("login_required")?;approvals.resolve(&owner,&conversation_id,&id,allow)
 }
 #[tauri::command(rename_all = "snake_case")]
+fn list_questions(state:tauri::State<'_,AppState>, questions:tauri::State<'_,questions::Questions>,conversation_id:String)->Result<Vec<questions::Snapshot>,String>{
+    let owner=state.firestore.uid().ok_or("login_required")?;Ok(questions.list(&owner,&conversation_id))
+}
+#[tauri::command(rename_all = "snake_case")]
+fn answer_question(app:tauri::AppHandle,state:tauri::State<'_,AppState>,questions:tauri::State<'_,questions::Questions>,conversation_id:String,id:String,answer:questions::Answer)->Result<(),String>{
+    let owner=state.firestore.uid().ok_or("login_required")?;
+    let snapshot=questions.resolve(&owner,&conversation_id,&id,answer)?;
+    app.emit("question-activity",snapshot).map_err(|error|error.to_string())
+}
+#[tauri::command(rename_all = "snake_case")]
 async fn stop_subagent(state:tauri::State<'_,AppState>, agents:tauri::State<'_,agent_runs::AgentRuns>, shells:tauri::State<'_,std::sync::Arc<managed_shells::Shells>>,conversation_id:String,id:String)->Result<(),String>{
     let owner=state.firestore.uid().ok_or("login_required")?;agents.stop(&owner,&conversation_id,&id)?;
     let shells=shells.inner().clone();
@@ -953,6 +964,7 @@ pub fn run() {
         }))
         .manage(std::sync::Arc::new(managed_shells::Shells::default()))
         .manage(approvals::Approvals::default())
+        .manage(questions::Questions::default())
         .manage(agent_runs::AgentRuns::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1034,6 +1046,7 @@ pub fn run() {
             project_folder_access,
             project_permission_mode,
             list_approvals, resolve_approval, stop_subagent,
+            list_questions, answer_question,
             prune_folder_access,
             choose_chat_files,
             open_external_url

@@ -126,8 +126,11 @@ condivide il contesto e le root autorizzate e inoltra risultato, reasoning e
 strumenti eseguiti. Ogni chiamata attende il risultato; sono ammesse fino a
 quattro deleghe per turno e i figli non possono delegare a loro volta.
 
-La card elenca fino a due agenti attivi sotto il riepilogo «N in esecuzione · M
-totali». Ogni riga combina orb di stato, titolo, ultima attività (o riepilogo), stato
+La card elenca solo gli agenti attivi (in esecuzione o in attesa), fino a due,
+sotto il riepilogo testuale senza icona «N in esecuzione · M totali».
+Quando non ce ne sono, rimangono solo il riepilogo e **Visualizza tutti**, che
+apre l'elenco completo con gli agenti conclusi, falliti e interrotti.
+Ogni riga combina orb di stato, titolo, ultima attività (o riepilogo), stato
 e tempo trascorso. Il dettaglio separa intestazione con stato, chip di modello,
 ragionamento e numero di strumenti, quindi Incarico, Cronologia e Risultato.
 
@@ -303,13 +306,50 @@ non avviene scansione o caricamento automatico dell'intera root. Le modifiche ve
 permessi. Solo Accesso completo abilita percorsi assoluti esterni. Il provider
 deve supportare tool calling.
 
-Se il modello vede solo `create_subagent`, la chat non appartiene a un progetto
+Se il modello non vede strumenti file, la chat non appartiene a un progetto
 con cartelle autorizzate su questo dispositivo. I consensi sono locali e non
 arrivano dalla sincronizzazione cloud: aprire **Modifica progetto**, aggiungere
 o riselezionare la cartella, consentire la lettura e salvare; usare poi una chat
 di quel progetto. Le modalita Ask/Auto/Full non sostituiscono il consenso iniziale.
 Il contesto del modello distingue questo caso dalla chat senza progetto e indica
 il percorso di ripristino, anche quando delegare non puo fornire accesso ai file.
+
+### Domande interattive
+
+Il tool `ask_user` è disponibile anche nelle chat senza progetto e nei sub-agenti:
+pone una domanda alla volta, fino a otto opzioni, con scelta singola o multipla.
+La scheda sopra il compositore aggiunge sempre **Risposta personalizzata** e
+**Parliamone**. Il turno attende la risposta effettiva; Parliamone restituisce una
+richiesta di discussione senza autorizzare nessuna scelta. Ask/Auto/Full non
+rispondono automaticamente alle domande.
+
+Per una sequenza di domande già note il modello passa un'unica chiamata:
+`{"questions":[{"question":"Prima?","choices":["A","B"]},{"question":"Seconda?","multi_select":true,"choices":["C","D"]}]}`.
+Sono ammesse fino a 12 domande, ognuna con al massimo 8 opzioni.
+**Avanti**, **Indietro** e **Salta** funzionano localmente: nessuna richiesta al
+modello tra i passaggi. Le risposte si possono correggere prima dell'invio finale.
+Il tool restituisce `responses`, con domanda e risposta (`action`, `selected`,
+`custom`), solo al termine; il riepilogo diventa un messaggio utente salvato nella
+conversazione principale. **Parliamone** interrompe la sequenza e restituisce le
+risposte precedenti più la richiesta di discussione; la X chiude inviando soltanto
+i passaggi precedenti (non la bozza corrente). Domande saltate o non compilate
+non autorizzano alcuna scelta. Nei riepiloghi `[skip]`, `[discuss]` e `[cancel]`
+distinguono le azioni dalle risposte. Nei sub-agenti il riepilogo resta nel risultato
+del tool, senza inserire messaggi nel turno del coordinatore.
+
+Solo quando una domanda richiede di ragionare sulle risposte precedenti, il modello
+usa una chiamata separata con `step: {current: 1, total: 3}`.
+**Parliamone** o un chiarimento mantengono lo stesso passaggio.
+Domande singole e sequenze con totale ancora sconosciuto non mostrano un
+conteggio inventato. Il backend verifica `1 <= current <= total`; numerazione
+e totale sono dichiarati dal modello, non ricavati dal numero di tool chiamati.
+
+Le richieste sono isolate per account, conversazione e ID e si possono risolvere
+una sola volta. Cambiare chat conserva la risposta in bozza; tornando alla chat
+si recuperano anche le richieste native ancora aperte. Stop ritira le domande del
+turno o del sub-agente fermato. Le risposte compaiono nell'output dello strumento
+nella cronologia delle operazioni, non attribuiscono nuovi permessi. Le domande
+in attesa non sopravvivono alla chiusura dell'app: il turno va rilanciato.
 
 ## Cronologia Firestore v2
 

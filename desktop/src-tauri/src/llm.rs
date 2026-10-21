@@ -147,6 +147,9 @@ pub async fn chat_completion_steered(
     let base = base_url.trim().trim_end_matches('/');
     if base.is_empty() { return Err("base_url non configurata".into()); }
     let mut history = api_messages(messages);
+    if runtime.is_some() {
+        history.insert(0, serde_json::json!({"role":"system","content":"Use ask_user for interactive questions and decisions. For multiple questions whose text/options are already known, send ONE call with questions:[{question,choices,multi_select},...] so the UI moves between them locally and returns all answers together. Never split a known questionnaire into one tool call per question. Only genuinely dependent questions requiring earlier answers need a new call; optional step:{current,total} marks those. UI supplies custom answers, Skip, Discuss and close. Do not add them as choices. Ambiguous custom answers require clarification; skipped or unasked questions are not approved. Discuss pauses the planned action. Respect the exact answers. A compact user message summarizing the questionnaire is added automatically; do not repeat it unnecessarily."}));
+    }
     let file_context = project.as_ref().map(|files|files.context()).unwrap_or_else(||"This chat has no project. Local file, command and project-skill tools are unavailable, including for subagents. To work with local folders, ask the user to create or edit a project in the sidebar, select the folder and explicitly allow reading, then start a new chat from that project. Mention that a folder path in a message does not grant access. Never suggest toggling tools or delegating to obtain missing file access.".into());
     history.insert(0, serde_json::json!({"role":"system","content":file_context}));
     history.insert(0, serde_json::json!({"role":"system","content":"You can delegate focused work using create_subagent. When the user explicitly asks for a subagent, call this tool instead of merely describing one. Subagents use the current model, inherit the user-provided conversation context and authorized project tools, and return a result to you. Do not claim an agent was started unless the tool succeeded."}));
@@ -202,6 +205,7 @@ impl Completion<'_> {
                 }
                 let mut body = serde_json::json!({"model":self.model,"messages":history,"stream":true,"stream_options":{"include_usage":true}});
                 let mut tools = if self.project.as_ref().is_some_and(|p| !p.roots.is_empty()) {crate::project_files::definitions().as_array().unwrap().clone()} else {vec![]};
+                if self.runtime.is_some() {tools.push(crate::questions::definition());}
                 if delegate { tools.push(serde_json::json!({"type":"function","function":{
                     "name":"create_subagent","description":"Create a real subagent for a focused task and wait for its result. Use when the user asks to delegate work or create a subagent. Maximum four per turn; subagents cannot spawn further agents.",
                     "parameters":{"type":"object","properties":{"title":{"type":"string","description":"Short task title"},"task":{"type":"string","description":"Concrete task and any additional context needed"}},"required":["title","task"],"additionalProperties":false}
@@ -292,7 +296,14 @@ impl Completion<'_> {
                     let event_id=format!("{event_id}:{tool_sequence}");
                     let mut tool_event = serde_json::json!({"kind":"tool","id":event_id,"action":name,"path":parsed["path"],"arguments":parsed,"status":"running","at":crate::data::now_millis()});
                     tool_progress(&tool_event);
-                    let result = if name == "create_subagent" && delegate {
+                    let result = if name == "ask_user" {
+                        if let Some(runtime) = &self.runtime {
+                            match crate::questions::ask(runtime, agent.and_then(|a|a["id"].as_str()).map(String::from), arguments).await {
+                                Ok(answer) => answer,
+                                Err(error) => serde_json::json!({"error":error}),
+                            }
+                        } else {serde_json::json!({"error":"Interactive questions are unavailable without the desktop runtime"})}
+                    } else if name == "create_subagent" && delegate {
                         let title = parsed["title"].as_str().unwrap_or("").trim();
                         let task = parsed["task"].as_str().unwrap_or("").trim();
                         if delegated >= 4 || title.is_empty() || title.len() > 240 || task.is_empty() || task.len() > 32768 {
@@ -334,6 +345,13 @@ impl Completion<'_> {
                         tauri::async_runtime::spawn_blocking(move || files.execute(&action,&arguments)).await.map_err(|e|e.to_string())?
                     } else {serde_json::json!({"error":"Tool unavailable for this task"})};
                     finish_tool_event(&mut tool_event, &result);tool_progress(&tool_event);
+                    if name == "ask_user" && agent.is_none() {
+                        if let Some(summary) = crate::questions::summary(&result) {
+                            let message = ChatMessage {role:"user".into(),content:summary,attachments:vec![],feedback:None,activity:vec![]};
+                            (self.activity)("__question_summary",&serde_json::to_string(&message).map_err(|error|error.to_string())?);
+                            reply.clear();
+                        }
+                    }
                     history.push(serde_json::json!({"role":"tool","tool_call_id":id,"content":result.to_string()}));
                 }
             }

@@ -76,7 +76,7 @@ impl LiveTurn {
     }
     fn apply_progress(&mut self, kind: &str, text: &str, now: u64) {
         match kind {
-            "__steering" => {
+            "__steering" | "__question_summary" => {
                 let Ok(message)=serde_json::from_str::<Value>(text) else {return};
                 if message["role"]!="user" || !message["content"].is_string(){return;}
                 if !self.content.is_empty() || !self.activity.is_empty() {
@@ -646,5 +646,10 @@ fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,Strin
         assert_eq!(document["activity"][0]["offset"],0);
         turn.apply_progress("__steering","malformed",7);
         assert_eq!(turn.document("c")["segments"].as_array().unwrap().len(),2);
+        turn.apply_progress("__question_summary",r#"{"role":"user","content":"T1\nA","attachments":[]}"#,8);
+        let document=turn.document("c");
+        assert_eq!(document["segments"][2]["content"],"After");
+        assert_eq!(document["segments"][3]["content"],"T1\nA");
+        assert_eq!(document["content"],"");
     }
 }

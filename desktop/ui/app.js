@@ -505,11 +505,12 @@ function conversationEl(conv, section) {
   el.appendChild(actions);
   if (state.runs.get(conv.id)?.pending || (state.loadingConversation && conv.id === state.activeConversationId)) {
     const spinner = document.createElement('span');
-    const waiting = [...(permissionRequests.get(conv.id)?.values() || [])].some(r => r.status === 'pending');
+    const questionWaiting = pendingQuestions(conv.id).length > 0;
+    const waiting = questionWaiting || [...(permissionRequests.get(conv.id)?.values() || [])].some(r => r.status === 'pending');
     spinner.className = `tree-conv__spinner${waiting ? ' is-waiting' : ''}`;
-    if (waiting) spinner.append(icon('shield'));
+    if (waiting) spinner.append(icon(questionWaiting ? 'chat' : 'shield'));
     spinner.setAttribute('role', 'status');
-    spinner.setAttribute('aria-label', t(waiting ? 'permissions.waiting' : 'chat.thinking'));
+    spinner.setAttribute('aria-label', t(questionWaiting ? 'questions.waiting' : waiting ? 'permissions.waiting' : 'chat.thinking'));
     spinner.title = spinner.getAttribute('aria-label');
     el.appendChild(spinner);
   } else if (state.unread.has(conv.id)) {
@@ -937,6 +938,7 @@ function messageEl(m, index) {
 }
 
 function renderMessages() {
+  renderQuestions();
   $('#model-select').disabled = state.busy || state.changingModel;
   $('#composer-attach').disabled = state.preparing || state.loadingConversation;
   voiceUi();
@@ -1516,6 +1518,7 @@ async function init() {
   });
   await setupChatProgress();
   await setupPermissions();
+  await setupQuestions();
   setupShell();
 
   // Controlli finestra

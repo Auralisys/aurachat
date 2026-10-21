@@ -2,7 +2,7 @@
 const progressMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 function progressIcon(item) {
-  const name = item?.kind === 'approval' ? 'ShieldCheck' : item?.kind === 'agent' ? 'Bot' : item?.kind === 'reasoning' ? 'Brain' : /search/.test(item?.action) ? 'Search' : /write|edit/.test(item?.action) ? 'FilePenLine' : /read/.test(item?.action) ? 'FileText' : /list/.test(item?.action) ? 'FolderSearch' : 'Terminal';
+  const name = item?.action === 'ask_user' ? 'MessageCircle' : item?.kind === 'approval' ? 'ShieldCheck' : item?.kind === 'agent' ? 'Bot' : item?.kind === 'reasoning' ? 'Brain' : /search/.test(item?.action) ? 'Search' : /write|edit/.test(item?.action) ? 'FilePenLine' : /read/.test(item?.action) ? 'FileText' : /list/.test(item?.action) ? 'FolderSearch' : 'Terminal';
   return lucide.createElement(lucide.icons[name], {class:'ui-icon', 'aria-hidden':'true'});
 }
 
@@ -195,6 +195,17 @@ async function setupChatProgress() {
         if (previous) Object.assign(previous, item);else stream.activity.push({...item, offset:stream.content.length});
       } catch (_) {return;}
     }
+    else if (payload.kind === '__question_summary') {
+      let message;
+      try {message = JSON.parse(payload.text);} catch (_) {return;}
+      if (message.role !== 'user' || typeof message.content !== 'string') return;
+      if (stream.frame) {cancelAnimationFrame(stream.frame);stream.frame=null;}
+      if (stream.content || stream.activity.length) {
+        run.messages.push({role:'assistant',content:stream.content,activity:stream.activity});
+      }
+      run.messages.push(message);
+      stream.content='';stream.shown=0;stream.activity=[];
+    }
     else if (payload.kind === '__steering') {
       let message;
       try { message = JSON.parse(payload.text); } catch (_) { return; }
@@ -202,7 +213,7 @@ async function setupChatProgress() {
       if (stream.frame) { cancelAnimationFrame(stream.frame); stream.frame = null; }
       stream.content = ''; stream.shown = 0; stream.activity = [];
     }
-    if (state.activeConversationId === payload.conversation_id) {renderThinkingStatus();if (payload.kind === '__steering') {renderMessages();} else if (payload.kind !== '__delta') {updateLiveTurn();}}
+    if (state.activeConversationId === payload.conversation_id) {renderThinkingStatus();if (['__steering','__question_summary'].includes(payload.kind)) {renderMessages();} else if (payload.kind !== '__delta') {updateLiveTurn();}}
   });
   // Retain compatibility with native project events emitted by older builds.
   await appWindow.listen('project-tool-activity', ({payload}) => {

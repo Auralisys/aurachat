@@ -385,7 +385,7 @@ function renderActivity() {
   if (activity.conversationId !== state.activeConversationId) {
     activity.conversationId = state.activeConversationId;activity.selected = null;activity.filter = 'all';
     if (activity.section === 'shells') activity.section = null;
-    if (state.activeConversationId) {refreshActivityShells(state.activeConversationId);refreshPermissionRequests(state.activeConversationId);}
+    if (state.activeConversationId) {refreshActivityShells(state.activeConversationId);refreshPermissionRequests(state.activeConversationId);refreshQuestions(state.activeConversationId);}
   }
   const dock = $('#activity-dock'), items = activityItems();
   const hasActivity = state.messages.some(m => ['user','assistant'].includes(m.role)) || state.busy || Object.values(items).some(list => list.length);
@@ -412,18 +412,14 @@ function renderActivity() {
     title.onclick = () => openActivity(section);group.append(title);
     if (section === 'agents' && items.agents.length) {
       const active = items.agents.filter(a => ['running','waiting'].includes(a.status));
-      const summary = activityText('button', '', 'activity-agents-summary');summary.type = 'button';
-      summary.dataset.activityFocus = 'agents-summary';
-      const glyph = activityText('span','',`agent-orb${active.length ? ' agent-orb--running' : ''}`);glyph.append(icon('agents'));
-      summary.append(glyph, document.createTextNode(`${active.length} ${t('activity.running_count')} · ${items.agents.length} ${t('activity.total')}`));
-      summary.onclick = () => openActivity('agents');group.append(summary);
-      for (const agent of (active.length ? active : items.agents).slice(0, 2)) group.append(agentRow(agent, true));
+      group.append(activityText('p', `${active.length} ${t('activity.running_count')} · ${items.agents.length} ${t('activity.total')}`, 'activity-agents-summary'));
+      for (const agent of active.slice(0, 2)) group.append(agentRow(agent, true));
     } else {
       for (const item of orderedItems(section, items).slice(0, 3)) group.append(activityRow(item, section, true));
     }
     if (!items[section].length) group.append(activityText('p', t(`activity.empty_${section}`), 'activity-empty'));
-    if ((section === 'sources' && items.sources.length) || (['outputs','shells'].includes(section) && items[section].length > 3)) {
-      const all = activityText('button', t('activity.view_all'), 'activity-view-all');all.type = 'button';all.onclick = () => openActivity(section);group.append(all);
+    if ((['sources','agents'].includes(section) && items[section].length) || (['outputs','shells'].includes(section) && items[section].length > 3)) {
+      const all = activityText('button', t(section === 'agents' ? 'activity.view_all_agents' : 'activity.view_all'), 'activity-view-all');all.type = 'button';all.onclick = () => openActivity(section);group.append(all);
       all.dataset.activityFocus = `all:${section}`;
     }
     card.append(group);

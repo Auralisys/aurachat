@@ -57,7 +57,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   assert.equal(await page.locator('#activity-panel-content .activity-row.is-pending').count(),1);
   await page.click('#activity-close');
   await page.evaluate(()=>__events['agent-activity']({payload:{conversation_id:'c',id:'a',title:'Aggiorna note',status:'running',summary:'Modifica del file in corso',task:'Aggiorna note.md',model:'deepseek-flash',content:'Prima parte.',reasoning_content:'Verifico il contenuto originale.',activity:[{kind:'tool',id:'tool-a',action:'edit_project_file',path:'note.md',status:'completed',output:'written',arguments:{path:'note.md'}}]}}));
-  await page.locator('.activity-agents-summary').click();await page.getByRole('button',{name:/Aggiorna note/}).click();
+  await page.locator('[data-activity-focus="all:agents"]').click();await page.getByRole('button',{name:/Aggiorna note/}).click();
   await page.locator('.agent-detail-history > details > summary').click();
   await page.evaluate(()=>{window.__historyNode=document.querySelector('.agent-detail-history > details');});
   await page.evaluate(()=>__events['agent-activity']({payload:{conversation_id:'c',id:'a',status:'running',content:'Prima parte. Seconda parte.',reasoning_content:'Verifico il contenuto originale. Ora applico la modifica.'}}));
