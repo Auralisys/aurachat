@@ -32,8 +32,31 @@ use tauri_plugin_opener::OpenerExt;
 use tauri::{Emitter, Manager};
 use window_state::WindowGeometry;
 
+#[cfg(windows)]
+const ICON_PNG: &[u8] = include_bytes!("../icons/windows/icon.png");
+#[cfg(not(windows))]
 const ICON_PNG: &[u8] = include_bytes!("../icons/icon.png");
 const TRAY_PNG: &[u8] = include_bytes!("../icons/tray.png");
+
+#[test]
+fn platform_icons_keep_windows_transparent_and_macos_background() {
+    for bytes in [
+        include_bytes!("../icons/windows/icon.png").as_slice(),
+        include_bytes!("../icons/windows/32x32.png").as_slice(),
+        include_bytes!("../icons/windows/128x128.png").as_slice(),
+        include_bytes!("../icons/windows/128x128@2x.png").as_slice(),
+    ] {
+        let image=tauri::image::Image::from_bytes(bytes).unwrap();
+        assert_eq!(image.rgba()[3],0);
+        assert!(image.rgba().chunks_exact(4).any(|pixel|pixel[3]==255));
+    }
+    let macos=tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png")).unwrap();
+    assert_eq!(macos.rgba()[3],255);
+    #[cfg(windows)]
+    assert_eq!(ICON_PNG,include_bytes!("../icons/windows/icon.png"));
+    #[cfg(not(windows))]
+    assert_eq!(ICON_PNG,include_bytes!("../icons/icon.png"));
+}
 
 pub struct AppState {
     speech: std::sync::Arc<speech::Speech>,

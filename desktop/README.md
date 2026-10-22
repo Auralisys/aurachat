@@ -400,10 +400,14 @@ I valori iniziali sono definiti in `src-tauri/src/config.rs`; il preset dell’e
 
 ## Icone
 
-`src-tauri/icons/` contiene PNG/ICO/ICNS derivate da `../mobile/assets/app-icon.svg`,
-con lo stesso logo lavanda e sfondo scuro del mobile. Per rigenerarle da `desktop/`:
+`src-tauri/icons/windows/` contiene il logo lavanda originale con sfondo
+trasparente, usato per eseguibile, installer, finestra e taskbar Windows.
+`src-tauri/icons/` mantiene PNG/ICNS derivate da `../mobile/assets/app-icon.svg`,
+con lo stesso logo lavanda e sfondo scuro del mobile per macOS. Per rigenerarle da `desktop/`:
 `cargo tauri icon ../mobile/assets/app-icon.svg --output /tmp/aurachat-icons`, poi
-copiare i PNG, ICO e ICNS desktop in `src-tauri/icons/`. `tray.png` rimane separata
+copiare i PNG e ICNS desktop in `src-tauri/icons/`, senza sovrascrivere
+`windows/`. Il runtime sceglie il PNG secondo la piattaforma; la configurazione
+macOS usa l'ICNS con sfondo. `tray.png` rimane separata
 e trasparente per la barra di sistema.
 
 La finestra usa la cornice nativa del sistema: semafori a sinistra su macOS,
