@@ -32,6 +32,8 @@ decisione presa (vedi [[Roadmap]]).
 
 ## Operatività
 
+- [[Build e distribuzione]] — script per installare la build di prod e generare
+  installer Windows/macOS sul Desktop.
 - [[Roadmap]] — build order, dipendenze e criteri di accettazione.
 - [[Handoff - prompt per agenti]] — prompt pronti per avviare i progetti con un
   agente a contesto azzerato.

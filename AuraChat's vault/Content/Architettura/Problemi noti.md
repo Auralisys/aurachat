@@ -80,3 +80,12 @@ e pronto per la dettatura; durante il caricamento download e rimozione sono
 disabilitati. Annullare una trascrizione continua ad attendere il blocco ONNX già
 in corso (il risultato viene scartato), ma questo non riguarda più il primo avvio.
 Dettagli in [[Desktop gateway - Tauri]] e [[UI desktop - Refactor flat]].
+
+## Script e installer — 22 ottobre 2026
+
+- `install-prod.sh` e `package-installer.sh` (macOS) sono controllati solo con
+  `bash -n`: non sono ancora stati eseguiti su un Mac.
+- Installer non firmati: SmartScreen su Windows, tasto destro → Apri su macOS.
+  Mancano firma Authenticode, Developer ID e notarizzazione.
+- La versione resta `0.1.0`: va incrementata a mano prima di distribuire.
+Dettagli in [[Build e distribuzione]].

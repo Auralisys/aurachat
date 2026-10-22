@@ -130,3 +130,15 @@ e invio immediato), **Modifica** (riporta il testo nel composer) e **Cancella**.
 Se resta in coda parte in FIFO alla fine del turno, anche dopo uno stop. Sono
 stati corretti il blocco dell'operazione dopo errori di invio, la coda creata
 mentre girava un'altra chat e i messaggi che scavalcavano la coda esistente.
+
+## Riepilogo chat e Git — 22 ottobre 2026
+
+Nel dettaglio chat il pulsante nuova chat è stato sostituito da un menu a tre
+puntini (`fa971a3`). La voce **Attività e cambiamenti** apre `ChatRecapPage`
+(`lib/chat_recap.dart:98`) con lo stesso riepilogo della sidebar desktop:
+attività del turno e cambiamenti Git del progetto. In un progetto multi-repo
+viene mostrato per primo il repository con più modifiche, come sul desktop. Da
+qui si può fare stage, commit e commit + push, ciascuno con conferma
+(`lib/git_changes.dart:11`). Il telefono usa le azioni companion `chat_recap` e
+`project_git` (`companion.rs:546`, `companion.rs:533`). Le skill globali e gli
+strumenti MCP sono gli stessi delle chat desktop.

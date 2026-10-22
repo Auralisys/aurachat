@@ -303,3 +303,63 @@ dopo i draft esistenti. `requestChat` non semina più un turno di background con
 messaggi della chat attiva e non sostituisce `state.messages` se la conversazione
 non è quella aperta. Il listener `companion-updated` fa ripartire la coda locale
 quando un turno avviato da un altro dispositivo termina.
+
+## Finestra, MCP e strumenti di progetto — 22 ottobre 2026
+
+**Controlli finestra e Git annidato** (`d440cf0`). Su Windows i pulsanti
+riduci/ingrandisci/chiudi tornano nativi (prima erano custom e mancava
+ingrandisci). Se la cartella aperta non è un repository, `git.rs` cerca i
+repository nelle sottocartelle invece di mostrare l'errore "not a git repository".
+
+**MCP generali** (`d440cf0`, `1a8907c`, `6e66ffe`). Il modello può usare gli
+strumenti di qualsiasi server MCP configurato (`mcp.rs`), non solo quelli
+predefiniti. Prima di dire che manca uno strumento cerca i server già configurati
+negli altri client (configurazioni globali, con i segreti oscurati) e può
+importarne uno alla volta con approvazione (`import_mcp_server`, `mcp.rs:103`).
+Il prompt distingue le API MCP di un servizio (es. Crashlytics) dall'accesso alla
+console via browser e dai comandi CLI non aggiornati. Letture web e chiamate MCP
+seguono la modalità permessi della chat (Completo/Auto/Chiedi); solo la scrittura
+della configurazione MCP globale chiede sempre conferma. Gli stessi strumenti
+valgono per le chat avviate dal telefono.
+
+**Pannello attività** (`6e66ffe`). Le fonti web hanno l'icona globo e si aprono
+con un clic; Shell elenca solo processi attivi o in background.
+
+**Notifiche** (`3a76e4f`). Il clic su una notifica desktop porta l'app in primo
+piano e apre la chat corrispondente.
+
+**Strumenti file e skill** (`97ed72c`, `f2b0264`). `edit_project_file`
+(`project_files.rs:301`) accetta `old_text` con LF anche su file CRLF e conserva
+il fine riga del file: prima il modello ripiegava su script PowerShell lunghi e
+costosi per modifiche di due righe. Aggiunti `search_project_files` e la lettura
+dei file grandi per intervalli di righe; dalle modifiche vengono tolti i prefissi
+di numero riga copiati dalla lettura. Le skill sono accettate fino a 128 KiB e
+quelle installate in più cartelle agente compaiono una volta sola.
+
+**Progetti multi-repo** (`758932a`). Riepilogo, sidebar e pannello cambiamenti
+selezionano il repository con più modifiche, a meno che l'utente ne abbia scelto
+uno a mano (`manualRoot`, `ui/git.js:2`).
+
+**Icone per piattaforma** (`43632d8`). Windows usa il logo lavanda trasparente;
+macOS usa la versione con sfondo scuro come l'app mobile.
+
+## Dettatura, coda e sidebar — 22 ottobre 2026
+
+**Dettatura** (`8b21617`). Dopo l'invio dell'audio `voice.status`
+(`ui/voice.js:83`) resta visibile finché la trascrizione è in corso, con tre
+puntini animati e testo shimmer; con riduzione movimento l'animazione è
+disattivata. Test in `tests/voice-flow.cjs`.
+
+**Domande interattive** (`d179cad`). `Question::normalize` sostituisce trattini
+lunghi con `-` in domande e opzioni (`plain_dashes`, `questions.rs:26`).
+
+**Coda: Manda subito** (`d179cad`). Con un turno in corso il messaggio inviato
+tramite `steer_chat` compare come normale messaggio utente
+(`chat-progress.js:218`) invece di sparire; "Messaggio in coda" si azzera quando
+la coda è vuota (`clearQueuedStatus`, `queue.js:17`).
+
+**Sidebar** (`77c9511`). Una chat in attesa di risposta dell'utente mostra un
+pallino giallo da 8 px (`styles.css:554`, `app.js:519`) al posto dell'icona che
+veniva tagliata; il pallino viola resta per i messaggi non letti.
+
+Script di build e installazione: [[Build e distribuzione]].

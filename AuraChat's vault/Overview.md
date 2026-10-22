@@ -85,7 +85,17 @@ Quando cambia un comportamento, aggiornare insieme codice e nota. Quando si
 trova un difetto, aggiungerlo a [[Problemi noti]] con il rimando alla nota dove
 è descritto.
 
-## Ultimo aggiornamento — 17 ottobre 2026
+## Ultimo aggiornamento — 22 ottobre 2026
+
+Nuova nota [[Build e distribuzione]] con gli script per installare la build di
+prod e generare installer Windows/macOS sul Desktop. In [[Desktop gateway - Tauri]]:
+controlli finestra nativi, Git nelle sottocartelle, MCP generali con import dei
+server esistenti, strumenti file più economici, repo con più modifiche
+selezionato in automatico, loader della dettatura, coda e pallino giallo di
+attesa. Riepilogo e Git dal telefono in [[Companion mobile - Flutter]]. Limiti
+in [[Problemi noti]].
+
+## Aggiornamento precedente — 17 ottobre 2026
 
 [[Impostazioni e provider di modelli]] documenta il nuovo dialogo compatto,
 provider preset/custom, modelli e API key indipendenti. Correzione della dettatura
