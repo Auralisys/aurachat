@@ -88,8 +88,8 @@ impl<'a> Context<'a> {
     }
     async fn approve(&self, scope: &str, action: Value) -> Result<(),String> {
         let mut execution=self.execution.clone().ok_or("MCP execution requires the desktop runtime.")?;
-        // Global integrations always ask, independently of a project's Full mode.
-        if scope=="global" {execution.project.clear();}
+        // Global config writes affect every project, so they ignore the chat's mode; reads and tool calls follow it.
+        if scope=="global" && action["kind"]=="mcp_config" {execution.project.clear();}
         tauri::async_runtime::spawn_blocking(move||execution.approve(action,false)).await.map_err(|e|e.to_string())?
     }
 }

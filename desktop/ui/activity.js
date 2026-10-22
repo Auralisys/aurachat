@@ -212,9 +212,12 @@ function formatDuration(ms) {
   return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
 }
 
-// Commands waiting for approval belong to the same trail as running processes.
+// Matches the 15s after which the native runner hands a command back as a background process.
+const SHELL_BACKGROUND_MS = 15000;
+
+// Commands waiting for approval belong to the same trail as running processes; short finished commands are noise.
 function activityShells(record) {
-  const shells = [...(record?.shells.values() || [])];
+  const shells = [...(record?.shells.values() || [])].filter(shell => shell.id === activity.selected || SHELL_ACTIVE.includes(shell.status) || (shellDuration(shell) ?? 0) >= SHELL_BACKGROUND_MS);
   for (const request of permissionRequests.get(state.activeConversationId)?.values() || []) {
     if (!['pending','reviewing'].includes(request.status) || request.action?.kind !== 'command') continue;
     const args = Array.isArray(request.action?.arguments) ? request.action.arguments : [];
@@ -282,11 +285,17 @@ function activityRow(item, section, compact = false) {
 
 function sourceRow(item, compact = false) {
   const row = activityRowBase('sources', item);
-  row.append(icon('file'));
+  const web = /^https?:/.test(safeActivityURL(item.url) || '') && item.kind !== 'image';
+  if (web) {
+    row.classList.add('activity-row--link');row.title = item.url;
+    row.onclick = async () => {try {await invoke('open_external_url', {url:item.url});} catch (_) {composerStatus(t('chat.link_failed'));}};
+  }
+  row.append(icon(web ? 'globe' : item.kind === 'image' ? 'image' : 'file'));
   const text = activityText('span', '', 'activity-row__text');
   text.append(activityText('span', item.title, 'activity-row__title'));
-  if (!compact) text.append(activityText('span', item.summary || '', 'activity-row__summary'));
+  if (!compact) text.append(activityText('span', web ? `${item.summary || ''} · ${new URL(item.url).hostname}` : item.summary || '', 'activity-row__summary'));
   row.append(text);
+  if (web) row.append(icon('external'));
   return row;
 }
 

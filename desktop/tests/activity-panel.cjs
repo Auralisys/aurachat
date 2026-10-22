@@ -103,8 +103,8 @@ const assert = require('node:assert/strict');
   assert.equal(await page.locator('#activity-panel-content .activity-row').count(),2);
   assert.equal(await page.getByRole('button',{name:/schema.md/}).count(),0, 'Project reads are not user sources');
   await page.getByRole('button',{name:/https:\/\/example.com\/reference/}).click();
-  await page.getByRole('button',{name:'Apri link',exact:true}).click();
-  assert.equal(await page.evaluate(()=>window.__calls.find(c=>c.cmd==='open_external_url').args.url),'https://example.com/reference');
+  assert.equal(await page.evaluate(()=>window.__calls.find(c=>c.cmd==='open_external_url').args.url),'https://example.com/reference', 'Web sources open directly');
+  assert.equal(await page.locator('#activity-panel-title').innerText(),'Fonti', 'Web sources skip the detail view');
   await page.evaluate(()=>{
     const url='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
     window.__events['user-source']({payload:{conversation_id:'c',id:'screenshot',title:'screenshot.png',kind:'image',url}});
@@ -114,7 +114,6 @@ const assert = require('node:assert/strict');
     // Model prose without a file or link is not an artifact.
     window.__events['artifact-created']({payload:{conversation_id:'c',id:'prose',title:'Risposta',kind:'text',content:'Testo del modello.'}});
   });
-  await page.click('#activity-back');
   await page.getByRole('button',{name:/screenshot.png/}).click();
   assert.equal(await page.locator('#activity-panel-content img').count(),1);
   await page.setViewportSize({width:720,height:680});
@@ -162,9 +161,8 @@ const assert = require('node:assert/strict');
   assert.match(await page.locator('#activity-panel-content').innerText(),/Interrotto/);
   assert.equal(await page.evaluate(()=>!!window.__unsafe),false);
   await page.click('#activity-close');
-  // The trail keeps finished commands: this is the local debug view.
-  assert.equal(await page.locator('[data-activity-focus="group:shells"]').count(),1, 'Finished shells stay visible in the session');
-  assert.match(await page.locator('[data-activity-focus="group:shells"]').innerText(),/Shell\n1/);
+  // Short finished commands are noise; only active or background-length processes stay.
+  assert.equal(await page.locator('[data-activity-focus="group:shells"]').count(),0, 'Short finished shells are hidden');
   // Commands waiting for approval are part of the same trail.
   await page.evaluate(()=>{
     const approval={id:'cmd-1',conversation_id:'c',turn_id:'t',status:'pending',reviewer:'user',action:{kind:'command',path:'C:/fixture',program:'npm',arguments:['test','--silent']},created_at:Date.now()};
@@ -173,7 +171,7 @@ const assert = require('node:assert/strict');
     window.__shells[done.id]=done;window.__events['shell-activity']({payload:done});
   });
   await page.locator('[data-activity-focus="group:shells"]').click();
-  assert.equal(await page.locator('#activity-panel-content .activity-row').count(),3);
+  assert.equal(await page.locator('#activity-panel-content .activity-row').count(),2);
   assert.match(await page.locator('#activity-panel-content').innerText(),/In attesa di approvazione/);
   assert.match(await page.locator('#activity-panel-content').innerText(),/1m 05s/);
   const waiting = page.locator('#activity-panel-content .activity-row').filter({hasText:'npm test --silent'});
@@ -185,7 +183,7 @@ const assert = require('node:assert/strict');
     const approved={...window.__approvals['cmd-1'],status:'approved'};window.__approvals['cmd-1']=approved;
     window.__events['approval-activity']({payload:approved});
   });
-  await page.waitForFunction(()=>document.querySelectorAll('#activity-panel-content .activity-row').length===2);
+  await page.waitForFunction(()=>document.querySelectorAll('#activity-panel-content .activity-row').length===1);
   await page.click('#activity-close');
   await page.click('#nav-home');
   await page.locator('#activity-dock').waitFor({state:'hidden'});
