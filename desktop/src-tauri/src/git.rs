@@ -78,6 +78,43 @@ fn repository(root: &Path) -> Result<PathBuf,String> {
     Ok(root)
 }
 
+pub fn authorized_root(root: &Path, folders: &[String]) -> Result<PathBuf,String> {
+    let root=root.canonicalize().map_err(|e|e.to_string())?;
+    if !folders.iter().any(|folder|Path::new(folder).canonicalize().is_ok_and(|folder|root.starts_with(folder))) {
+        return Err("folder_permission_required".into());
+    }
+    Ok(root)
+}
+
+pub fn discover(folders: &[String]) -> Result<Value,String> {
+    let mut pending=folders.iter().map(PathBuf::from).collect::<Vec<_>>();
+    let mut visited=std::collections::HashSet::new();
+    let mut repositories=std::collections::BTreeSet::new();
+    let mut examined=0;
+    while let Some(path)=pending.pop() {
+        let root=path.canonicalize().map_err(|e|format!("{}: {e}",path.display()))?;
+        if !visited.insert(root.clone()) {continue;}
+        if root.join(".git").try_exists().map_err(|e|e.to_string())? {
+            repositories.insert(crate::folder_access::canonical_folder(&repository(&root)?)?);
+            continue;
+        }
+        for entry in std::fs::read_dir(&root).map_err(|e|format!("{}: {e}",root.display()))? {
+            examined+=1;
+            if examined>20_000 {return Ok(json!({"repositories":repositories,"truncated":true}));}
+            let entry=entry.map_err(|e|e.to_string())?;
+            let meta=std::fs::symlink_metadata(entry.path()).map_err(|e|e.to_string())?;
+            #[cfg(windows)]
+            let link={use std::os::windows::fs::MetadataExt;meta.file_attributes()&0x400!=0};
+            #[cfg(not(windows))]
+            let link=meta.file_type().is_symlink();
+            if meta.is_dir() && !link && !matches!(entry.file_name().to_str(),Some(".git"|"node_modules"|"target"|".venv"|"build"|"dist")) {
+                pending.push(entry.path());
+            }
+        }
+    }
+    Ok(json!({"repositories":repositories,"truncated":false}))
+}
+
 fn head(root: &Path) -> Result<String,String> {
     if let Ok(value)=run(root,None,&["rev-parse","--verify","HEAD"]) {
         return Ok(value.trim().into());
@@ -349,6 +386,42 @@ pub fn push(root: &Path, revision: &str) -> Result<Value,String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discovery_finds_nested_repositories_and_worktrees_without_ancestor_or_link_escape() {
+        let container=Fixture::new("discovery");
+        std::fs::remove_dir_all(container.0.join(".git")).unwrap();
+        assert_eq!(discover(&paths(&[container.0.to_str().unwrap()])).unwrap()["repositories"],json!([]));
+        let a=container.0.join("one");
+        let b=container.0.join("group").join("two");
+        for root in [&a,&b] {std::fs::create_dir_all(root).unwrap();run(root,None,&["init","-b","main"]).unwrap();}
+        run(&a,None,&["-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","--allow-empty","-m","Initial"]).unwrap();
+        let worktree=container.0.join("worktree");
+        run(&a,None,&["worktree","add","-b","work",worktree.to_str().unwrap()]).unwrap();
+        let folders=paths(&[container.0.to_str().unwrap()]);
+        let found=discover(&folders).unwrap();
+        assert_eq!(found["repositories"].as_array().unwrap().len(),3);
+        for root in [&a,&b,&worktree] {
+            assert!(found["repositories"].as_array().unwrap().contains(&json!(crate::folder_access::canonical_folder(root).unwrap())));
+            assert_eq!(authorized_root(root,&folders).unwrap(),root.canonicalize().unwrap());
+            assert!(status(root).is_ok());
+        }
+        let sub=a.join("sub");std::fs::create_dir(&sub).unwrap();
+        assert_eq!(discover(&paths(&[sub.to_str().unwrap()])).unwrap()["repositories"],json!([]));
+        assert!(authorized_root(&container.0,&paths(&[a.to_str().unwrap()])).is_err());
+        let outside=Fixture::new("outside");
+        let link=container.0.join("escape");
+        #[cfg(windows)]
+        {assert!(std::process::Command::new("cmd").args(["/C","mklink","/J",link.to_str().unwrap(),outside.0.to_str().unwrap()]).output().unwrap().status.success());}
+        #[cfg(not(windows))]
+        std::os::unix::fs::symlink(&outside.0,&link).unwrap();
+        assert!(authorized_root(&link,&folders).is_err());
+        assert_eq!(discover(&folders).unwrap()["repositories"].as_array().unwrap().len(),3);
+        #[cfg(windows)]
+        std::fs::remove_dir(link).unwrap();
+        #[cfg(not(windows))]
+        std::fs::remove_file(link).unwrap();
+    }
+
     #[test]
     fn staging_acknowledges_without_full_status_scans() {
         let f=Fixture::new("latency");

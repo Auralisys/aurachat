@@ -216,7 +216,7 @@ function formatDuration(ms) {
 function activityShells(record) {
   const shells = [...(record?.shells.values() || [])];
   for (const request of permissionRequests.get(state.activeConversationId)?.values() || []) {
-    if (!['pending','reviewing'].includes(request.status) || request.action?.kind === 'write') continue;
+    if (!['pending','reviewing'].includes(request.status) || request.action?.kind !== 'command') continue;
     const args = Array.isArray(request.action?.arguments) ? request.action.arguments : [];
     shells.push({
       id:`approval:${request.id}`, approval:true, agent_id:request.agent_id || null, cwd:request.action?.path || '', output:'',

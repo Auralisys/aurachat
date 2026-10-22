@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
  const page=await browser.newPage({viewport:{width:480,height:320}});
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  const strings=JSON.parse(readFileSync(resolve(__dirname,'../ui/locales/it.json'),'utf8'));
+ assert.equal(JSON.parse(readFileSync(resolve(__dirname,'../src-tauri/tauri.conf.json'),'utf8')).app.windows[0].decorations,true);
  await page.addInitScript(({strings})=>{
   const config={firebase_email:'demo@example.com',firebase_project_id:'demo',firebase_api_key:'demo',firebase_auth_set:true,api_key_set:true,models:['deepseek-flash'],active_model:'deepseek-flash'};
   window.__windowEvents={};window.__windowCalls=[];window.__saveCount=0;window.__inFlight=0;window.__maxInFlight=0;
@@ -43,6 +44,7 @@ const assert = require('node:assert/strict');
  await page.evaluate(()=>{window.__restoreBlocked=false;window.__releaseRestore();});
  await page.locator('#boot-splash').waitFor({state:'hidden'});
  await page.locator('#view-chat').waitFor({state:'visible'});
+ assert.equal(await page.locator('#btn-minimize, #btn-close, .titlebar__controls').count(),0,'Window buttons belong to the OS, not the webview');
  // A stream of resize/move notifications produces one save after it settles.
  await page.evaluate(()=>window.__windowEvents['window-geometry-changed']());
  await page.evaluate(()=>new Promise(r=>setTimeout(r,600)));

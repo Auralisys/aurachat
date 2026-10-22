@@ -49,6 +49,22 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   await page.evaluate(()=>__emitApproval({...__pending['command-2'],status:'pending',reason:'review_unavailable'}));
   await page.getByRole('button',{name:'Consenti una volta',exact:true}).waitFor();assert.match(await page.locator('.approval-card__reason').innerText(),/non è disponibile/);
   await page.getByRole('button',{name:'Consenti una volta',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.approval-card').length===0);
+  await page.evaluate(()=>__emitApproval({id:'mcp-1',conversation_id:'c',turn_id:'t',status:'pending',reviewer:'user',action:{kind:'mcp',server:'global:fixture',tool:'lookup_record',arguments:{id:'123'}},created_at:Date.now()}));
+  await page.getByText('global:fixture · lookup_record',{exact:true}).waitFor();
+  await page.getByText('Mostra chiamata MCP',{exact:true}).click();
+  assert.match(await page.locator('.approval-details pre').innerText(),/lookup_record/);
+  assert.match(await page.locator('.approval-details p').innerText(),/servizi esterni/);
+  assert.equal(await page.evaluate(()=>activityShells(activityRecord('c')).some(shell=>shell.id==='approval:mcp-1')),false);
+  await page.getByRole('button',{name:'Rifiuta',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.approval-card').length===0);
+  await page.evaluate(()=>__emitApproval({id:'mcp-config',conversation_id:'c',turn_id:'t',status:'pending',reviewer:'user',action:{kind:'mcp_config',server:'global:fixture',operation:'configure',configuration:{transport:'stdio',command:'node',environment_keys:['TOKEN']}},created_at:Date.now()}));
+  await page.getByText('Mostra chiamata MCP',{exact:true}).click();
+  assert.match(await page.locator('.approval-details pre').innerText(),/configure/);
+  await page.getByRole('button',{name:'Rifiuta',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.approval-card').length===0);
+  await page.evaluate(()=>__emitApproval({id:'http-1',conversation_id:'c',turn_id:'t',status:'pending',reviewer:'user',action:{kind:'http',url:'https://example.invalid/docs',method:'GET'},created_at:Date.now()}));
+  await page.getByText('Mostra richiesta HTTP',{exact:true}).click();
+  assert.match(await page.locator('.approval-details pre').innerText(),/https:\/\/example.invalid\/docs/);
+  assert.equal(await page.evaluate(()=>activityShells(activityRecord('c')).some(shell=>shell.id==='approval:http-1')),false);
+  await page.getByRole('button',{name:'Rifiuta',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.approval-card').length===0);
   // Working files stay hidden; only an explicit final publication is an Output.
   await page.evaluate(()=>__events['chat-progress']({payload:{conversation_id:'c',kind:'__activity',text:JSON.stringify({kind:'tool',id:'write-live',action:'write_project_file',arguments:{root:0,path:'report.md'},status:'running'})}}));
   await page.locator('[data-activity-focus="group:outputs"]').click();

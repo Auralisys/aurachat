@@ -13,7 +13,8 @@ function approvalLabel(item) {
 
 function approvalDetails(item) {
   const details = document.createElement('details');details.className = 'approval-details';
-  const summary = document.createElement('summary');summary.textContent = t(item.action?.kind === 'write' ? 'permissions.show_change' : 'permissions.show_command');details.append(summary);
+  const isMcp = item.action?.kind?.startsWith('mcp'), isHttp = item.action?.kind === 'http';
+  const summary = document.createElement('summary');summary.textContent = t(item.action?.kind === 'write' ? 'permissions.show_change' : isMcp ? 'permissions.show_mcp' : isHttp ? 'permissions.show_http' : 'permissions.show_command');details.append(summary);
   const action = item.action || {};
   if (action.kind === 'write') {
     for (const [key, label] of [['previous_content','permissions.before'],['content','permissions.after']]) {
@@ -23,8 +24,8 @@ function approvalDetails(item) {
     }
     if (action.truncated) {const note = document.createElement('p');note.textContent = t('permissions.preview_truncated');details.append(note);}
   } else {
-    const code = document.createElement('pre');code.textContent = JSON.stringify({program:action.program, arguments:action.arguments}, null, 2);details.append(code);
-    const note = document.createElement('p');note.textContent = t('permissions.command_scope');details.append(note);
+    const code = document.createElement('pre');code.textContent = JSON.stringify(isMcp || isHttp ? action : {program:action.program, arguments:action.arguments}, null, 2);details.append(code);
+    const note = document.createElement('p');note.textContent = t(isMcp ? 'permissions.mcp_scope' : isHttp ? 'permissions.http_scope' : 'permissions.command_scope');details.append(note);
   }
   return details;
 }
@@ -43,7 +44,7 @@ function renderPermissionRequests() {
     const title = document.createElement('div');title.className = 'approval-card__title';
     const label = document.createElement('strong');label.textContent = approvalLabel(item);if (item.status === 'reviewing') label.className = 'is-working-text';
     title.append(icon('shield'), label);
-    const path = document.createElement('p');path.className = 'approval-card__path';path.textContent = item.action?.path || '';path.title = path.textContent;
+    const path = document.createElement('p');path.className = 'approval-card__path';path.textContent = item.action?.kind?.startsWith('mcp') ? [item.action.server,item.action.tool].filter(Boolean).join(' · ') : item.action?.path || item.action?.url || '';path.title = path.textContent;
     replacement.append(title, path);
     if (item.reason) {const reason = document.createElement('p');reason.className = 'approval-card__reason';reason.textContent = item.reason === 'review_unavailable' ? t('permissions.review_unavailable') : item.reason;replacement.append(reason);}
     replacement.append(approvalDetails(item));

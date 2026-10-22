@@ -35,7 +35,7 @@ impl AgentRuns {
     }
 }
 #[derive(Clone)]
-pub struct Runtime {pub app:tauri::AppHandle,pub owner:String,pub conversation:String}
+pub struct Runtime {pub app:tauri::AppHandle,pub owner:String,pub conversation:String,pub execution:crate::permissions::Execution}
 impl Runtime {
     pub fn start(&self,id:&str)->Arc<Cancellation>{self.app.state::<AgentRuns>().start(&self.owner,&self.conversation,id)}
     pub fn finish(&self,id:&str){self.app.state::<AgentRuns>().finish(id);}

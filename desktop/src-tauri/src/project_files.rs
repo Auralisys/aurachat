@@ -61,7 +61,7 @@ impl ProjectFiles {
         if matches.len()>1 {return Err(format!("Ambiguous skill /{name}; use load_project_skill with its root and path."));}
         matches.first().map(|skill|self.load_skill(skill["root"].as_u64().unwrap() as usize,skill["path"].as_str().unwrap())).transpose()
     }
-    fn resolve_path(&self, args: &Value, create: bool) -> Result<PathBuf, String> {
+    pub(crate) fn resolve_path(&self, args: &Value, create: bool) -> Result<PathBuf, String> {
         let index = args["root"].as_u64().ok_or("root index required")? as usize;
         let root = self.roots.get(index).ok_or("folder_permission_required")?.canonicalize().map_err(|e| e.to_string())?;
         let relative = args["path"].as_str().ok_or("relative path required")?;
@@ -179,7 +179,7 @@ fn replace_once(previous:&str,old:&str,new:&str)->Result<String,String>{
     if old.is_empty() || previous.find(old).is_none() || previous.find(old)!=previous.rfind(old) {return Err("old_text must match exactly once; read the file and include more context".into());}Ok(previous.replacen(old,new,1))
 }
 
-fn write_file(path: &Path, content: &str, previous: Option<&str>) -> Result<(), String> {
+pub(crate) fn write_file(path: &Path, content: &str, previous: Option<&str>) -> Result<(), String> {
     use std::io::Write;
     static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _write = WRITE_LOCK.lock().unwrap();

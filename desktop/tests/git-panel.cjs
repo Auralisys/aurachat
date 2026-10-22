@@ -36,7 +36,12 @@ const assert=require('node:assert/strict');
         if(cmd==='speech_model_status')return {ready:false,busy:false};
         if(['list_shells','list_approvals','list_questions','project_folder_access'].includes(cmd))return [];
         if(cmd==='project_git'){
-          if(args.action==='status')return stats();
+          if(args.action==='discover')return {repositories:window.__repositories || ['C:\\fixture'],truncated:false};
+          if(args.action==='status'){
+            if(window.__delayGitStatus)await new Promise(resolve=>window.__releaseGitStatus=resolve);
+            if(window.__statusFailure)throw Error('Git: permission denied');
+            return stats();
+          }
           if(['stage','unstage'].includes(args.action)){
             if(window.__delayStage)await new Promise(resolve=>window.__finishStage=resolve);
             if(window.__failStage){window.__failStage=false;throw Error('Git: stage failed');}
@@ -236,6 +241,25 @@ const assert=require('node:assert/strict');
     await page.evaluate(()=>{state.config.firebase_email='changed@example.com';renderActivity();});
     await page.locator('#git-discard-confirm').waitFor({state:'hidden'});
     assert.equal(await page.evaluate(()=>__calls.filter(c=>c.args?.action==='discard').length),discardCount,'Context change cancels pending confirmation');
+    await page.evaluate(async()=>{__repositories=['C:\\fixture\\one','C:\\fixture\\nested\\two'];await refreshGit();});
+    const repositories=page.getByRole('combobox',{name:locales['git.repository'],exact:true});
+    assert.deepEqual(await repositories.locator('option').evaluateAll(options=>options.map(option=>option.value)),['C:\\fixture\\one','C:\\fixture\\nested\\two']);
+    await page.evaluate(()=>window.__delayGitStatus=true);
+    await repositories.selectOption('C:\\fixture\\nested\\two');
+    await page.waitForFunction(()=>window.__releaseGitStatus);
+    assert.equal(await repositories.isDisabled(),true,'Repository switching is disabled while the next context loads');
+    await page.evaluate(()=>{window.__delayGitStatus=false;window.__releaseGitStatus();});
+    await page.waitForFunction(()=>!gitView.loading);
+    assert.equal(await page.evaluate(()=>__calls.filter(c=>c.args?.action==='status').at(-1).args.root),'C:\\fixture\\nested\\two');
+    await page.evaluate(async()=>{__repositories=[];await refreshGit();});
+    await page.locator('#activity-panel').getByText(locales['git.no_repositories'],{exact:true}).waitFor();
+    assert.equal(await page.locator('.git-group .activity-shell-error').count(),0);
+    assert.equal(await page.evaluate(()=>gitView.data),null);
+    await page.evaluate(async()=>{__repositories=['C:\\fixture\\restored'];await refreshGit();});
+    assert.equal(await page.evaluate(()=>gitView.root),'C:\\fixture\\restored');
+    await page.evaluate(async()=>{__statusFailure=true;await refreshGit();});
+    await page.locator('#activity-panel').getByRole('alert').filter({hasText:'permission denied'}).waitFor();
+    await page.evaluate(async()=>{__statusFailure=false;await refreshGit();});
     assert.deepEqual(errors,[]);
     console.log('PASS Git recap, staging queues, partial staging, commit/push, single/all unstaged discard, protected cancellation/context changes, stale errors and compact layout.');
   } finally {await browser.close();}

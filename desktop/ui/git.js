@@ -1,5 +1,5 @@
 // UI-only Git actions: previews never mutate the repository; commit/push need confirmation.
-const gitView = {key:null, root:null, epoch:0, operation:0, data:null, error:'', statusError:'', loading:false, working:false, staging:null, preview:null, message:'', combined:false, panel:null, editor:null, refreshTimer:null};
+const gitView = {key:null, root:null, repositories:null, truncated:false, epoch:0, operation:0, data:null, error:'', statusError:'', loading:false, working:false, staging:null, preview:null, message:'', combined:false, panel:null, editor:null, refreshTimer:null};
 
 function gitProject() {
   return activeConversation()?.project || state.data.projects.find(p => p.id === state.pendingProjectId);
@@ -11,7 +11,7 @@ function gitContext() {
   if (gitView.key !== key) {
     if ($('#git-push-confirm')?.open) $('#git-push-confirm').close('cancel');
     if ($('#git-discard-confirm')?.open) $('#git-discard-confirm').close('cancel');
-    Object.assign(gitView, {key, root:project?.source_folders?.[0], epoch:gitView.epoch + 1, data:null, error:'', statusError:'', loading:false, working:false, staging:null, preview:null, message:'', panel:null, editor:null});
+    Object.assign(gitView, {key, root:project?.source_folders?.[0], repositories:null, truncated:false, epoch:gitView.epoch + 1, data:null, error:'', statusError:'', loading:false, working:false, staging:null, preview:null, message:'', panel:null, editor:null});
     if (project && gitView.root) queueMicrotask(() => refreshGit());
   }
   return project;
@@ -19,20 +19,31 @@ function gitContext() {
 
 async function gitRequest(action, extra = {}) {
   const project = gitProject();
-  if (!project || !gitView.root) throw new Error(t('git.no_folder'));
+  if (!project || (!gitView.root && action !== 'discover')) throw new Error(t('git.no_folder'));
   const epoch = gitView.epoch, root = gitView.root;
-  const result = await invoke('project_git', {project_id:project.id, root, action, conversation_id:state.activeConversationId, ...extra});
+  const result = await invoke('project_git', {project_id:project.id, root:root || '', action, conversation_id:state.activeConversationId, ...extra});
   if (epoch !== gitView.epoch || root !== gitView.root) throw new Error(t('git.context_changed'));
   return result;
 }
 
 async function refreshGit(background = false) {
-  if (gitView.loading || gitView.working || gitView.staging || !gitProject() || !gitView.root) return;
-  const epoch = gitView.epoch, root = gitView.root, operation = gitView.operation;
+  if (gitView.loading || gitView.working || gitView.staging || !gitProject()?.source_folders?.length) return;
+  const epoch = gitView.epoch, operation = gitView.operation;
+  let root = gitView.root;
   gitView.loading = true;
   if (!background) {gitView.error = '';gitView.panel = null;renderActivity();}
   let changed = !background;
   try {
+    if (!background || gitView.repositories === null) {
+      const discovery = await gitRequest('discover');
+      if (epoch !== gitView.epoch) return;
+      gitView.repositories = discovery.repositories;gitView.truncated = discovery.truncated;
+      if (!gitView.repositories.includes(root)) {
+        root = gitView.root = gitView.repositories[0] || null;
+        gitView.data = null;gitView.preview = null;gitView.message = '';gitView.editor = null;
+      }
+    }
+    if (!root) {gitView.data = null;gitView.statusError = '';return;}
     const data = await gitRequest('status');
     if (epoch !== gitView.epoch || root !== gitView.root) return;
     if (operation !== gitView.operation) {changed = false;return;}
@@ -69,7 +80,8 @@ function renderGitCard(card) {
   heading.onclick = () => openGitMenu(group, heading);group.append(heading);
   const data = gitView.data;
   if (data) heading.setAttribute('aria-description', `${data.branch || t('git.detached')} · ${data.files.length} ${t('git.files')}`);
-  else group.append(activityText('p', gitView.loading ? t('git.loading') : t('git.open'), 'activity-empty'));
+  else group.append(activityText('p', gitView.loading ? t('git.loading') : t(gitView.repositories?.length === 0 ? 'git.no_repositories' : 'git.open'), 'activity-empty'));
+  if (gitView.truncated) group.append(activityText('p', t('git.discovery_truncated'), 'activity-empty'));
   if (gitView.statusError || gitView.error) group.append(activityText('p', gitView.statusError || gitView.error, 'activity-shell-error'));
   card.append(group);
 }
@@ -207,17 +219,19 @@ function renderGitPanel(content) {
   const panel = activityText('div', '', 'git-panel');gitView.panel = panel;content.replaceChildren(panel);
   const project = gitProject();
   if (!project) {panel.append(activityText('p', t('git.no_folder'), 'activity-empty'));return;}
-  if (project.source_folders.length > 1) {
+  if (gitView.repositories?.length > 1) {
     const select = document.createElement('select');select.setAttribute('aria-label', t('git.repository'));
-    for (const root of project.source_folders) {const option = document.createElement('option');option.value = root;option.textContent = root;option.selected = root === gitView.root;select.append(option);}
+    for (const root of gitView.repositories) {const option = document.createElement('option');option.value = root;option.textContent = root;option.selected = root === gitView.root;select.append(option);}
     select.disabled = gitView.working || gitView.loading || !!gitView.staging;
-    select.onchange = () => {gitView.root = select.value;gitView.epoch++;gitView.preview = null;gitView.message = '';gitView.editor = null;refreshGit();};panel.append(select);
+    select.onchange = () => {gitView.root = select.value;gitView.epoch++;gitView.data = null;gitView.preview = null;gitView.message = '';gitView.editor = null;refreshGit();};panel.append(select);
   }
   const header = activityText('div', '', 'git-actions');
   header.append(gitButton('git.refresh', () => refreshGit(), gitView.loading));
   panel.append(header);
   const error = activityText('p', gitView.statusError || gitView.error, 'activity-shell-error');error.setAttribute('role', 'alert');panel.append(error);
   if (gitView.loading && !gitView.data) {panel.append(activityText('p', t('git.loading'), 'activity-empty'));return;}
+  if (gitView.truncated) panel.append(activityText('p', t('git.discovery_truncated'), 'activity-empty'));
+  if (gitView.repositories?.length === 0) panel.append(activityText('p', t('git.no_repositories'), 'activity-empty'));
   const data = gitView.data;if (!data) return;
   panel.append(activityText('h3', `${data.branch || t('git.detached')} · ${t('git.changes')}`), gitStats(data));
   panel.append(activityText('p', data.upstream ? `${data.upstream} · ↑${data.ahead} ↓${data.behind}` : t('git.no_upstream'), 'activity-empty'));

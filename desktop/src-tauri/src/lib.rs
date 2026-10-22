@@ -4,6 +4,7 @@ mod data;
 mod firestore;
 mod llm;
 mod window_state;
+mod mcp;
 mod speech;
 mod media;
 mod project_files;
@@ -594,7 +595,11 @@ async fn chat_inner(
         }
         let _ = app.emit("chat-progress", serde_json::json!({"conversation_id":conversation_id,"kind":action,"text":text}));
     };
-    let completion = llm::chat_completion_steered(&state.client, &base_url, &model, &api_key, &history, project, Some(agent_runs::Runtime{app:app.clone(),owner:uid.clone(),conversation:conversation_id.clone()}), Some(guidance.clone()), &progress, |mut agent| {
+    let execution=project.as_ref().and_then(|files|files.execution.clone()).unwrap_or_else(||permissions::Execution {
+        app:app.clone(),owner:uid.clone(),project:String::new(),conversation:conversation_id.clone(),turn_id:turn_id.clone(),
+        intent:history.last().map(|m|m.content.chars().take(16000).collect()).unwrap_or_default(),agent_id:None,cancellation:Some(stop.clone())
+    });
+    let completion = llm::chat_completion_steered(&state.client, &base_url, &model, &api_key, &history, project, Some(agent_runs::Runtime{app:app.clone(),owner:uid.clone(),conversation:conversation_id.clone(),execution}), Some(guidance.clone()), &progress, |mut agent| {
         agent["conversation_id"] = serde_json::json!(conversation_id);
         let mut events = turn_activity.lock().unwrap();
         let mut stored = agent.clone();stored["kind"] = serde_json::json!("agent");stored["offset"] = content_offset.load(std::sync::atomic::Ordering::Relaxed).into();
@@ -794,28 +799,32 @@ async fn project_git(state: tauri::State<'_,AppState>, project_id:String, root:S
     let _account=state.account_lock.lock().await;
     let auth=firebase_auth(&state)?;
     let uid=ensure_uid(&state,&auth).await?;
-    {
+    let folders={
         let tree=state.data.lock().unwrap();
         let project=tree.projects.iter().find(|p|p.id==project_id).ok_or("project_not_found")?;
-        if !project.source_folders.contains(&root) || !state.folder_access.lock().unwrap().paths(&uid,&project_id).contains(&root) {
-            return Err("folder_permission_required".into());
-        }
+        let grants=state.folder_access.lock().unwrap().paths(&uid,&project_id);
+        let folders=project.source_folders.iter().filter(|folder|grants.contains(folder)).cloned().collect::<Vec<_>>();
+        if folders.is_empty() {return Err("folder_permission_required".into());}
         if matches!(action.as_str(),"stage"|"unstage"|"discard_preview"|"discard"|"commit"|"push") && !state.running_chats.lock().unwrap().is_empty() {
             return Err("Wait for running conversations to finish before staging, discarding, committing or pushing.".into());
         }
         if let Some(id)=&conversation_id {
             if !project.conversations.iter().any(|c|&c.id==id) {return Err("conversation_not_found".into());}
         }
-    }
+        folders
+    };
     let paths=paths.unwrap_or_default();
     let revision=revision.unwrap_or_default();
     let message=message.unwrap_or_default();
     let generate=action=="generate";
-    let read_only=action=="status";
+    let read_only=matches!(action.as_str(),"status"|"discover");
     // Polling a local repository must not hold up unrelated account/chat operations.
     if read_only {drop(_account);}
     let root=PathBuf::from(root);
-    let result=tauri::async_runtime::spawn_blocking(move||match action.as_str() {
+    let result=tauri::async_runtime::spawn_blocking(move||{
+        if action=="discover" {return git::discover(&folders);}
+        let root=git::authorized_root(&root,&folders)?;
+        match action.as_str() {
         "status"=>git::status(&root),
         "stage"=>git::stage(&root,&paths,&revision,false),
         "unstage"=>git::stage(&root,&paths,&revision,true),
@@ -826,6 +835,7 @@ async fn project_git(state: tauri::State<'_,AppState>, project_id:String, root:S
         "push_preview"=>git::push_preview(&root),
         "push"=>git::push(&root,&revision),
         _=>Err("Unsupported Git action.".into()),
+        }
     }).await.map_err(|e|e.to_string())??;
     if state.firestore.uid().as_deref()!=Some(uid.as_str()) {return Err("account_changed".into());}
     if !generate {return Ok(result);}

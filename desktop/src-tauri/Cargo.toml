@@ -24,6 +24,9 @@ base64 = "0.22"
 ort = "=2.0.0-rc.12"
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
+rmcp = { version = "3.6", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest-native-tls"] }
+mcp-http = { package = "reqwest", version = "0.13", default-features = false, features = ["native-tls"] }
+tokio = { version = "1", features = ["process", "time"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = ["Media_Control", "Win32_System_WinRT", "Win32_System_Threading"] }

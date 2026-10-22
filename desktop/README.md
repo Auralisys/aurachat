@@ -34,6 +34,9 @@ Vedi `../AuraChat's vault/` per le decisioni: `Overview.md`,
   l'elaborazione AI, anche con finestra minimizzata. Rimane attivo mentre almeno
   una chat sta lavorando e si spegne al termine, in caso di errore o dopo Stop.
 - **Logo Auralisys** come icona della finestra e del tray.
+- **Controlli finestra nativi** di Windows/macOS: minimizza, massimizza/ripristina
+  e chiudi sono gestiti dal sistema, senza pulsanti HTML duplicati. La chiusura
+  continua a nascondere nel tray; il ridimensionamento si abilita dopo lo splash.
 
 La persistenza Firestore usa `users/{uid}`: `config`, `tree` e `window` sono mappe native,
 con aggiornamenti separati che preservano gli altri campi. Il vecchio `config`
@@ -111,8 +114,17 @@ Non vengono eseguiti force push, pull, reset o configurazioni automatiche del re
 Un upstream esistente è necessario per il push. Le credenziali usano Git già
 configurato; i prompt interattivi sono disabilitati e gli errori sono mostrati.
 
-Git opera solo su una root di repository collegata e autorizzata nel progetto,
-mai sul repository antenato di una sottocartella autorizzata. Tutti i file già
+Git cerca le root di repository nelle cartelle collegate e autorizzate, anche
+nelle sottocartelle dei contenitori multi-repository. Il dettaglio offre un
+selettore quando ne trova più di una; senza repository mostra uno stato vuoto,
+non l'errore Git «not a git repository». La ricerca si esegue all'apertura e con
+**Aggiorna**, non a ogni polling dello stato. Si ferma quando trova un repository,
+riconosce anche i worktree (`.git` come file), non segue link/junction e salta
+`.git`, `node_modules`, `target`, `.venv`, `build` e `dist`. Oltre 20.000 elementi
+segnala esplicitamente la ricerca incompleta: collegare una sottocartella per
+restringerla. Errori reali di accesso o di Git restano visibili.
+Non usa mai il repository antenato di una sottocartella autorizzata e ricontrolla
+che ogni repository selezionato sia dentro un consenso locale valido. Tutti i file già
 staged fanno parte del commit: controllare l'intero gruppo Staged, non solo le
 ultime aggiunte. Cambiamenti esterni dello stage o di HEAD invalidano l'anteprima
 senza perdere il messaggio scritto; modifiche solo al working tree non la invalidano.
@@ -127,6 +139,74 @@ Verifiche dedicate: `tests/git-panel.cjs` per UI e conferme simulate; test Rust
 `git::tests` su repository temporanei e remoto bare locale, mai sul repository
 di lavoro; `llm::tests::commit_message_sends_only_the_selected_diff_without_tools_and_reports_errors`
 usa un provider HTTP locale simulato.
+
+### Integrazioni MCP generali dalla chat
+
+La chat dispone di `list_mcp_servers`, `configure_mcp_server`,
+`remove_mcp_server`, `list_mcp_tools` e `call_mcp_tool`. Non sono strumenti
+specifici di Firebase: qualunque server compatibile può fornire ricerca web,
+browser, accesso HTTP, API e altre funzioni. Il modello deve prima scoprire il
+catalogo reale e usare nomi e schemi restituiti dal server, senza inventare
+accessi o risultati.
+
+Le integrazioni **globali** si configurano dalla chat, anche senza progetto,
+e sono salvate solo sul PC, separate per account, in
+`<app_config_dir>\mcp\<SHA-256 UID>\.mcp.json`. Configurazione, connessione e
+chiamate globali richiedono approvazione esplicita. Quelle **di progetto** usano
+`.mcp.json`, oppure `.cursor\mcp.json` se il primo manca, nella root autorizzata;
+seguono i permessi Richiedi/Auto/Full del progetto. Una configurazione da cloud,
+un link o una cartella nominata in chat non concedono accesso locale.
+
+Sono supportati **stdio** (`command`, `args`, `env`) e **Streamable HTTP**
+(`url`, `headers`, HTTPS oppure HTTP su loopback). Esempio di configurazione:
+
+```json
+{
+  "mcpServers": {
+    "locale": {
+      "command": "C:\\percorso\\server-mcp.exe",
+      "args": []
+    },
+    "remoto": {
+      "url": "https://servizio.example/mcp",
+      "headers": { "Authorization": "Bearer ${MCP_SERVICE_TOKEN}" }
+    }
+  }
+}
+```
+
+Su Windows, per pacchetti Node lanciati con `npx`, configurare `command` come
+`cmd.exe` e `args` come `["/c", "npx", "-y", "<pacchetto@versione>", ...]`,
+usando le istruzioni ufficiali del server. Configurare un eseguibile non lo
+installa magicamente: il pacchetto viene acquisito dal launcher dichiarato, se
+previsto, dopo l'approvazione della connessione. Un comando mancante, un login
+assente o una discovery fallita producono errori, non una falsa conferma.
+Rimuovere un'integrazione elimina la sua configurazione, non il software.
+
+Usare `${NOME_VARIABILE}` in `env` e `headers` per credenziali già presenti
+nell'ambiente del desktop; non incollare token nella chat o negli argomenti
+del comando. Le configurazioni globali di altri editor e i loro login non
+vengono importati. I login OAuth/browser o della CLI vanno completati esternamente:
+questa versione non implementa un flusso OAuth MCP né il vecchio trasporto SSE.
+I server MCP eseguono codice locale e/o operazioni esterne con i propri accessi,
+senza sandbox; le loro descrizioni e risposte restano dati non affidabili.
+Le sessioni sono limitate al turno (anche per i sub-agenti), con timeout, chiusura
+alla fine/Stop e ricontrollo di account, consensi e configurazione prima delle
+chiamate. Limiti: 16 server per configurazione, 64 KiB per config, 256 strumenti
+per server e 256 KiB per risultato. Un timeout non annulla eventuali operazioni
+già ricevute dal servizio esterno.
+
+Non è una promessa di parità completa con ChatGPT: ricerca, browser e altri
+servizi diventano disponibili quando il relativo MCP è configurato e autenticato.
+Le verifiche native usano `tests\mcp-server.cjs`, un server stdio/HTTP locale
+senza account o traffico verso servizi reali.
+
+Per leggere le istruzioni ufficiali prima di configurare il primo MCP esiste
+anche **`fetch_web_page`**, disponibile nelle chat senza progetto. Richiede
+approvazione dell'URL esatto e legge solo testo/HTML/JSON/XML UTF-8, senza
+cookie, login, JavaScript o reindirizzamenti automatici. Restituisce al massimo
+64.000 caratteri da una risposta limitata a 256 KiB, con troncamento esplicito.
+Non sostituisce un browser autenticato o un motore di ricerca.
 
 Le **Fonti** contengono gli allegati dell'utente e i link HTTP(S) nei suoi messaggi;
 le letture del progetto e i link citati dal modello non sono fonti. `user-source`
