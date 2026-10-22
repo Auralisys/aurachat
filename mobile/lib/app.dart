@@ -1061,7 +1061,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
           ...devices.map(
             (d) => ListTile(
               leading: const Icon(Icons.computer_outlined),
-              title: Text(d['name'] ?? 'PC Windows'),
+              title: Text(d['name'] ?? 'Computer'),
               subtitle: Text(
                 deviceOnline(d) ? 'Disponibile' : 'Non raggiungibile',
               ),
@@ -1312,7 +1312,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
             builder: (context) => AlertDialog(
               title: const Text('Consentire accesso completo?'),
               content: Text(
-                'Per ${projects[project]?['name'] ?? 'questo progetto'}, AuraChat potrà modificare file ed eseguire comandi senza conferme, anche fuori dal progetto, con accesso alla rete e i permessi del tuo account Windows.',
+                'Per ${projects[project]?['name'] ?? 'questo progetto'}, AuraChat potrà modificare file ed eseguire comandi senza conferme, anche fuori dal progetto, con accesso alla rete e i permessi del tuo account di sistema.',
               ),
               actions: [
                 TextButton(

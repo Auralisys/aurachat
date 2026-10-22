@@ -4,7 +4,9 @@ const { resolve } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const assert = require('node:assert/strict');
 (async () => {
- const browser=await chromium.launch({channel:'msedge',headless:true});
+ const nativeWindow=JSON.parse(readFileSync(resolve(__dirname,'../src-tauri/tauri.conf.json'),'utf8')).app.windows[0];
+ assert.equal(nativeWindow.decorations,true);
+ const browser=await chromium.launch({channel:process.platform==='darwin'?'chrome':'msedge',headless:true});
  const page=await browser.newPage({viewport:{width:480,height:320}});
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  const strings=JSON.parse(readFileSync(resolve(__dirname,'../ui/locales/it.json'),'utf8'));
@@ -34,6 +36,7 @@ const assert = require('node:assert/strict');
   }}};
  },{strings});
  await page.goto(pathToFileURL(resolve(__dirname,'../ui/index.html')).href);
+ assert.equal(await page.locator('#btn-minimize, #btn-close, .titlebar__controls').count(),0);
  await page.waitForFunction(()=>window.__releaseRestore);
  assert.equal(await page.locator('#boot-splash').isVisible(),true);
  assert.equal(await page.evaluate(()=>window.__saveCount),0);
