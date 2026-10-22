@@ -277,6 +277,7 @@
   "progress.read_project_file": "Lettura file",
   "progress.list_project_files": "Esplorazione cartella",
   "progress.search_project_files": "Ricerca nei file",
+  "progress.search_project_files": "Ricerca nei file",
   "progress.command": "Comando",
   "progress.working": "Attività in corso",
   "chat.unread": "Nuovo risultato da leggere",

@@ -49,7 +49,8 @@ impl Context {
                 let path=files.resolve_path(&json!({"root":skill["root"],"path":skill["path"]}),false)?;
                 use sha2::{Digest,Sha256};
                 let id=format!("{scope}:{:x}",Sha256::digest(path.to_string_lossy().as_bytes()));
-                if !seen.insert(path) {continue;}
+                // The same skill is often installed in several agent folders; keep the first per scope so /name stays unambiguous.
+                if !seen.insert(path) || !seen.insert(PathBuf::from(format!("{scope}\0{}",skill["name"].as_str().unwrap()))) {continue;}
                 skill["scope"]=scope.into();skill["id"]=id.clone().into();
                 skill["enabled"]=(!disabled.contains(&id)).into();
                 entries.push(skill);

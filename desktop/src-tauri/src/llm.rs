@@ -368,7 +368,7 @@ impl Completion<'_> {
                         let context=crate::skills::Context::new(self.project.as_ref(),self.runtime.as_ref().map(|r|&r.execution));
                         let action=name.to_string();let args=parsed.clone();
                         tauri::async_runtime::spawn_blocking(move||context.execute(&action,&args)).await.map_err(|e|e.to_string())?
-                    } else if let Some(files) = self.project.as_ref().filter(|_| matches!(name,"publish_project_output"|"read_project_file"|"list_project_files"|"write_project_file"|"edit_project_file"|"execute_project_command"|"inspect_project_command")) {
+                    } else if let Some(files) = self.project.as_ref().filter(|_| matches!(name,"publish_project_output"|"read_project_file"|"list_project_files"|"search_project_files"|"write_project_file"|"edit_project_file"|"execute_project_command"|"inspect_project_command")) {
                         let path = parsed["path"].as_str().unwrap_or(".");(self.activity)(name,path);
                         let mut files = files.clone();
                         if let (Some(agent),Some(execution))=(agent,files.execution.as_mut()) {execution.agent_id=agent["id"].as_str().map(String::from);execution.cancellation=execution.agent_id.as_ref().and_then(|id|{use tauri::Manager;execution.app.state::<crate::agent_runs::AgentRuns>().token(id)});}

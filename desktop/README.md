@@ -499,9 +499,12 @@ del processo non può eseguire questa pulizia. Lettori senza integrazione Window
 non sono controllabili; gli errori dei controlli sono segnalati senza impedire
 la dettatura. Sul companion mobile non viene aggiunto controllo musicale remoto.
 
-Le chat di progetto espongono al modello `list_project_files` e
-`read_project_file`, con ID root, percorsi relativi, controllo canonico anche
-su link/junction, limiti di dimensione per singolo file. L’esplorazione prosegue fino alla risposta del modello, senza soglie arbitrarie sul numero di passaggi o sul totale letto. Vengono consultati
+Le chat di progetto espongono al modello `list_project_files`,
+`search_project_files` (ricerca testuale ricorsiva, max 100 risultati, salta
+`.git`/dipendenze/build e i link) e `read_project_file` (per intervalli di righe,
+file fino a 1 MiB), con ID root, percorsi relativi, controllo canonico anche
+su link/junction, limiti di dimensione per singolo file. `edit_project_file`
+gestisce automaticamente file CRLF e prefissi di riga copiati dalla lettura. L’esplorazione prosegue fino alla risposta del modello, senza soglie arbitrarie sul numero di passaggi o sul totale letto. Vengono consultati
 solo i consensi locali dell'utente/progetto e le cartelle ancora collegate.
 I file letti per la richiesta vengono inviati al provider LLM configurato;
 non avviene scansione o caricamento automatico dell'intera root. Le modifiche verificano la revisione del file e i comandi passano dal controllo

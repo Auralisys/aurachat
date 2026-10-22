@@ -2245,6 +2245,7 @@ String remoteError(String? error) => switch (error) {
 const _actionLabels = {
   'read_project_file': 'Leggi file',
   'list_project_files': 'Elenca file',
+  'search_project_files': 'Cerca nei file',
   'write_project_file': 'Scrivi file',
   'edit_project_file': 'Modifica file',
   'execute_project_command': 'Esegui comando',

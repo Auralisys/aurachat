@@ -44,8 +44,8 @@ impl ProjectFiles {
         if !path.starts_with(authorized) {return Err("skill leaves the authorized root".into());}
         if !path.is_file() {return Err("not a regular skill file".into());}
         let mut bytes = Vec::new();
-        std::fs::File::open(path).map_err(|e|e.to_string())?.take(32769).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
-        if bytes.len()>32768 || bytes.contains(&0) {return Err("skill must be UTF-8 text of at most 32 KiB".into());}
+        std::fs::File::open(path).map_err(|e|e.to_string())?.take(131073).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
+        if bytes.len()>131072 || bytes.contains(&0) {return Err("skill must be UTF-8 text of at most 128 KiB".into());}
         String::from_utf8(bytes).map_err(|_|"skill is not UTF-8".into())
     }
     pub fn load_skill(&self, root: usize, path: &str) -> Result<Value,String> {
@@ -129,18 +129,49 @@ impl ProjectFiles {
                     entries.sort_by(|a,b| a["name"].as_str().cmp(&b["name"].as_str()));
                     Ok(json!({"entries":entries,"truncated":truncated}))
                 }
+                "search_project_files" => {
+                    let query = args["query"].as_str().filter(|q|!q.trim().is_empty()).ok_or("query required")?.to_lowercase();
+                    let base = Path::new(args["path"].as_str().unwrap_or("."));
+                    let (mut results, mut stack, mut scanned, mut truncated) = (Vec::new(), vec![path.clone()], 0, false);
+                    'walk: while let Some(dir) = stack.pop() {
+                        let Ok(entries) = std::fs::read_dir(&dir) else {continue;};
+                        for entry in entries.flatten() {
+                            // Symlinks are skipped so the walk never leaves the authorized root.
+                            let Ok(kind) = entry.file_type() else {continue;};
+                            let name = entry.file_name().to_string_lossy().into_owned();
+                            if kind.is_dir() && ![".git","node_modules","target","build","dist",".dart_tool",".gradle","Pods",".next",".venv","__pycache__"].contains(&name.as_str()) {stack.push(entry.path());continue;}
+                            if !kind.is_file() {continue;}
+                            scanned += 1;
+                            if scanned > 20000 || results.len() >= 100 {truncated = true; break 'walk;}
+                            let shown = base.join(entry.path().strip_prefix(&path).unwrap_or(&entry.path())).to_string_lossy().replace('\\',"/").trim_start_matches("./").to_string();
+                            if shown.to_lowercase().contains(&query) {results.push(json!({"path":shown}));}
+                            if entry.metadata().map(|m|m.len() > 1048576).unwrap_or(true) {continue;}
+                            let Ok(text) = std::fs::read_to_string(entry.path()) else {continue;};
+                            for (index, line) in text.lines().enumerate() {
+                                if line.to_lowercase().contains(&query) {
+                                    results.push(json!({"path":shown,"line":index+1,"text":line.trim().chars().take(200).collect::<String>()}));
+                                    if results.len() >= 100 {truncated = true; break 'walk;}
+                                }
+                            }
+                        }
+                    }
+                    Ok(json!({"matches":results,"truncated":truncated}))
+                }
                 "read_project_file" => {
                     if !path.is_file() { return Err("not a regular file".into()); }
                     let mut bytes = Vec::new();
-                    std::fs::File::open(path).map_err(|e| e.to_string())?.take(131073).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-                    if bytes.len() > 131072 { return Err("file exceeds 128 KiB; choose a smaller text file".into()); }
+                    std::fs::File::open(path).map_err(|e| e.to_string())?.take(1048577).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                    if bytes.len() > 1048576 { return Err("file exceeds 1 MiB; inspect it with a command instead".into()); }
                     let text = String::from_utf8(bytes).map_err(|_| "file is not UTF-8 text")?;
                     if text.contains('\0') { return Err("binary file is not supported".into()); }
                     let start = args["start_line"].as_u64().unwrap_or(1).max(1) as usize;
                     let max = args["max_lines"].as_u64().unwrap_or(200).clamp(1,400) as usize;
                     let total = text.lines().count();
-                    let content = text.lines().enumerate().skip(start-1).take(max).map(|(i,l)| format!("{}: {l}",i+1)).collect::<Vec<_>>().join("\n");
-                    Ok(json!({"content":content,"total_lines":total,"start_line":start,"file_sha256":revision(&text),"truncated":start.saturating_add(max).saturating_sub(1)<total}))
+                    // Ranges keep large files usable; the byte cap stops minified lines from flooding the context.
+                    let mut content = text.lines().enumerate().skip(start-1).take(max).map(|(i,l)| format!("{}: {l}",i+1)).collect::<Vec<_>>().join("\n");
+                    let clipped = content.len() > 65536;
+                    if clipped { content = content.chars().take(65536).collect(); }
+                    Ok(json!({"content":content,"total_lines":total,"start_line":start,"file_sha256":revision(&text),"truncated":clipped || start.saturating_add(max).saturating_sub(1)<total}))
                 }
                 _ => Err("unsupported tool".into())
             }
@@ -172,6 +203,9 @@ fn replace_once(previous:&str,old:&str,new:&str)->Result<String,String>{
     // Models always send LF; match CRLF files too and keep their line endings.
     let crlf=|text:&str| text.replace("\r\n","\n").replace('\n',"\r\n");
     if previous.contains("\r\n") && unique(&crlf(old)) {return Ok(previous.replacen(&crlf(old),&crlf(new),1));}
+    // Models often copy the "N: " prefixes added by read_project_file; strip them only when every line has one.
+    let strip=|text:&str| text.split('\n').map(|l|l.split_once(": ").filter(|(n,_)|!n.is_empty() && n.bytes().all(|b|b.is_ascii_digit())).map(|(_,rest)|rest)).collect::<Option<Vec<_>>>().map(|v|v.join("\n"));
+    if let Some(stripped)=strip(&old.replace("\r\n","\n")) {return replace_once(previous,&stripped,&strip(&new.replace("\r\n","\n")).unwrap_or(new.to_string()));}
     Err("old_text must match exactly once; read the file and include more context. Line endings are handled automatically: do not work around this with scripts.".into())
 }
 
@@ -205,7 +239,8 @@ pub fn definitions() -> Value {
         {"type":"function","function":{"name":"execute_project_command","description":"Run a local executable with an argument array in the project directory. No implicit shell: use powershell.exe -NoProfile -Command explicitly for scripts. Native permission checks may request approval. Processes are visible and stoppable in Shell. Returns output, exit code or a running shell ID.","parameters":{"type":"object","properties":{"root":root,"path":path,"program":{"type":"string"},"arguments":{"type":"array","items":{"type":"string"}}},"required":["root","path","program","arguments"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"inspect_project_command","description":"Inspect the latest output and status of a previously started shell ID in this conversation.","parameters":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"list_project_files","description":"List up to 200 immediate children of an authorized project folder. Traverse subdirectories with further calls.","parameters":{"type":"object","properties":{"root":root,"path":path},"required":["root","path"],"additionalProperties":false}}},
-        {"type":"function","function":{"name":"read_project_file","description":"Read an authorized UTF-8 project file (up to 128 KiB), with line numbers.","parameters":{"type":"object","properties":{"root":root,"path":path,"start_line":{"type":"integer","minimum":1},"max_lines":{"type":"integer","minimum":1,"maximum":400}},"required":["root","path"],"additionalProperties":false}}}
+        {"type":"function","function":{"name":"search_project_files","description":"Find files and lines containing text (case-insensitive) recursively under an authorized folder, skipping .git, dependency and build folders. Returns up to 100 path/line matches. Use it instead of listing folders one by one or running shell searches.","parameters":{"type":"object","properties":{"root":root,"path":path,"query":{"type":"string"}},"required":["root","path","query"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"read_project_file","description":"Read an authorized UTF-8 project file (up to 1 MiB) by line range, with line numbers. Read only the range you need; the returned file_sha256 is valid for edits.","parameters":{"type":"object","properties":{"root":root,"path":path,"start_line":{"type":"integer","minimum":1},"max_lines":{"type":"integer","minimum":1,"maximum":400}},"required":["root","path"],"additionalProperties":false}}}
     ])
 }
 
@@ -256,8 +291,8 @@ pub fn definitions() -> Value {
         assert!(files.load_skill(1,".agents/skills/review/SKILL.md").is_err());
         std::fs::create_dir_all(root.join(".codex/skills/review")).unwrap();
         std::fs::write(root.join(".codex/skills/review/SKILL.md"),"duplicate").unwrap();
-        assert!(crate::skills::Context::new(Some(&files),None).slash("/review").is_err());
-        std::fs::write(folder.join("SKILL.md"),"x".repeat(32769)).unwrap();
+        assert_eq!(crate::skills::Context::new(Some(&files),None).slash("/review").unwrap().unwrap()["path"],".agents/skills/review/SKILL.md");
+        std::fs::write(folder.join("SKILL.md"),"x".repeat(131073)).unwrap();
         assert!(files.load_skill(0,".agents/skills/review/SKILL.md").is_err());
         std::fs::write(folder.join("SKILL.md"),"bad\0text").unwrap();
         assert!(files.load_skill(0,".agents/skills/review/SKILL.md").is_err());
@@ -269,6 +304,8 @@ pub fn definitions() -> Value {
         assert!(replace_once("aaa","aa","new").is_err());
         assert_eq!(replace_once("a\r\nb\r\nc\r\n","a\nb","x\ny").unwrap(),"x\r\ny\r\nc\r\n");
         assert_eq!(replace_once("log('a\\nb')\r\n","log('a\\nb')","log('c\\nd')").unwrap(),"log('c\\nd')\r\n");
+        assert_eq!(replace_once("a\r\nb\r\nc","2: b\n3: c","2: x\n3: c").unwrap(),"a\r\nx\r\nc");
+        assert!(replace_once("a\nb","9: z","x").is_err());
         assert!(matches_revision("before",&json!({"expected_sha256":revision("before")})));assert!(!matches_revision("after",&json!({"expected_sha256":revision("before")})));
     }
     #[test] fn writes_require_fresh_content_and_paths_stay_scoped() {
@@ -291,7 +328,10 @@ pub fn definitions() -> Value {
         assert_eq!(files.execute("list_project_files",r#"{"root":0,"path":"."}"#)["entries"][0]["name"],"vault.md");
         for args in [r#"{"root":1,"path":"vault.md"}"#,r#"{"root":0,"path":"../vault.md"}"#,r#"{"root":0,"path":"C:\\Windows\\win.ini"}"#] { assert!(files.execute("read_project_file",args).get("error").is_some()); }
         assert!(files.execute("execute_command",r#"{"root":0,"path":"."}"#).get("error").is_some());
-        std::fs::write(temp.join("large.txt"),vec![b'x';131073]).unwrap();assert!(files.execute("read_project_file",r#"{"root":0,"path":"large.txt"}"#).get("error").is_some());
+        std::fs::write(temp.join("large.txt"),vec![b'x';131073]).unwrap();
+        let large = files.execute("read_project_file",r#"{"root":0,"path":"large.txt"}"#);assert_eq!(large["truncated"],true);assert_eq!(large["content"].as_str().unwrap().len(),65536);
+        assert_eq!(files.execute("search_project_files",r#"{"root":0,"path":".","query":"TWO"}"#)["matches"][0],json!({"path":"vault.md","line":2,"text":"two"}));
+        std::fs::write(temp.join("large.txt"),vec![b'x';1048577]).unwrap();assert!(files.execute("read_project_file",r#"{"root":0,"path":"large.txt"}"#).get("error").is_some());
         let outside=temp.with_extension("outside");std::fs::create_dir(&outside).unwrap();std::fs::write(outside.join("private.txt"),"outside").unwrap();
         let link=temp.join("escape");
         #[cfg(windows)] {
