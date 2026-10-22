@@ -352,7 +352,21 @@ cargo tauri dev
 `npm install`). Per un binario di produzione:
 
 ```bash
+cd desktop
 cargo tauri build   # produce l'installer NSIS in src-tauri/target/release/bundle/
+```
+
+Per compilare, installare e riavviare la build di prod con un solo comando
+(dalla root del repo):
+
+```powershell
+# Windows: chiude solo la copia installata, installa in silenzio e verifica l'exe
+powershell -ExecutionPolicy Bypass -File desktop\scripts\install-prod.ps1 [-SkipBuild] [-NoLaunch]
+```
+
+```bash
+# macOS: installa in /Applications/AuraChat.app
+bash desktop/scripts/install-prod.sh [--skip-build] [--no-launch]
 ```
 
 Su macOS servono Rust e gli strumenti da riga di comando di Xcode. La configurazione
