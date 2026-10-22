@@ -40,6 +40,8 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   await page.locator('.approval-card').waitFor();await page.locator('.approval-details > summary').click();
   assert.equal(await page.locator('.approval-details img').count(),0);assert.match(await page.locator('.approval-details pre').last().innerText(),/onerror/);
   assert.equal(await page.locator('[data-conversation-id="c"] .is-waiting').count(),2);
+  const dot=await page.locator('[data-conversation-id="c"] .is-waiting').first().evaluate(el=>{const r=el.getBoundingClientRect(),row=el.parentElement.getBoundingClientRect(),s=getComputedStyle(el);return {w:r.width,center:Math.abs(r.top+r.height/2-row.top-row.height/2),inside:r.right<=row.right,bg:s.backgroundColor,svg:el.querySelectorAll('svg').length};});
+  assert.deepEqual({w:dot.w,inside:dot.inside,bg:dot.bg,svg:dot.svg},{w:8,inside:true,bg:'rgb(245, 184, 61)',svg:0});assert(dot.center<1,`waiting dot centered: ${dot.center}`);
   await page.evaluate(()=>openConversation('other',false,'recents'));assert.equal(await page.locator('#permission-requests').isHidden(),true);
   await page.evaluate(()=>openConversation('c',false,'projects'));await page.locator('.approval-card').waitFor();
   await page.getByRole('button',{name:'Rifiuta',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.approval-card').length===0);

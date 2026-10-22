@@ -517,7 +517,6 @@ function conversationEl(conv, section) {
     const questionWaiting = pendingQuestions(conv.id).length > 0;
     const waiting = questionWaiting || [...(permissionRequests.get(conv.id)?.values() || [])].some(r => r.status === 'pending');
     spinner.className = `tree-conv__spinner${waiting ? ' is-waiting' : ''}`;
-    if (waiting) spinner.append(icon(questionWaiting ? 'chat' : 'shield'));
     spinner.setAttribute('role', 'status');
     spinner.setAttribute('aria-label', t(questionWaiting ? 'questions.waiting' : waiting ? 'permissions.waiting' : 'chat.thinking'));
     spinner.title = spinner.getAttribute('aria-label');

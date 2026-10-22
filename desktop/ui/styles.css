@@ -550,8 +550,8 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 .sidebar__scroll { scrollbar-color:var(--scrollbar-thumb) transparent; }
 .tree-actions,.section-actions,.tree-disclosure,.section-label .ui-icon { transition:opacity var(--motion-fast) ease-out,transform var(--motion-state) var(--motion-ease); }
 .tree-conv__spinner { border-color:var(--c-soft-border); border-top-color:var(--c-glow); }
-.tree-conv__spinner.is-waiting { width:16px; height:16px; border:0; border-radius:0; color:var(--c-glow); animation:none; }
-.tree-conv__spinner.is-waiting svg { width:16px; height:16px; }
+/* User input awaited: amber dot, distinct from the violet unread dot. */
+.tree-conv__spinner.is-waiting { width:8px; height:8px; margin-right:6px; border:0; border-radius:50%; background:#f5b83d; box-shadow:0 0 0 3px rgb(245 184 61 / .16); animation:none; }
 .icon-button:active,.tree-action:active,.model-select__trigger:active { transform:scale(.94); }
 .model-select__trigger { transition:background-color var(--motion-fast) ease-out,color var(--motion-fast) ease-out; }
 .is-working-text { color:transparent; background:linear-gradient(105deg,var(--c-text-muted) 35%,var(--c-text) 48%,var(--c-text-muted) 61%); background-size:240% 100%; background-clip:text; -webkit-background-clip:text; animation:reasoning-shimmer 2.4s linear infinite; }
