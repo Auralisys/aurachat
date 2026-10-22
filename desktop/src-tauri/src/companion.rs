@@ -433,7 +433,12 @@ async fn heartbeat_once(app:&tauri::AppHandle)->Result<(),String>{
     };
     let isolated=state.firestore.companion_isolated(&auth).await?;
     let mut skills=serde_json::Map::new();
+    let mut global_skills=json!({"skills":[],"truncated":false});
     if isolated {
+        global_skills=crate::skill_context(app,&uid,None)?.catalog(false)?;
+        if let Some(items)=global_skills["skills"].as_array_mut() {
+            if items.len()>50 {items.truncate(50);global_skills["truncated"]=json!(true);}
+        }
         for project in &project_ids {
             let mut catalog=crate::project_skill_catalog(app,&uid,project).await?;
             if let Some(items)=catalog["skills"].as_array_mut() {
@@ -444,7 +449,7 @@ async fn heartbeat_once(app:&tauri::AppHandle)->Result<(),String>{
     }
     let speech=state.speech.status();
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/devices/{id}"),
-        &json!({"name":name,"platform":"windows","identity_version":2,"last_seen":data::now_millis(),"protocol":3,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"speech":{"ready":speech.ready,"busy":speech.busy,"loading":speech.loading},"project_permissions":project_permissions,"project_skills":skills})).await?;
+        &json!({"name":name,"platform":"windows","identity_version":2,"last_seen":data::now_millis(),"protocol":4,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"speech":{"ready":speech.ready,"busy":speech.busy,"loading":speech.loading},"project_permissions":project_permissions,"project_skills":skills,"global_skills":global_skills})).await?;
     let tree=state.data.lock().unwrap().storage_tree()?;
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/companion/state"),&json!({"tree":tree})).await?;
     let outbox=state.config_dir.join("notification-outbox").join(&uid);
@@ -514,6 +519,42 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
         "stop_shell"=>return crate::stop_shell(app.state::<AppState>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["shell_id"].as_str().ok_or("invalid_shell")?.into()).await.map(|_|Value::Null),
         "approve"=>return app.state::<crate::approvals::Approvals>().resolve(uid,id,request["approval_id"].as_str().ok_or("invalid_approval")?,request["allow"].as_bool().ok_or("invalid_decision")?).map(|_|Value::Null),
         "model"=>return crate::set_conversation_model(app.state::<AppState>(),id.into(),request["model"].as_str().ok_or("invalid_model")?.into()).await.map(|_|Value::Null),
+        "skills_catalog"=>{
+            let context=crate::skill_context(app,uid,request["project_id"].as_str())?;
+            drop(account);
+            return tauri::async_runtime::spawn_blocking(move||context.catalog(true)).await.map_err(|e|e.to_string())?;
+        },
+        "skill_enabled"=>{
+            let context=crate::skill_context(app,uid,request["project_id"].as_str())?;
+            context.set_enabled(request["id"].as_str().ok_or("invalid_skill")?,request["enabled"].as_bool().ok_or("invalid_decision")?)?;
+            let _=app.emit("companion-permissions",json!({"project_id":request["project_id"]}));
+            return Ok(Value::Null);
+        },
+        "skills_search"=>{
+            let query=request["query"].as_str().ok_or("invalid_skill_query")?;
+            drop(account);
+            return crate::skills::search(query).await;
+        },
+        "skill_install"=>{
+            if request["confirm_install"]!=true {return Err("skill_install_confirmation_required".into());}
+            let source=request["source"].as_str().ok_or("invalid_skill_source")?.to_string();
+            let name=request["name"].as_str().ok_or("invalid_skill_name")?.to_string();
+            drop(account);
+            crate::install_skill(app.clone(),app.state::<AppState>(),source,name).await?;
+            let _=app.emit("companion-permissions",json!({}));
+            return Ok(Value::Null);
+        },
+        "rename_chat"|"delete_chat"=>{
+            let _save=state.history_save_lock.lock().await;
+            if state.running_chats.lock().unwrap().contains(id) {return Err("chat_in_progress".into());}
+            let local=state.data.lock().unwrap().clone();
+            let mut tree=state.firestore.refresh_tree_preserving_history(uid,auth,&local).await?;
+            change_chat(&mut tree,id,request)?;
+            state.firestore.save_tree(uid,auth,&tree).await?;
+            *state.data.lock().unwrap()=state.firestore.cached_tree(uid).unwrap_or(tree);
+            let _=app.emit("companion-updated",json!({"conversation_id":id}));
+            return Ok(Value::Null);
+        },
         "permission"=>{
             let mode=remote_permission_mode(request)?;
             let project=request["project_id"].as_str().ok_or("project_not_found")?;
@@ -573,6 +614,26 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
     crate::run_chat(app.clone(),app.state::<AppState>(),id.into(),content.into(),None,None,None,Some(uid.into())).await.map(|_|Value::Null)
 }
 
+fn change_chat(tree:&mut data::ChatData,id:&str,request:&Value)->Result<(),String>{
+    let conversation=tree.find_conversation(id).ok_or("conversation_not_found")?;
+    if request["expected_updated_at"].as_u64()!=Some(conversation.updated_at) || request["expected_title"].as_str()!=Some(&conversation.title) {
+        return Err("conversation_changed".into());
+    }
+    match request["action"].as_str() {
+        Some("rename_chat")=>{
+            let title=request["title"].as_str().map(str::trim).filter(|s|!s.is_empty() && s.chars().count()<=160 && !s.chars().any(char::is_control)).ok_or("invalid_chat_title")?;
+            tree.find_conversation_mut(id).ok_or("conversation_not_found")?.title=title.into();
+        },
+        Some("delete_chat")=>{
+            if request["confirm_delete"]!=true {return Err("chat_delete_confirmation_required".into());}
+            tree.conversations.retain(|c|c.id!=id);
+            for project in &mut tree.projects {project.conversations.retain(|c|c.id!=id);}
+        },
+        _=>return Err("unsupported_remote_action".into()),
+    }
+    Ok(())
+}
+
 fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,String>{
     let mode:crate::permissions::Mode=serde_json::from_value(request["mode"].clone()).map_err(|_|"invalid_permission_mode")?;
     if mode==crate::permissions::Mode::Full && request["confirm_full_access"]!=true {return Err("full_access_confirmation_required".into());}
@@ -581,6 +642,26 @@ fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,Strin
 
 #[cfg(test)]mod tests{
     use super::*;
+    #[test]
+    fn remote_chat_changes_are_scoped_confirmed_and_revision_checked() {
+        let chat=json!({"id":"chat","title":"Original","created_at":1,"updated_at":2,"context_tokens":0,"messages":[]});
+        let mut tree:data::ChatData=serde_json::from_value(json!({"projects":[{"id":"project","name":"Project","conversations":[chat]}],"conversations":[{"id":"other","title":"Other","created_at":1,"updated_at":2,"context_tokens":0}]})).unwrap();
+        let mut request=json!({"action":"rename_chat","expected_title":"Original","expected_updated_at":2,"title":" Renamed "});
+        change_chat(&mut tree,"chat",&request).unwrap();
+        assert_eq!(tree.find_conversation("chat").unwrap().title,"Renamed");
+        assert!(change_chat(&mut tree,"chat",&request).unwrap_err().contains("conversation_changed"));
+        request["expected_title"]="Renamed".into();request["title"]="   ".into();
+        assert!(change_chat(&mut tree,"chat",&request).is_err());
+        request["action"]="delete_chat".into();
+        assert!(change_chat(&mut tree,"chat",&request).unwrap_err().contains("confirmation"));
+        assert!(tree.find_conversation("chat").is_some());
+        request["confirm_delete"]=true.into();request["expected_updated_at"]=1.into();
+        assert!(change_chat(&mut tree,"chat",&request).is_err());
+        request["expected_updated_at"]=2.into();
+        change_chat(&mut tree,"chat",&request).unwrap();
+        assert!(tree.find_conversation("chat").is_none());assert!(tree.find_conversation("other").is_some());
+        assert_eq!(tree.projects.len(),1);
+    }
     #[test]fn remote_permissions_require_explicit_full_access_confirmation(){
         use crate::permissions::Mode;
         assert_eq!(remote_permission_mode(&json!({"mode":"ask"})).unwrap(),Mode::Ask);

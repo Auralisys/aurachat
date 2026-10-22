@@ -38,10 +38,11 @@ function renderSettingsAccount() {
 
 function selectSettingsTab(tab) {
   settingsTab = tab;
-  for (const name of ['general', 'account', 'inference', 'voice']) $('#settings-' + name).hidden = tab !== name;
+  for (const name of ['general', 'account', 'inference', 'voice', 'skills']) $('#settings-' + name).hidden = tab !== name;
   if (tab === 'account') renderSettingsAccount();
   if (tab === 'voice') refreshSpeechModel();
   if (tab === 'inference') renderProviders();
+  if (tab === 'skills') refreshSkillSettings(true);
   $('#settings-title').textContent = t('ui.' + tab);
   $('#settings-language').textContent = lang === 'it' ? 'Italiano' : 'English';
   document.querySelectorAll('.settings-nav [data-settings-tab]').forEach(button => {
@@ -201,6 +202,7 @@ function discardProviderEditor() {
 }
 
 function setupSettings() {
+  setupSkillSettings();
   $('#settings-search').oninput = filterSettings;
   $('#add-provider').onclick = () => editProvider();
   $('#settings-signout').onclick = async () => {

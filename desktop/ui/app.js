@@ -1492,7 +1492,7 @@ async function init() {
   setupComposerExtras();
   setupSidebarSections();
   await setupActivity();
-  await appWindow.listen('companion-permissions', () => {refreshPermissions();skillsChooser?.invalidate();});
+  await appWindow.listen('companion-permissions', () => {refreshPermissions();skillsChooser?.invalidate();if(settingsTab==='skills')refreshSkillSettings();});
   await appWindow.listen('companion-started', async ({payload}) => {
     const id = payload?.conversation_id;if (!id || state.runs.get(id)?.pending) return;
     const run = {pending:true, external:true, since:Date.now(), messages:[], usage:null};
@@ -1512,6 +1512,7 @@ async function init() {
     try {
       const data = await invoke('get_data');
       state.data = data;state.persistedData = structuredClone(data);
+      if (state.activeConversationId && !findConversation(state.activeConversationId)) clearChat();
       const active = findConversation(state.activeConversationId)?.conversation;
       if (active?.messages_loaded) { state.messages = active.messages;renderMessages();updateContextInfo(); }
       if (run?.external) {run.messages=conversationInData(data,payload.conversation_id)?.messages || run.messages;stopTimer();}

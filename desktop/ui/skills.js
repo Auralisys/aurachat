@@ -46,8 +46,7 @@ function setupProjectSkills() {
     if (search === null || dismissed) {close();return;}
     panel.hidden = false;input.setAttribute('aria-expanded', 'true');
     retry.hidden = !failed;list.replaceChildren();rows = [];
-    if (!projectId()) status.textContent = t('skills.no_project');
-    else if (pending) status.textContent = t('skills.loading');
+    if (pending) status.textContent = t('skills.loading');
     else if (failed) status.textContent = t('skills.failed');
     else if (catalog) {
       const counts = new Map();
@@ -63,7 +62,7 @@ function setupProjectSkills() {
         const name = document.createElement('span');name.className = 'skill-option__name';name.textContent = `/${skill.name}`;
         const description = document.createElement('span');description.textContent = skill.description;
         const source = document.createElement('span');source.className = 'skill-option__source';
-        source.textContent = `${t('skills.root')} ${skill.root} · ${skill.path}${skill.duplicate ? ` · ${t('skills.duplicate_short')}` : ''}`;
+        source.textContent = `${skill.scope === 'global' ? t('skills.global') : `${t('skills.root')} ${skill.root}`} · ${skill.path}${skill.duplicate ? ` · ${t('skills.duplicate_short')}` : ''}`;
         row.append(name, description, source);
         row.addEventListener('pointerdown', event => event.preventDefault());
         row.addEventListener('click', () => choose(index));list.append(row);
@@ -81,7 +80,8 @@ function setupProjectSkills() {
       catalog = {truncated:!!result.truncated, skills:result.skills.filter(skill =>
         typeof skill.name === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(skill.name) &&
         Number.isSafeInteger(skill.root) && skill.root >= 0 && typeof skill.description === 'string' &&
-        ['.agents', '.codex', '.aurachat'].some(base => skill.path === `${base}/skills/${skill.name}/SKILL.md`))};
+        skill.enabled !== false && !skill.shadowed &&
+        ['.agents', '.codex', '.aurachat', '.claude', '.cursor', '.github', '.copilot'].some(base => skill.path === `${base}/skills/${skill.name}/SKILL.md`))};
     } catch (_) {
       if (request !== epoch || key !== contextKey() || key !== context) return;
       failed = true;
@@ -93,9 +93,10 @@ function setupProjectSkills() {
     const key = contextKey();
     if (key !== context) {close();context = key;dismissed = false;selected = 0;}
     if (query() === null || dismissed) {if (!panel.hidden) close();return;}
-    if (projectId() && !catalog && !pending && !failed) {fetchCatalog();return;}
+    if (!catalog && !pending && !failed) {fetchCatalog();return;}
     render();
   }
+
   function invalidate() {close();context = '';sync();}
   input.addEventListener('input', () => {dismissed = false;sync();});
   input.addEventListener('focus', () => {dismissed = false;sync();});
@@ -116,3 +117,136 @@ function setupProjectSkills() {
   document.addEventListener('pointerdown', event => {if (event.target !== input && !panel.contains(event.target)) {dismissed = true;close();}});
   return {sync, invalidate};
 }
+
+  let skillSettingsEpoch = 0;
+  let skillDirectoryEpoch = 0;
+  let skillSettingsCatalog = [];
+  let skillInstallBusy = false;
+
+  function skillSettingsKey() {
+    return JSON.stringify([state.config.firebase_email, $('#skills-project').value]);
+  }
+
+  function skillSettingsError(error) {
+    $('#skills-settings-error').textContent = localizeError(error);
+    $('#skills-settings-error').hidden = false;
+  }
+
+  async function refreshSkillSettings(populate = false) {
+    skillDirectoryEpoch++;
+    const select = $('#skills-project');
+    if (populate) {
+      select.replaceChildren(new Option(t('skills.global_only'), ''));
+      for (const project of state.data.projects) select.append(new Option(project.name, project.id));
+      select.value = findConversation(state.activeConversationId)?.project?.id || state.pendingProjectId || '';
+      $('#skills-query').value = '';$('#skills-directory').replaceChildren();
+    }
+    const request = ++skillSettingsEpoch, key = skillSettingsKey();
+    $('#skills-settings-error').hidden = true;
+    $('#skills-installed').replaceChildren();
+    $('#skills-settings-status').textContent = t('skills.loading');
+    $('#skills-refresh').disabled = true;
+    skillSettingsCatalog = [];
+    try {
+      const result = await invoke('project_skills', {project_id:select.value || null, include_disabled:true});
+      if (request !== skillSettingsEpoch || key !== skillSettingsKey()) return;
+      if (!result || !Array.isArray(result.skills)) throw new Error(t('skills.failed'));
+      skillSettingsCatalog = result.skills;
+      $('#skills-settings-status').textContent = result.truncated ? t('skills.truncated') : '';
+      renderInstalledSkills();
+    } catch (e) {
+      if (request === skillSettingsEpoch && key === skillSettingsKey()) {$('#skills-settings-status').textContent = '';skillSettingsError(e);}
+    } finally {if (request === skillSettingsEpoch) $('#skills-refresh').disabled = false;}
+  }
+
+  function renderInstalledSkills() {
+    const query = $('#skills-query').value.trim().toLocaleLowerCase();
+    const list = $('#skills-installed');list.replaceChildren();
+    const rows = skillSettingsCatalog.filter(skill => `${skill.name} ${skill.description} ${skill.scope}`.toLocaleLowerCase().includes(query));
+    $('#skills-search-directory').disabled = skillInstallBusy || query.length < 2;
+    if (!rows.length) list.append(settingsElement('p', 'skills-empty', t(query ? 'skills.no_match' : 'skills.empty')));
+    for (const skill of rows) {
+      const row = settingsElement('label', 'skill-setting-row');
+      const info = settingsElement('span', 'skill-setting-info');
+      info.append(settingsElement('strong', '', `/${skill.name}`), settingsElement('span', '', skill.description),
+        settingsElement('small', '', `${t(skill.scope === 'global' ? 'skills.global' : 'skills.project')} · ${skill.path}${skill.shadowed ? ` · ${t('skills.shadowed')}` : ''}`));
+      const toggle = document.createElement('input');toggle.type = 'checkbox';toggle.role = 'switch';
+      toggle.className = 'skill-toggle';toggle.checked = skill.enabled !== false;toggle.disabled = skillInstallBusy;
+      toggle.setAttribute('aria-label', `${t('skills.enable')} /${skill.name} · ${t(skill.scope === 'global' ? 'skills.global' : 'skills.project')}`);
+      toggle.onchange = async () => {
+        const enabled = toggle.checked, key = skillSettingsKey();
+        toggle.disabled = true;$('#skills-settings-error').hidden = true;
+        try {
+          await invoke('set_skill_enabled', {project_id:$('#skills-project').value || null,id:skill.id,enabled});
+          if (key !== skillSettingsKey()) return;
+          skill.enabled = enabled;skillsChooser?.invalidate();
+        } catch (e) {if (key === skillSettingsKey()) {toggle.checked = !enabled;skillSettingsError(e);}}
+        finally {toggle.disabled = false;}
+      };
+      row.append(info,toggle);list.append(row);
+    }
+  }
+
+  async function searchSkillDirectory(event) {
+    event.preventDefault();
+    if (skillInstallBusy) return;
+    const query = $('#skills-query').value.trim();
+    if (query.length < 2) return;
+    const request = ++skillDirectoryEpoch, key = skillSettingsKey(), list = $('#skills-directory');
+    $('#skills-settings-error').hidden = true;list.replaceChildren();
+    $('#skills-settings-status').textContent = t('skills.searching');
+    $('#skills-search-directory').disabled = true;
+    try {
+      const result = await invoke('search_skills', {query});
+      if (request !== skillDirectoryEpoch || key !== skillSettingsKey() || query !== $('#skills-query').value.trim()) return;
+      if (!result || !Array.isArray(result.skills)) throw new Error(t('skills.failed'));
+      $('#skills-settings-status').textContent = result.skills.length ? t('skills.directory_results') : t('skills.directory_empty');
+      for (const skill of result.skills) {
+        const row = settingsElement('div', 'skill-setting-row');
+        const info = settingsElement('span', 'skill-setting-info');
+        info.append(settingsElement('strong', '', skill.name), settingsElement('small', '', skill.source));
+        const install = settingsElement('button', 'btn', t('skills.install'));install.type = 'button';
+        install.onclick = () => installDirectorySkill(skill);
+        row.append(info,install);list.append(row);
+      }
+    } catch (e) {if (request === skillDirectoryEpoch && key === skillSettingsKey()) {$('#skills-settings-status').textContent = '';skillSettingsError(e);}}
+    finally {if (request === skillDirectoryEpoch) $('#skills-search-directory').disabled = false;}
+  }
+
+  async function installDirectorySkill(skill) {
+    if (skillInstallBusy) return;
+    const question = t('skills.install_confirm').replace('{name}', skill.name).replace('{source}', skill.source);
+    if (!confirm(question)) return;
+    skillInstallBusy = true;
+    const key = skillSettingsKey();
+    $('#skills-settings-error').hidden = true;
+    $('#skills-settings-status').textContent = t('skills.installing');
+    $('#settings-skills').setAttribute('aria-busy','true');
+    const controls = [...$('#settings-skills').querySelectorAll('button,input,select')];
+    controls.forEach(control => control.disabled = true);
+    try {
+      await invoke('install_skill', {source:skill.source,name:skill.name});
+      skillsChooser?.invalidate();
+      if (key === skillSettingsKey()) {
+        $('#skills-query').value = '';$('#skills-directory').replaceChildren();
+        await refreshSkillSettings();
+        $('#skills-settings-status').textContent = t('skills.installed').replace('{name}',skill.name);
+      }
+    } catch (e) {if (key === skillSettingsKey()) {$('#skills-settings-status').textContent = '';skillSettingsError(e);}}
+    finally {
+      skillInstallBusy = false;$('#settings-skills').removeAttribute('aria-busy');
+      controls.forEach(control => control.disabled = false);
+      $('#skills-search-directory').disabled = $('#skills-query').value.trim().length < 2;
+      renderInstalledSkills();
+    }
+  }
+
+  function setupSkillSettings() {
+    $('#skills-project').onchange = () => {$('#skills-directory').replaceChildren();refreshSkillSettings();};
+    $('#skills-refresh').onclick = () => refreshSkillSettings();
+    $('#skills-directory-search').onsubmit = searchSkillDirectory;
+    $('#skills-query').oninput = () => {
+      skillDirectoryEpoch++;
+      $('#skills-settings-status').textContent = '';$('#skills-directory').replaceChildren();renderInstalledSkills();
+    };
+  }

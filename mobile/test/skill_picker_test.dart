@@ -104,13 +104,41 @@ void main() {
     );
   });
 
-  testWidgets('no project explains how to access skills', (tester) async {
+  testWidgets('empty free chat points to skills management', (tester) async {
     await mount(tester, hasProject: false);
     await tester.enterText(find.byType(TextField), '/');
     await tester.pumpAndSettle();
-    expect(find.text('Scegli un progetto per usare le skill.'), findsOneWidget);
+    expect(
+      find.text('Nessuna skill disponibile. Gestiscile da Menu > Skill.'),
+      findsOneWidget,
+    );
     expect(find.byType(ListTile), findsNothing);
     expect(find.text('Nessuna skill disponibile nel progetto.'), findsNothing);
+  });
+
+  testWidgets('free chats expose global skills but not disabled skills', (
+    tester,
+  ) async {
+    await mount(
+      tester,
+      hasProject: false,
+      skills: const [
+        {
+          'name': 'impeccable',
+          'description': 'Design interfaces',
+          'scope': 'global',
+        },
+        {'name': 'disabled', 'enabled': false},
+        {'name': 'shadowed', 'shadowed': true},
+      ],
+    );
+    await tester.enterText(find.byType(TextField), '/');
+    await tester.pumpAndSettle();
+    expect(find.text('/impeccable'), findsOneWidget);
+    expect(find.text('/disabled'), findsNothing);
+    expect(find.text('/shadowed'), findsNothing);
+    await tester.tap(find.text('/impeccable'));
+    expect(controller.text, '/impeccable ');
   });
 
   testWidgets('typing a trailing prompt hides suggestions', (tester) async {

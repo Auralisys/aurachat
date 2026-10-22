@@ -159,6 +159,7 @@
             <button data-settings-tab="account"><svg data-icon="person" aria-hidden="true"></svg><span data-i18n="ui.account"></span></button>
             <button data-settings-tab="inference"><svg data-icon="cpu" aria-hidden="true"></svg><span data-i18n="ui.inference"></span></button>
             <button data-settings-tab="voice"><svg data-icon="microphone" aria-hidden="true"></svg><span data-i18n="ui.voice"></span></button>
+            <button data-settings-tab="skills"><svg data-icon="file" aria-hidden="true"></svg><span data-i18n="ui.skills"></span></button>
           </div>
           <p id="settings-no-results" class="settings-hint" data-i18n="settings.no_results" role="status" hidden></p>
           <span class="settings-brand">AuraChat</span>
@@ -179,6 +180,18 @@
           <div id="providers-overview"><div class="settings-section-head"><div><h3 data-i18n="settings.configured_providers"></h3><p data-i18n="settings.providers_note"></p></div><button id="add-provider" class="btn settings-add"><svg data-icon="plus" aria-hidden="true"></svg><span data-i18n="settings.add_provider"></span></button></div><div id="provider-list"></div><p class="settings-hint" data-i18n="settings.compatibility"></p></div>
           <div id="provider-editor" hidden></div>
           <p id="provider-feedback" class="form__error" role="alert" hidden></p>
+        </section>
+        <section id="settings-skills" hidden>
+          <div class="settings-section-head"><div><h3 data-i18n="skills.settings_title"></h3><p data-i18n="skills.settings_note"></p></div><button id="skills-refresh" class="btn" data-i18n="skills.refresh"></button></div>
+          <label class="field"><span class="field__label" data-i18n="skills.scope"></span><select id="skills-project" class="field__input"></select></label>
+          <form id="skills-directory-search" class="skills-search-form">
+            <label class="field"><span class="field__label" data-i18n="skills.search_label"></span><input id="skills-query" type="search" class="field__input" maxlength="100" autocomplete="off" data-i18n-placeholder="skills.search_placeholder" /></label>
+            <button id="skills-search-directory" class="btn" type="submit" data-i18n="skills.search_directory" disabled></button>
+          </form>
+          <p id="skills-settings-status" class="settings-hint" role="status" aria-live="polite"></p>
+          <p id="skills-settings-error" class="form__error" role="alert" hidden></p>
+          <div id="skills-installed"></div><div id="skills-directory"></div>
+          <p class="settings-hint" data-i18n="skills.install_note"></p>
         </section></div>
       </div>
     </div>

@@ -165,6 +165,47 @@ class Companion {
     return request.id;
   }
 
+  Future<Map<String, dynamic>> control(
+    String device,
+    String conversation,
+    String action,
+    Map<String, dynamic> arguments,
+  ) async {
+    final id = await send(
+      device,
+      conversation,
+      '',
+      action: action,
+      extra: arguments,
+    );
+    final snapshot = await requests(device)
+        .doc(id)
+        .snapshots()
+        .firstWhere(
+          (s) => [
+            'completed',
+            'failed',
+            'cancelled',
+          ].contains(s.data()?['status']),
+        )
+        .timeout(
+          Duration(seconds: action == 'skill_install' ? 210 : 45),
+          onTimeout: () => throw StateError(
+            'Esito non confermato. Controlla sul PC prima di riprovare.',
+          ),
+        );
+    final data = snapshot.data();
+    if (data?['status'] != 'completed') {
+      throw StateError(
+        (data?['error'] ?? 'Operazione annullata sul PC').toString(),
+      );
+    }
+    final result = data?['result'];
+    if (result == null) return {};
+    if (result is! Map) throw StateError('Risposta del PC non valida.');
+    return Map<String, dynamic>.from(result);
+  }
+
   /// Uploads a 16 kHz mono WAV in Firestore-sized parts, asks the desktop to
   /// transcribe it and returns the recognised text.
   Future<String> transcribe(

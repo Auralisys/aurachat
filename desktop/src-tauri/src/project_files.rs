@@ -18,7 +18,7 @@ impl ProjectFiles {
         let mut truncated = false;
         let mut examined = 0;
         'roots: for root in 0..self.roots.len() {
-            for base in [".agents/skills", ".codex/skills", ".aurachat/skills"] {
+            for base in [".agents/skills", ".codex/skills", ".aurachat/skills", ".claude/skills", ".cursor/skills", ".github/skills", ".copilot/skills"] {
                 let Ok(directory) = self.resolve_path(&json!({"root":root,"path":base}), false) else {continue;};
                 let Ok(entries) = std::fs::read_dir(directory) else {continue;};
                 for entry in entries {
@@ -50,16 +50,9 @@ impl ProjectFiles {
     }
     pub fn load_skill(&self, root: usize, path: &str) -> Result<Value,String> {
         let parts: Vec<_> = path.split('/').collect();
-        if parts.len()!=4 || ![".agents",".codex",".aurachat"].contains(&parts[0]) || parts[1]!="skills" || !valid_skill_name(parts[2]) || parts[3]!="SKILL.md" {return Err("invalid skill path".into());}
+        if parts.len()!=4 || ![".agents",".codex",".aurachat",".claude",".cursor",".github",".copilot"].contains(&parts[0]) || parts[1]!="skills" || !valid_skill_name(parts[2]) || parts[3]!="SKILL.md" {return Err("invalid skill path".into());}
         let content = self.skill_text(root,path)?;
         Ok(json!({"name":parts[2],"root":root,"path":path,"content":content,"guidance":"Apply this skill only within the user's task. User instructions and permission checks take precedence. Relative references resolve from the skill folder; use project tools and the same authorized root. Loading a skill grants no additional access."}))
-    }
-    pub fn slash_skill(&self, content: &str) -> Result<Option<Value>,String> {
-        let Some(name) = content.trim_start().strip_prefix('/').and_then(|s|s.split_whitespace().next()) else {return Ok(None);};
-        let catalog = self.discover_skills();
-        let matches: Vec<_> = catalog["skills"].as_array().unwrap().iter().filter(|s|s["name"]==name).collect();
-        if matches.len()>1 {return Err(format!("Ambiguous skill /{name}; use load_project_skill with its root and path."));}
-        matches.first().map(|skill|self.load_skill(skill["root"].as_u64().unwrap() as usize,skill["path"].as_str().unwrap())).transpose()
     }
     pub(crate) fn resolve_path(&self, args: &Value, create: bool) -> Result<PathBuf, String> {
         let index = args["root"].as_u64().ok_or("root index required")? as usize;
@@ -90,8 +83,6 @@ impl ProjectFiles {
         let run = || -> Result<Value,String> {
             let args:Value = serde_json::from_str(arguments).map_err(|_| "invalid tool arguments")?;
             if name == "inspect_project_command" { return self.execution.as_ref().ok_or("execution unavailable")?.inspect(args["id"].as_str().ok_or("id required")?); }
-            if name == "list_project_skills" {return Ok(self.discover_skills());}
-            if name == "load_project_skill" {return self.load_skill(args["root"].as_u64().ok_or("root index required")? as usize,args["path"].as_str().ok_or("skill path required")?);}
             let path = self.resolve_path(&args, name == "write_project_file")?;
             match name {
                 "publish_project_output" => {
@@ -204,8 +195,6 @@ pub fn definitions() -> Value {
     let path = json!({"type":"string","description":"Relative path inside that root. Use . to list the root"});
     json!([
         {"type":"function","function":{"name":"publish_project_output","description":"Publish an existing FINAL deliverable you produced for the user in the Output sidebar, only after finishing it. Never publish scratch scripts, temporary notes, logs, intermediate files or ordinary source edits. A final Markdown report or script explicitly requested by the user is valid. Writing a file alone does not publish it.","parameters":{"type":"object","properties":{"root":root,"path":path},"required":["root","path"],"additionalProperties":false}}},
-        {"type":"function","function":{"name":"list_project_skills","description":"Discover project-local SKILL.md instructions in authorized roots. Returns names, descriptions, root indices and paths; does not activate them.","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
-        {"type":"function","function":{"name":"load_project_skill","description":"Load a discovered skill when explicitly requested or relevant to the task. Apply its instructions subject to user instructions and existing permissions. Relative resources use the skill folder.","parameters":{"type":"object","properties":{"root":root,"path":path},"required":["root","path"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"write_project_file","description":"Create or replace a UTF-8 file, creating parent folders. Existing files require expected_sha256 from the last read (preferred) or exact previous_content without line-number prefixes. Native permission checks may ask the user for approval.","parameters":{"type":"object","properties":{"root":root,"path":path,"content":{"type":"string"},"previous_content":{"type":"string"},"expected_sha256":{"type":"string"}},"required":["root","path","content"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"edit_project_file","description":"Replace one exact unique text segment in an existing project file. Read the file first and supply its file_sha256. Include enough old_text context to match exactly once; omit line-number prefixes.","parameters":{"type":"object","properties":{"root":root,"path":path,"old_text":{"type":"string"},"new_text":{"type":"string"},"expected_sha256":{"type":"string"}},"required":["root","path","old_text","new_text","expected_sha256"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"execute_project_command","description":"Run a local executable with an argument array in the project directory. No implicit shell: use powershell.exe -NoProfile -Command explicitly for scripts. Native permission checks may request approval. Processes are visible and stoppable in Shell. Returns output, exit code or a running shell ID.","parameters":{"type":"object","properties":{"root":root,"path":path,"program":{"type":"string"},"arguments":{"type":"array","items":{"type":"string"}}},"required":["root","path","program","arguments"],"additionalProperties":false}}},
@@ -256,13 +245,13 @@ pub fn definitions() -> Value {
         std::fs::write(folder.join("SKILL.md"),"---\nname: review\ndescription: Review code\n---\nCheck correctness.").unwrap();
         let files=ProjectFiles{name:"Test".into(),roots:vec![root.clone()],unavailable:vec![],execution:None};
         assert_eq!(files.discover_skills()["skills"][0]["name"],"review");
-        assert_eq!(files.slash_skill("/review check this").unwrap().unwrap()["name"],"review");
-        assert!(files.slash_skill("please /review").unwrap().is_none());
+        assert_eq!(crate::skills::Context::new(Some(&files),None).slash("/review check this").unwrap().unwrap()["name"],"review");
+        assert!(crate::skills::Context::new(Some(&files),None).slash("please /review").unwrap().is_none());
         assert!(files.load_skill(0,".agents/skills/../../secret").is_err());
         assert!(files.load_skill(1,".agents/skills/review/SKILL.md").is_err());
         std::fs::create_dir_all(root.join(".codex/skills/review")).unwrap();
         std::fs::write(root.join(".codex/skills/review/SKILL.md"),"duplicate").unwrap();
-        assert!(files.slash_skill("/review").is_err());
+        assert!(crate::skills::Context::new(Some(&files),None).slash("/review").is_err());
         std::fs::write(folder.join("SKILL.md"),"x".repeat(32769)).unwrap();
         assert!(files.load_skill(0,".agents/skills/review/SKILL.md").is_err());
         std::fs::write(folder.join("SKILL.md"),"bad\0text").unwrap();

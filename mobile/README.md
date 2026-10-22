@@ -74,6 +74,27 @@ possono impedire la visualizzazione. Il logout rimuove la registrazione push.
 
 ## Interfaccia mobile — 18 ottobre 2026
 
+Aggiornamento 22 ottobre: nella chat aperta il pulsante in alto a destra e
+**Opzioni chat** (`...`): rinomina, copia conversazione ed elimina con conferma.
+Nuova chat resta nella home e nel menu laterale, non nel dettaglio.
+Rinomina/eliminazione richiedono PC online e fermo per quella chat; la coda
+locale di messaggi deve essere vuota. Il PC ricontrolla titolo e timestamp:
+una chat modificata nel frattempo non viene cancellata. La copia usa il testo
+caricato sul telefono, senza inviarlo a servizi esterni.
+
+**Menu > Skill** gestisce le skill del PC selezionato: globali, oppure globali
+e del progetto scelto. Le skill sono attive di base; gli interruttori persistono
+sul PC per account AuraChat e non modificano gli altri editor. `/nome` mostra
+anche le globali nelle chat libere. Il progetto ha precedenza per nomi omonimi;
+le disattivate non compaiono nel picker e non sono caricabili dal modello.
+Le istruzioni gia presenti in una conversazione non vengono eliminate.
+La ricerca filtra la lista; **Cerca su skills.sh** cerca nel catalogo pubblico
+tramite il PC. **Installa** mostra repository, PC e ambito globale e richiede
+conferma prima di scaricare/eseguire npx sul desktop (Node.js 22.20+ e Git).
+Non installa codice Android o software sul telefono. Richiede desktop con
+protocollo 4; desktop vecchi mostrano un invito ad aggiornare.
+Timeout/esiti incerti non vengono ritentati automaticamente: controllare il PC.
+
 Home con progetti espandibili e recenti, ricerca e campo compatto in basso,
 ispirata ai riferimenti iOS forniti dall'utente. Palette del desktop e bolle
 utente viola. Menu laterale per navigazione e account; controlli circolari da

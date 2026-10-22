@@ -718,13 +718,54 @@ dopo un giorno. Le notifiche di fine risposta mostrano titolo della chat e primi
 
 ## Skill e stato dei processi — 18 ottobre 2026
 
-Il compositore mostra un catalogo `/` per il progetto corrente; tastiera
-(frecce/Invio/Escape), stato di caricamento, duplicati ed errori hanno feedback
-esplicito. `project_skills` è autenticato e legge solo root già concesse.
-`list_project_skills` e `load_project_skill` sono tool reali del modello;
-`/nome` carica la skill prima dell’inferenza e registra l’attività. Discovery
-in `.agents/skills`, `.codex/skills` e `.aurachat/skills`, budget globale di
-200 entry, file fino a 32 KiB. I permessi restano quelli del progetto.
+Il compositore mostra un catalogo `/` di skill globali e del progetto corrente,
+con frecce/Invio/Escape, caricamento, duplicati, errori e riprova.
+Le globali sono disponibili anche nelle chat libere: per esempio `/impeccable`
+carica l'Impeccable presente nella home dell'utente. `project_skills` resta
+autenticato; le skill di progetto richiedono root gia concesse.
+Discovery in `.agents/skills`, `.codex/skills`, `.aurachat/skills`,
+`.claude/skills`, `.cursor/skills`, `.github/skills` e `.copilot/skills`,
+sia nella home sia nelle root autorizzate:
+200 entry per ambito, SKILL.md UTF-8 fino a 32 KiB. Alias dello stesso file
+canonico non sono duplicati; per `/nome` il progetto precede la globale.
+Duplicati distinti nello stesso ambito richiedono una scelta esplicita per id.
+`list_project_skills`, `load_project_skill` e `read_skill_resource` sono tool
+reali, disponibili anche ai subagenti. `/nome` carica la skill prima
+dell'inferenza e registra l'attivita. I riferimenti UTF-8 fino a 128 KiB sono
+leggibili solo dentro la directory della skill, senza traversal/link esterni.
+I permessi su file e comandi non cambiano: leggere una skill globale non
+autorizza comandi, script o altre cartelle nelle chat libere.
+
+**Impostazioni > Skill** elenca globali e progetto selezionato, con ricerca
+locale e interruttori attivi per impostazione predefinita. Le disattivazioni
+sono salvate su questo PC, separate per account in
+`<app_config_dir>\skills\<SHA-256 UID>.json`; non toccano altri editor e bloccano
+catalogo, caricamento slash/tool e riferimenti nei richiami successivi.
+Non cancellano istruzioni gia caricate nella conversazione o nei turni avviati.
+Una skill di progetto disattivata non ripiega silenziosamente su un'omonima globale.
+
+Il pulsante **Cerca su skills.sh** invia solo la query al catalogo pubblico,
+senza lanciare npx a ogni ricerca. Ogni risultato mostra nome e repository;
+**Installa** chiede conferma prima di eseguire
+`npx --yes skills add owner/repo --skill nome --global --agent codex --yes`.
+Sono necessari Node.js 22.20+ e Git; la skill e globale per l'utente del PC,
+quindi disponibile anche negli editor compatibili, non isolata per account AuraChat.
+Il CLI viene scaricato da npm, la sorgente da GitHub; installare solo repository
+affidabili. Telemetria del CLI disabilitata. Argomenti validati, niente sorgenti
+shell arbitrarie, una sola installazione per volta, timeout 180 secondi e
+verifica del catalogo dopo l'uscita: gli errori non diventano successi.
+Un timeout puo lasciare file parziali: aggiornare prima di riprovare.
+L'app non aggiorna/sovrascrive automaticamente skill gia presenti e non le disinstalla.
+
+Il companion Android usa lo stesso catalogo e le stesse preferenze del PC scelto.
+Protocollo 4: `global_skills` serve le chat libere; `skills_catalog`,
+`skill_enabled`, `skills_search` e `skill_install` usano richieste autenticate
+al desktop. Il telefono non esegue npx e non legge la propria home.
+L'installazione richiede conferma esplicita anche nel protocollo remoto.
+Il menu `...` del dettaglio chat mobile offre rinomina, copia ed eliminazione,
+non Nuova chat. Le mutazioni sono bloccate durante i turni; eliminazione con
+conferma e controllo di titolo/timestamp per non cancellare una chat cambiata
+dopo l'anteprima. Salvano lo stesso albero Firestore del desktop.
 
 Un tool shell che restituisce un processo running rimane running; gli eventi
 shell aggiornano stato/output e non rilanciano comandi. Fermare il turno

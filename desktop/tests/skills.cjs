@@ -35,8 +35,13 @@ const assert = require('node:assert/strict');
     const fulfill = (index, skills, truncated = false) => page.evaluate(({index,skills,truncated}) => __skillRequests[index].resolve({skills,truncated}), {index,skills,truncated});
     const open = async () => {await input.focus();await input.fill('/');};
 
-    // No project means no native catalog request, including on free chats.
-    await selectProject(null);await open();assert.equal(await status.textContent(), locales.it['skills.no_project']);assert.equal(await count(), 0);
+    // Global skills are available in free chats, without granting project access.
+    await selectProject(null);await open();await page.waitForFunction(() => __skillRequests.length === 1);
+    assert.equal(await page.evaluate(() => __skillRequests[0].project), null);
+    await fulfill(0,[{...skill('impeccable','Global design skill'),scope:'global',id:'global:fixture'}]);
+    await options.first().waitFor();assert.match(await options.first().textContent(), /Globale/);
+    await input.fill('/impeccable');await input.press('Enter');assert.equal(await input.inputValue(), '/impeccable ');
+    await page.evaluate(() => __skillRequests=[]);
     await input.press('Escape');assert.equal(await chooser.isHidden(), true);
     await selectProject('p');await open();await page.waitForFunction(() => __skillRequests.length === 1);
     assert.equal(await page.evaluate(() => __skillRequests[0].project), 'p');
@@ -99,7 +104,7 @@ const assert = require('node:assert/strict');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.evaluate(english => {lang='en';strings=english;applyTranslations();skillsChooser.invalidate();}, locales.en);
     await fulfill((await count()) - 1, []);
-    await page.waitForFunction(() => document.querySelector('#skill-status').textContent === 'No matching project skills.');
+    await page.waitForFunction(text => document.querySelector('#skill-status').textContent === text,locales.en['skills.no_match']);
     assert.equal(await page.locator('#skill-title').textContent(), locales.en['skills.title']);
     // Verify translation keys without depending on OS/browser language detection.
     for (const locale of Object.values(locales)) {

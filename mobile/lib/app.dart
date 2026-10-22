@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:record/record.dart';
@@ -18,6 +19,8 @@ import 'skill_picker.dart';
 import 'aura_icons.dart';
 import 'message_queue.dart';
 import 'queued_bubble.dart';
+import 'skills_page.dart';
+import 'chat_actions.dart';
 
 final push = PushNotifications();
 void startAuraChat() {
@@ -1089,6 +1092,114 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     composerFocus.requestFocus();
   }
 
+  Future<void> openSkills() async {
+    final target = deviceId;
+    if (target == null || !online) {
+      setState(() => error = 'Collega un PC disponibile per gestire le skill.');
+      return;
+    }
+    if (((device?['protocol'] as num?)?.toInt() ?? 0) < 4) {
+      setState(() => error = 'Aggiorna AuraChat sul PC per gestire le skill.');
+      return;
+    }
+    composerFocus.unfocus();
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => SkillsPage(
+          pcName: device?['name']?.toString() ?? 'PC selezionato',
+          projects: projects,
+          initialProject: projectId,
+          request: (action, arguments) =>
+              api.control(target, const Uuid().v4(), action, arguments),
+        ),
+      ),
+    );
+  }
+
+  Future<void> chatAction(ChatAction action) async {
+    final chat = chats.where((c) => c['id'] == conversationId).firstOrNull;
+    if (chat == null) return;
+    final id = chat['id'] as String;
+    if (action == ChatAction.copy) {
+      await Clipboard.setData(
+        ClipboardData(
+          text: messages
+              .map(
+                (m) =>
+                    '${m['role'] == 'user' ? 'Tu' : 'AuraChat'}:\n${m['content'] ?? ''}',
+              )
+              .join('\n\n'),
+        ),
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Conversazione copiata')));
+      }
+      return;
+    }
+    final target = deviceId;
+    if (target == null ||
+        !online ||
+        workingChats.contains(id) ||
+        (currentQueue?.drafts.isNotEmpty ?? false)) {
+      return;
+    }
+    if (((device?['protocol'] as num?)?.toInt() ?? 0) < 4) {
+      setState(
+        () => error = 'Aggiorna AuraChat sul PC per modificare la chat.',
+      );
+      return;
+    }
+    final extra = <String, dynamic>{
+      'expected_updated_at': chat['updated_at'],
+      'expected_title': chat['title'],
+    };
+    if (action == ChatAction.rename) {
+      final title = await showDialog<String>(
+        context: context,
+        builder: (_) => RenameChatDialog(title: chat['title'].toString()),
+      );
+      if (!mounted || title == null || title == chat['title']) return;
+      extra['title'] = title;
+    } else {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Eliminare questa chat?'),
+          content: Text(
+            '“${chat['title']}” verrà eliminata dalla cronologia sincronizzata, anche sul PC. L’operazione non è annullabile.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Annulla'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Elimina chat'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || confirmed != true) return;
+      extra['confirm_delete'] = true;
+    }
+    try {
+      await api.control(
+        target,
+        id,
+        action == ChatAction.rename ? 'rename_chat' : 'delete_chat',
+        extra,
+      );
+      if (mounted && conversationId == id && action == ChatAction.delete) {
+        openLibrary();
+      }
+    } catch (e) {
+      if (mounted) setState(() => error = e.toString());
+    }
+  }
+
   Map<String, dynamic> get projects =>
       Map<String, dynamic>.from(tree['projects'] ?? {});
 
@@ -1127,6 +1238,20 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       .toList();
 
   String? get projectName => projects[projectId]?['name']?.toString();
+
+  List<Map<String, dynamic>> get availableSkills {
+    Map? catalog;
+    if (projectId == null) {
+      catalog = device?['global_skills'] as Map?;
+    } else {
+      final catalogs = device?['project_skills'] as Map?;
+      catalog = catalogs?[projectId] as Map?;
+    }
+    return ((catalog?['skills'] as List?) ?? [])
+        .whereType<Map>()
+        .map((s) => Map<String, dynamic>.from(s))
+        .toList();
+  }
 
   List<ComposerChoice> get permissionChoices => [
     if (projectId == null)
@@ -1612,21 +1737,27 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
             ),
           ),
           actions: [
-            Padding(
-              padding: const EdgeInsets.only(right: 16),
-              child: RoundButton(
-                glyph: libraryVisible ? null : const AuraGlyph('new_chat'),
-                icon: libraryVisible
-                    ? Icons.search_rounded
-                    : Icons.edit_outlined,
-                label: libraryVisible ? 'Cerca chat' : 'Nuova chat',
-                onPressed: libraryVisible
-                    ? searchChats
-                    : busy
-                    ? null
-                    : () => newChat(),
+            if (libraryVisible)
+              Padding(
+                padding: const EdgeInsets.only(right: 16),
+                child: RoundButton(
+                  icon: Icons.search_rounded,
+                  label: 'Cerca chat',
+                  onPressed: searchChats,
+                ),
               ),
-            ),
+            if (!libraryVisible && activeChat != null)
+              Padding(
+                padding: const EdgeInsets.only(right: 16),
+                child: ChatActionsMenu(
+                  canModify:
+                      online &&
+                      !workingChats.contains(conversationId) &&
+                      !(currentQueue?.drafts.isNotEmpty ?? false),
+                  canCopy: messages.isNotEmpty,
+                  onSelected: chatAction,
+                ),
+              ),
           ],
         ),
         drawer: Drawer(
@@ -1671,6 +1802,15 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                   ),
                 ),
                 Expanded(child: library(inDrawer: true)),
+                ListTile(
+                  leading: const Icon(Icons.description_outlined),
+                  title: const Text('Skill'),
+                  subtitle: const Text('Globali e di progetto sul PC'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    openSkills();
+                  },
+                ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
                   child: Column(
@@ -2047,14 +2187,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                           focus: composerFocus,
                           enabled: !turnBusy && online,
                           hasProject: projectId != null,
-                          skills:
-                              (((device?['project_skills'] as Map?)?[projectId]
-                                              as Map?)?['skills']
-                                          as List? ??
-                                      [])
-                                  .whereType<Map>()
-                                  .map((s) => Map<String, dynamic>.from(s))
-                                  .toList(),
+                          skills: availableSkills,
                         ),
                         AuraComposer(
                           controller: composer,

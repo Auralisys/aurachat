@@ -5,6 +5,7 @@ mod firestore;
 mod llm;
 mod window_state;
 mod mcp;
+mod skills;
 mod speech;
 mod media;
 mod project_files;
@@ -694,22 +695,59 @@ fn set_viewing_chat(state: tauri::State<'_, AppState>, conversation_id: Option<S
 }
 
 pub(crate) async fn project_skill_catalog(app:&tauri::AppHandle, uid:&str, project_id:&str)->Result<serde_json::Value,String> {
+    let context=skill_context(app,uid,Some(project_id))?;
+    tauri::async_runtime::spawn_blocking(move||context.catalog(false)).await.map_err(|error|error.to_string())?
+}
+
+fn skill_context(app:&tauri::AppHandle,uid:&str,project_id:Option<&str>)->Result<skills::Context,String> {
     let state=app.state::<AppState>();
     if state.firestore.uid().as_deref()!=Some(uid){return Err("login_required".into());}
-    let files={
+    let execution=permissions::Execution{app:app.clone(),owner:uid.into(),project:project_id.unwrap_or("").into(),conversation:String::new(),turn_id:String::new(),intent:String::new(),agent_id:None,cancellation:None};
+    let files=if let Some(project_id)=project_id {
         let tree=state.data.lock().unwrap();
         let project=tree.projects.iter().find(|project|project.id==project_id).ok_or("project_not_found")?;
         let grants=state.folder_access.lock().unwrap().paths(uid,project_id);
-        project_files::ProjectFiles{name:project.name.clone(),roots:project.source_folders.iter().filter(|path|grants.contains(path)).map(PathBuf::from).collect(),unavailable:vec![],
-            execution:Some(permissions::Execution{app:app.clone(),owner:uid.into(),project:project_id.into(),conversation:String::new(),turn_id:String::new(),intent:String::new(),agent_id:None,cancellation:None})}
-    };
-    tauri::async_runtime::spawn_blocking(move||files.discover_skills()).await.map_err(|error|error.to_string())
+        Some(project_files::ProjectFiles{name:project.name.clone(),roots:project.source_folders.iter().filter(|path|grants.contains(path)).map(PathBuf::from).collect(),unavailable:vec![],execution:Some(execution.clone())})
+    } else {None};
+    Ok(skills::Context::new(files.as_ref(),Some(&execution)))
 }
 
 #[tauri::command(rename_all = "snake_case")]
-async fn project_skills(app:tauri::AppHandle,state:tauri::State<'_,AppState>,project_id:String)->Result<serde_json::Value,String>{
+async fn project_skills(app:tauri::AppHandle,state:tauri::State<'_,AppState>,project_id:Option<String>,include_disabled:Option<bool>)->Result<serde_json::Value,String>{
     let uid=state.firestore.uid().ok_or("login_required")?;
-    project_skill_catalog(&app,&uid,&project_id).await
+    let context=skill_context(&app,&uid,project_id.as_deref())?;
+    tauri::async_runtime::spawn_blocking(move||context.catalog(include_disabled.unwrap_or(false))).await.map_err(|e|e.to_string())?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn set_skill_enabled(app:tauri::AppHandle,state:tauri::State<'_,AppState>,project_id:Option<String>,id:String,enabled:bool)->Result<(),String>{
+    let _account=state.account_lock.lock().await;
+    let uid=state.firestore.uid().ok_or("login_required")?;
+    skill_context(&app,&uid,project_id.as_deref())?.set_enabled(&id,enabled)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn search_skills(state:tauri::State<'_,AppState>,query:String)->Result<serde_json::Value,String>{
+    let uid=state.firestore.uid().ok_or("login_required")?;
+    let result=skills::search(&query).await?;
+    if state.firestore.uid().as_deref()!=Some(&uid) {return Err("login_required".into());}
+    Ok(result)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn install_skill(app:tauri::AppHandle,state:tauri::State<'_,AppState>,source:String,name:String)->Result<(),String>{
+    static INSTALL:tokio::sync::Mutex<()>=tokio::sync::Mutex::const_new(());
+    let _install=INSTALL.try_lock().map_err(|_|"A skill installation is already running")?;
+    let uid=state.firestore.uid().ok_or("login_required")?;
+    let context=skill_context(&app,&uid,None)?;
+    if context.catalog(true)?["skills"].as_array().unwrap().iter().any(|s|s["name"]==name) {return Err("Skill already installed; refresh the list".into());}
+    skills::install(&source,&name).await?;
+    let context=skill_context(&app,&uid,None)?;
+    let catalog=context.catalog(true)?;
+    let installed=catalog["skills"].as_array().unwrap().iter().find(|s|s["name"]==name)
+        .ok_or("Installer finished but the skill was not discovered. Refresh and check its SKILL.md.")?;
+    context.set_enabled(installed["id"].as_str().ok_or("Invalid installed skill id")?,true)?;
+    Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1108,6 +1146,9 @@ pub fn run() {
             chat,
             set_viewing_chat,
             project_skills,
+            set_skill_enabled,
+            search_skills,
+            install_skill,
             stop_chat,
             steer_chat,
             get_locale,
