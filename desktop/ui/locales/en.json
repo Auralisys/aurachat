@@ -405,6 +405,7 @@
   "progress.fetch_web_page": "Reading web page",
   "progress.call_mcp_tool": "Calling MCP tool",
   "progress.list_mcp_servers": "Listing MCP integrations",
+  "progress.import_mcp_server": "Importing MCP integration",
   "progress.configure_mcp_server": "Configuring MCP integration",
   "progress.remove_mcp_server": "Removing MCP integration",
   "progress.load_project_skill": "Loading skill",

@@ -74,6 +74,13 @@ possono impedire la visualizzazione. Il logout rimuove la registrazione push.
 
 ## Interfaccia mobile — 18 ottobre 2026
 
+Le chat avviate da Android usano gli stessi tool MCP del PC: discovery delle
+configurazioni globali di altri client, importazione della singola integrazione
+e connessione previa approvazione. Configurazioni e login CLI restano sul PC;
+il telefono non importa credenziali. Una lista AuraChat vuota non esclude
+integrazioni installate in altri client; il modello deve verificarle prima di
+richiedere stack trace copiati o un browser.
+
 Aggiornamento 22 ottobre: nella chat aperta il pulsante in alto a destra e
 **Opzioni chat** (`...`): rinomina, copia conversazione ed elimina con conferma.
 Nuova chat resta nella home e nel menu laterale, non nel dettaglio.

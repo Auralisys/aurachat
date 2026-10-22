@@ -143,7 +143,7 @@ usa un provider HTTP locale simulato.
 ### Integrazioni MCP generali dalla chat
 
 La chat dispone di `list_mcp_servers`, `configure_mcp_server`,
-`remove_mcp_server`, `list_mcp_tools` e `call_mcp_tool`. Non sono strumenti
+`import_mcp_server`, `remove_mcp_server`, `list_mcp_tools` e `call_mcp_tool`. Non sono strumenti
 specifici di Firebase: qualunque server compatibile può fornire ricerca web,
 browser, accesso HTTP, API e altre funzioni. Il modello deve prima scoprire il
 catalogo reale e usare nomi e schemi restituiti dal server, senza inventare
@@ -185,8 +185,25 @@ Rimuovere un'integrazione elimina la sua configurazione, non il software.
 
 Usare `${NOME_VARIABILE}` in `env` e `headers` per credenziali già presenti
 nell'ambiente del desktop; non incollare token nella chat o negli argomenti
-del comando. Le configurazioni globali di altri editor e i loro login non
-vengono importati. I login OAuth/browser o della CLI vanno completati esternamente:
+del comando. `list_mcp_servers` e `list_mcp_tools` riportano anche `discovered`
+e `discovery_errors`: configurazioni globali trovate in Cursor
+(`~/.cursor/mcp.json`), Claude Code (`~/.claude.json`, solo `mcpServers`
+globali), Claude Desktop, Copilot CLI (`~/.copilot/mcp-config.json`) e Codex
+(`~/.codex/config.toml`). La discovery non avvia programmi e non restituisce
+argomenti, URL, valori di ambiente/header o altri dati del file al modello.
+Un catalogo AuraChat vuoto non significa che il servizio non abbia un MCP.
+`import_mcp_server` copia solo il server scelto nella configurazione globale
+AuraChat, dopo approvazione, senza modificare l'originale o sovrascrivere nomi
+esistenti. Le impostazioni di auto-approvazione del client non vengono importate;
+filtri di tool non supportati e formati incompatibili producono errori espliciti.
+I file sorgente sono limitati a 1 MiB e 64 server; le configurazioni AuraChat
+mantengono i limiti sotto. Per Codex sono supportati anche `http_headers`,
+`bearer_token_env_var` e `enabled`; i timeout restano quelli di AuraChat.
+Su Windows i launcher importati npx/npm vengono adattati a cmd.exe.
+
+Le sessioni browser/OAuth di altri client non vengono copiate. Un server stdio
+puo invece riusare il proprio login CLI gia presente sul PC (per esempio Firebase).
+I login mancanti vanno completati esternamente:
 questa versione non implementa un flusso OAuth MCP né il vecchio trasporto SSE.
 I server MCP eseguono codice locale e/o operazioni esterne con i propri accessi,
 senza sandbox; le loro descrizioni e risposte restano dati non affidabili.
@@ -200,6 +217,11 @@ Non è una promessa di parità completa con ChatGPT: ricerca, browser e altri
 servizi diventano disponibili quando il relativo MCP è configurato e autenticato.
 Le verifiche native usano `tests\mcp-server.cjs`, un server stdio/HTTP locale
 senza account o traffico verso servizi reali.
+
+Per un servizio autenticato il modello deve verificare il suo MCP ufficiale,
+non dedurre l'assenza di API dal link della console o dall'help di una vecchia
+CLI. Per esempio il server Firebase corrente espone strumenti Crashlytics
+per issue ed eventi: non richiede di automatizzare la console web per questo.
 
 Per leggere le istruzioni ufficiali prima di configurare il primo MCP esiste
 anche **`fetch_web_page`**, disponibile nelle chat senza progetto. Richiede
