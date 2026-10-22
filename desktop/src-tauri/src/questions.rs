@@ -23,7 +23,16 @@ pub struct Question {
     pub questions: Vec<Question>,
 }
 
+fn plain_dashes(text: &str) -> String {text.replace(['\u{2014}','\u{2013}','\u{2015}'], "-")}
+
 impl Question {
+    // Long dashes read poorly in the form and the answer summary; use a plain hyphen.
+    fn normalize(&mut self) {
+        self.question = plain_dashes(&self.question);
+        for choice in &mut self.choices {*choice = plain_dashes(choice);}
+        for question in &mut self.questions {question.normalize();}
+    }
+
     fn validate(&self) -> Result<(), String> {
         if !self.questions.is_empty() {
             if self.questions.len() > 12 || !self.question.is_empty() || !self.choices.is_empty() || self.multi_select || self.step.is_some() ||
@@ -98,7 +107,8 @@ struct Entry { owner: String, snapshot: Snapshot, response: Arc<Mutex<Response>>
 pub struct Questions(Mutex<HashMap<String, Entry>>);
 
 impl Questions {
-    fn begin(&self, owner: &str, conversation: &str, agent_id: Option<String>, question: Question) -> Result<(Snapshot, Arc<Mutex<Response>>), String> {
+    fn begin(&self, owner: &str, conversation: &str, agent_id: Option<String>, mut question: Question) -> Result<(Snapshot, Arc<Mutex<Response>>), String> {
+        question.normalize();
         question.validate()?;
         static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let snapshot = Snapshot {
@@ -220,6 +230,14 @@ mod tests {
         assert_eq!(worker.join().unwrap().selected,vec!["A","B"]);
         assert!(registry.list("u","c").is_empty());
         assert!(registry.resolve("u","c",&snapshot.id,answer(&["A"])).is_err());
+    }
+    #[test]
+    fn long_dashes_become_plain_hyphens() {
+        let registry = Questions::default();
+        let batch:Question=serde_json::from_value(json!({"questions":[{"question":"Q4 \u{2014} Redo","choices":["A \u{2013} B"]}]})).unwrap();
+        let (snapshot,_)=registry.begin("u","c",None,batch).unwrap();
+        assert_eq!(snapshot.question.questions[0].question,"Q4 - Redo");
+        assert_eq!(snapshot.question.questions[0].choices,vec!["A - B"]);
     }
     #[test]
     fn cancelling_one_request_retracts_only_its_form() {

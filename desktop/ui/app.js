@@ -1109,6 +1109,7 @@ function flushQueue(id = state.activeConversationId) {
   if (queuedTurns.paused.has(id) || !queue?.length || !canStartRequest(id)) return;
   const [message] = queue.splice(0, 1);
   if (!queue.length) state.queues.delete(id);
+  clearQueuedStatus(id);
   dispatchMessage(id, message);
 }
 

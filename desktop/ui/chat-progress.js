@@ -213,6 +213,9 @@ async function setupChatProgress() {
       try { message = JSON.parse(payload.text); } catch (_) { return; }
       if (!consumeQueuedGuidance(payload.conversation_id, message)) return;
       if (stream.frame) { cancelAnimationFrame(stream.frame); stream.frame = null; }
+      // Keep the partial answer and show the guidance as a normal user turn in chronology.
+      if (stream.content || stream.activity.length) run.messages.push({role:'assistant',content:stream.content,activity:stream.activity});
+      run.messages.push({...message, guidance:true});
       stream.content = ''; stream.shown = 0; stream.activity = [];
     }
     if (state.activeConversationId === payload.conversation_id) {renderThinkingStatus();if (['__steering','__question_summary'].includes(payload.kind)) {renderMessages();} else if (payload.kind !== '__delta') {updateLiveTurn();}}

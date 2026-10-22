@@ -14,7 +14,10 @@ function removeQueuedMessage(id, message) {
 }
 
 function queueLocked(id) {return queuedTurns.steering.has(id);}
-function refreshQueue(id) {if (id === state.activeConversationId) {renderMessages();updateComposerControls();}}
+function clearQueuedStatus(id) {
+  if (id === state.activeConversationId && !state.queues.get(id)?.length && $('#composer-status')?.textContent === t('chat.queued')) composerStatus();
+}
+function refreshQueue(id) {clearQueuedStatus(id);if (id === state.activeConversationId) {renderMessages();updateComposerControls();}}
 
 function editQueuedMessage(id, message) {
   if (queueLocked(id) || !state.queues.get(id)?.includes(message)) return;

@@ -124,6 +124,8 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   assert.equal(await queued.count(),0);
   assert.equal(await page.evaluate(()=>window.__calls.find(c=>c.cmd==='steer_chat').args.content),'Indicazione immediata');
   await page.evaluate(()=>window.__events['chat-progress']({payload:{conversation_id:state.activeConversationId,kind:'__steering',text:JSON.stringify({role:'user',content:'Indicazione immediata',attachments:[]})}}));
+  await page.locator('#messages .msg--user:not(.msg--queued)').getByText('Indicazione immediata',{exact:true}).waitFor();
+  assert.notEqual(await page.locator('#composer-status').textContent(),locales['chat.queued']);
   await page.evaluate(()=>window.__runs[Object.keys(window.__runs)[0]].finish('Fine'));
   await page.waitForFunction(()=>!state.busy);
   assert.deepEqual(errors,[]);await browser.close();
