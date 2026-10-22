@@ -245,7 +245,7 @@ pub fn notify(app: &tauri::AppHandle, kind: &str, id: &str, conversation: &str, 
     let auth=match crate::firebase_auth(&state) {Ok(a)=>a,Err(_)=>return};
     // Desktop attention only controls the local toast; phones have their own visibility.
     if kind != "chat" || !chat_visible(app,&state,conversation) {
-        if let Err(e)=app.notification().builder().title(title).body(body).show() { eprintln!("Desktop notification: {e}"); }
+        if let Err(e)=app.notification().builder().title(title).body(body).extra("conversation_id",conversation).show() { eprintln!("Desktop notification: {e}"); }
     }
     let (device_id, device_name)=identity();
     let event_id=format!("{:x}", Sha256::digest(format!("{uid}/{device_id}/{kind}/{id}").as_bytes()));

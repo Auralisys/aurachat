@@ -1522,6 +1522,9 @@ async function init() {
       if (run?.external) flushQueue(payload.conversation_id);
     } catch (error) { showError(localizeError(error)); }
   });
+  await appWindow.listen('open-conversation', ({payload}) => {
+    if (typeof payload === 'string' && findConversation(payload)) {showView('chat');openConversation(payload);}
+  });
   await appWindow.listen('window-geometry-changed', () => {
     clearTimeout(windowSaveTimer);
     windowSaveTimer = setTimeout(saveWindowState, 1000);

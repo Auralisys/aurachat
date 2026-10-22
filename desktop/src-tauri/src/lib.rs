@@ -1109,6 +1109,16 @@ pub fn run() {
             }
 
             setup_tray(app)?;
+            // Without a handler the plugin ignores toast clicks; bring the window back and open the chat.
+            let handle=app.handle().clone();
+            tauri_plugin_notification::NotificationExt::notification(app.handle()).on_action(move |action| {
+                if action.action_id()!="tap" {return;}
+                let Some(window)=handle.get_webview_window("main") else {return;};
+                let _=window.unminimize();let _=window.show();let _=window.set_focus();
+                if let Some(id)=action.notification().and_then(|n|n.extra().get("conversation_id")).and_then(|v|v.as_str()).filter(|id|!id.is_empty()) {
+                    let _=window.emit("open-conversation",id);
+                }
+            })?;
             companion::start(app.handle());
             Ok(())
         })
