@@ -369,6 +369,22 @@ powershell -ExecutionPolicy Bypass -File desktop\scripts\install-prod.ps1 [-Skip
 bash desktop/scripts/install-prod.sh [--skip-build] [--no-launch]
 ```
 
+Per generare un installer da distribuire e copiarlo sul Desktop dell'utente
+(percorso risolto dal sistema, anche se reindirizzato su OneDrive):
+
+```powershell
+# Windows: AuraChat_<versione>_x64-setup.exe
+powershell -ExecutionPolicy Bypass -File desktop\scripts\package-installer.ps1 [-SkipBuild]
+```
+
+```bash
+# macOS: AuraChat_<versione>_<arch>.dmg
+bash desktop/scripts/package-installer.sh [--skip-build]
+```
+
+Gli installer non sono firmati: Windows può mostrare SmartScreen ("Ulteriori
+informazioni → Esegui comunque"), macOS richiede tasto destro → Apri al primo avvio.
+
 Su macOS servono Rust e gli strumenti da riga di comando di Xcode. La configurazione
 `src-tauri/tauri.macos.conf.json` genera invece `AuraChat.app`, con icona macOS e
 descrizione/entitlement per il microfono. Per compilare e installare localmente:
