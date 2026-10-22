@@ -167,7 +167,12 @@ fn matches_revision(previous:&str,args:&Value)->bool {
     if let Some(expected)=args["expected_sha256"].as_str(){expected==revision(previous)}else{args["previous_content"].as_str()==Some(previous)}
 }
 fn replace_once(previous:&str,old:&str,new:&str)->Result<String,String>{
-    if old.is_empty() || previous.find(old).is_none() || previous.find(old)!=previous.rfind(old) {return Err("old_text must match exactly once; read the file and include more context".into());}Ok(previous.replacen(old,new,1))
+    let unique=|old:&str| !old.is_empty() && previous.find(old).is_some() && previous.find(old)==previous.rfind(old);
+    if unique(old) {return Ok(previous.replacen(old,new,1));}
+    // Models always send LF; match CRLF files too and keep their line endings.
+    let crlf=|text:&str| text.replace("\r\n","\n").replace('\n',"\r\n");
+    if previous.contains("\r\n") && unique(&crlf(old)) {return Ok(previous.replacen(&crlf(old),&crlf(new),1));}
+    Err("old_text must match exactly once; read the file and include more context. Line endings are handled automatically: do not work around this with scripts.".into())
 }
 
 pub(crate) fn write_file(path: &Path, content: &str, previous: Option<&str>) -> Result<(), String> {
@@ -196,7 +201,7 @@ pub fn definitions() -> Value {
     json!([
         {"type":"function","function":{"name":"publish_project_output","description":"Publish an existing FINAL deliverable you produced for the user in the Output sidebar, only after finishing it. Never publish scratch scripts, temporary notes, logs, intermediate files or ordinary source edits. A final Markdown report or script explicitly requested by the user is valid. Writing a file alone does not publish it.","parameters":{"type":"object","properties":{"root":root,"path":path},"required":["root","path"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"write_project_file","description":"Create or replace a UTF-8 file, creating parent folders. Existing files require expected_sha256 from the last read (preferred) or exact previous_content without line-number prefixes. Native permission checks may ask the user for approval.","parameters":{"type":"object","properties":{"root":root,"path":path,"content":{"type":"string"},"previous_content":{"type":"string"},"expected_sha256":{"type":"string"}},"required":["root","path","content"],"additionalProperties":false}}},
-        {"type":"function","function":{"name":"edit_project_file","description":"Replace one exact unique text segment in an existing project file. Read the file first and supply its file_sha256. Include enough old_text context to match exactly once; omit line-number prefixes.","parameters":{"type":"object","properties":{"root":root,"path":path,"old_text":{"type":"string"},"new_text":{"type":"string"},"expected_sha256":{"type":"string"}},"required":["root","path","old_text","new_text","expected_sha256"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"edit_project_file","description":"Replace one exact unique text segment in an existing project file. Read the file first and supply its file_sha256. Include enough old_text context to match exactly once; omit line-number prefixes. Use plain \\n line breaks: CRLF files are matched and preserved automatically. For several separate changes, call it once per change instead of writing scripts.","parameters":{"type":"object","properties":{"root":root,"path":path,"old_text":{"type":"string"},"new_text":{"type":"string"},"expected_sha256":{"type":"string"}},"required":["root","path","old_text","new_text","expected_sha256"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"execute_project_command","description":"Run a local executable with an argument array in the project directory. No implicit shell: use powershell.exe -NoProfile -Command explicitly for scripts. Native permission checks may request approval. Processes are visible and stoppable in Shell. Returns output, exit code or a running shell ID.","parameters":{"type":"object","properties":{"root":root,"path":path,"program":{"type":"string"},"arguments":{"type":"array","items":{"type":"string"}}},"required":["root","path","program","arguments"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"inspect_project_command","description":"Inspect the latest output and status of a previously started shell ID in this conversation.","parameters":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"list_project_files","description":"List up to 200 immediate children of an authorized project folder. Traverse subdirectories with further calls.","parameters":{"type":"object","properties":{"root":root,"path":path},"required":["root","path"],"additionalProperties":false}}},
@@ -262,6 +267,8 @@ pub fn definitions() -> Value {
         assert_eq!(replace_once("one\ntwo\nthree","two","updated").unwrap(),"one\nupdated\nthree");
         assert!(replace_once("same same","same","new").is_err());assert!(replace_once("text","","new").is_err());
         assert!(replace_once("aaa","aa","new").is_err());
+        assert_eq!(replace_once("a\r\nb\r\nc\r\n","a\nb","x\ny").unwrap(),"x\r\ny\r\nc\r\n");
+        assert_eq!(replace_once("log('a\\nb')\r\n","log('a\\nb')","log('c\\nd')").unwrap(),"log('c\\nd')\r\n");
         assert!(matches_revision("before",&json!({"expected_sha256":revision("before")})));assert!(!matches_revision("after",&json!({"expected_sha256":revision("before")})));
     }
     #[test] fn writes_require_fresh_content_and_paths_stay_scoped() {
