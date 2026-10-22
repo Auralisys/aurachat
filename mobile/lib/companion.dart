@@ -189,7 +189,13 @@ class Companion {
           ].contains(s.data()?['status']),
         )
         .timeout(
-          Duration(seconds: action == 'skill_install' ? 210 : 45),
+          Duration(
+            seconds: action == 'skill_install'
+                ? 210
+                : action == 'project_git'
+                ? 180
+                : 45,
+          ),
           onTimeout: () => throw StateError(
             'Esito non confermato. Controlla sul PC prima di riprovare.',
           ),

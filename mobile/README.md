@@ -82,12 +82,38 @@ integrazioni installate in altri client; il modello deve verificarle prima di
 richiedere stack trace copiati o un browser.
 
 Aggiornamento 22 ottobre: nella chat aperta il pulsante in alto a destra e
-**Opzioni chat** (`...`): rinomina, copia conversazione ed elimina con conferma.
+**Opzioni chat** (`...`): attività e cambiamenti, rinomina, copia conversazione
+ed elimina con conferma.
 Nuova chat resta nella home e nel menu laterale, non nel dettaglio.
 Rinomina/eliminazione richiedono PC online e fermo per quella chat; la coda
 locale di messaggi deve essere vuota. Il PC ricontrolla titolo e timestamp:
 una chat modificata nel frattempo non viene cancellata. La copia usa il testo
 caricato sul telefono, senza inviarlo a servizi esterni.
+
+**Attività e cambiamenti** raccoglie output finali pubblicati (non file
+temporanei), fonti e allegati, agenti e attività sincronizzate, anche offline.
+I link HTTP(S) si aprono direttamente nel browser del telefono; per i file
+prodotti sul PC viene copiato il percorso, non simulato un download.
+Il riepilogo segue i nuovi messaggi e il turno live. Le shell vengono richieste
+all'apertura, a fine turno e con Aggiorna: solo processi attivi o durati almeno
+15 secondi, fino a 20, con anteprima limitata dell'output.
+
+Con desktop **protocollo 5** e PC online, le chat di progetto mostrano anche
+Git: scoperta dei repository autorizzati, selezione iniziale del più modificato
+(righe aggiunte/rimosse, poi numero di file), scelta manuale e stage/unstage
+per file o gruppo. **Commit…** e **Commit e push…** richiedono uno stage non
+vuoto, mostrano il diff e il messaggio modificabile (generabile con AI), e
+non salvano senza **Conferma commit**. Il push ha una conferma separata con
+remoto, branch e HEAD, anche dopo un commit riuscito. Il commit include tutto
+lo stage del repository selezionato, inclusi file preparati sul PC. Non cambia
+repository tra commit e push. Lo stato si aggiorna all'apertura, dopo le
+azioni, a fine turno e con Aggiorna; non esegue polling Git continuo.
+Le operazioni usano gli stessi controlli del desktop su account, consensi
+locali, chat/progetto e revisioni. Durante le conversazioni attive restano
+disponibili solo le letture. Errori o esiti incerti non provocano retry delle
+mutazioni: controllare il PC prima di riprovare. Nessun reset, scarto o
+force-push remoto viene esposto. I desktop precedenti mostrano l'invito ad
+aggiornare senza impedire la consultazione delle attività.
 
 **Menu > Skill** gestisce le skill del PC selezionato: globali, oppure globali
 e del progetto scelto. Le skill sono attive di base; gli interruttori persistono

@@ -834,9 +834,16 @@ async fn project_folder_access(state: tauri::State<'_, AppState>, project_id: St
 #[tauri::command(rename_all = "snake_case")]
 async fn project_git(state: tauri::State<'_,AppState>, project_id:String, root:String, action:String,
     paths:Option<Vec<String>>, revision:Option<String>, message:Option<String>, conversation_id:Option<String>) -> Result<serde_json::Value,String> {
+    project_git_for_owner(state,project_id,root,action,paths,revision,message,conversation_id,None).await
+}
+
+async fn project_git_for_owner(state: tauri::State<'_,AppState>, project_id:String, root:String, action:String,
+    paths:Option<Vec<String>>, revision:Option<String>, message:Option<String>, conversation_id:Option<String>,
+    expected_owner:Option<String>) -> Result<serde_json::Value,String> {
     let _account=state.account_lock.lock().await;
     let auth=firebase_auth(&state)?;
     let uid=ensure_uid(&state,&auth).await?;
+    if expected_owner.as_ref().is_some_and(|owner|owner!=&uid) {return Err("account_changed".into());}
     let folders={
         let tree=state.data.lock().unwrap();
         let project=tree.projects.iter().find(|p|p.id==project_id).ok_or("project_not_found")?;

@@ -466,7 +466,7 @@ async fn heartbeat_once(app:&tauri::AppHandle)->Result<(),String>{
     }
     let speech=state.speech.status();
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/devices/{id}"),
-        &json!({"name":name,"platform":std::env::consts::OS,"identity_version":2,"last_seen":data::now_millis(),"protocol":4,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"speech":{"ready":speech.ready,"busy":speech.busy,"loading":speech.loading},"project_permissions":project_permissions,"project_skills":skills,"global_skills":global_skills})).await?;
+        &json!({"name":name,"platform":std::env::consts::OS,"identity_version":2,"last_seen":data::now_millis(),"protocol":5,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"speech":{"ready":speech.ready,"busy":speech.busy,"loading":speech.loading},"project_permissions":project_permissions,"project_skills":skills,"global_skills":global_skills})).await?;
     let tree=state.data.lock().unwrap().storage_tree()?;
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/companion/state"),&json!({"tree":tree})).await?;
     let outbox=state.config_dir.join("notification-outbox").join(&uid);
@@ -530,6 +530,23 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
     let created=request["created_at"].as_u64().ok_or("invalid_request_time")?;
     if data::now_millis().saturating_sub(created)>300_000{return Err("request_expired".into());}
     match request["action"].as_str().unwrap_or("chat") {
+        "project_git"=>{
+            let operation=remote_git_operation(request)?;
+            let project={
+                let tree=state.data.lock().unwrap();
+                tree.projects.iter().find(|p|p.conversations.iter().any(|c|c.id==id)).map(|p|p.id.clone()).ok_or("project_not_found")?
+            };
+            let paths=request["paths"].as_array().map(|paths|paths.iter().map(|p|p.as_str().map(String::from).ok_or("invalid_git_path")).collect::<Result<Vec<_>,_>>()).transpose()?;
+            drop(account);
+            return crate::project_git_for_owner(app.state::<AppState>(),project,
+                request["root"].as_str().unwrap_or("").into(),operation.into(),paths,
+                request["revision"].as_str().map(String::from),request["message"].as_str().map(String::from),
+                Some(id.into()),Some(uid.into())).await;
+        },
+        "chat_recap"=>{
+            if state.data.lock().unwrap().find_conversation(id).is_none() {return Err("conversation_not_found".into());}
+            return Ok(shell_recap(app.state::<Arc<crate::managed_shells::Shells>>().list(uid,id)));
+        },
         "stop"=>return state.chat_runs.stop(uid,id).map(|_|Value::Null),
         "steer"=>return crate::steer_chat(app.state::<AppState>(),id.into(),request["content"].as_str().ok_or("empty_message")?.into(),None).map(|_|Value::Null),
         "stop_agent"=>return crate::stop_subagent(app.state::<AppState>(),app.state::<crate::agent_runs::AgentRuns>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["agent_id"].as_str().ok_or("invalid_agent")?.into()).await.map(|_|Value::Null),
@@ -631,6 +648,32 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
     crate::run_chat(app.clone(),app.state::<AppState>(),id.into(),content.into(),None,None,None,Some(uid.into())).await.map(|_|Value::Null)
 }
 
+fn shell_recap(mut shells:Vec<crate::managed_shells::Snapshot>)->Value {
+    shells.retain(|s|s.status=="running" || s.finished_at.unwrap_or(s.started_at).saturating_sub(s.started_at)>=15_000);
+    shells.sort_by_key(|s|std::cmp::Reverse((s.status=="running",s.started_at)));
+    let truncated=shells.len()>20;
+    shells.truncate(20);
+    // Bound every large field so the relay stays below Firestore's document limit.
+    for shell in &mut shells {
+        shell.output=truncate_chars(&shell.output,3000);
+        shell.command=truncate_chars(&shell.command,2000);
+        shell.cwd=truncate_chars(&shell.cwd,1000);
+        shell.title=truncate_chars(&shell.title,100);
+    }
+    json!({"shells":shells,"truncated":truncated})
+}
+
+fn remote_git_operation(request:&Value)->Result<&str,String>{
+    let operation=request["operation"].as_str().ok_or("invalid_git_operation")?;
+    if !matches!(operation,"discover"|"status"|"stage"|"unstage"|"preview"|"generate"|"commit"|"push_preview"|"push") {
+        return Err("unsupported_remote_git_operation".into());
+    }
+    if matches!(operation,"commit"|"push") && request["confirmed"]!=true {
+        return Err("git_confirmation_required".into());
+    }
+    Ok(operation)
+}
+
 fn change_chat(tree:&mut data::ChatData,id:&str,request:&Value)->Result<(),String>{
     let conversation=tree.find_conversation(id).ok_or("conversation_not_found")?;
     if request["expected_updated_at"].as_u64()!=Some(conversation.updated_at) || request["expected_title"].as_str()!=Some(&conversation.title) {
@@ -659,6 +702,43 @@ fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,Strin
 
 #[cfg(test)]mod tests{
     use super::*;
+    #[test]
+    fn recap_filters_short_shells_prioritizes_running_and_bounds_relay_bytes() {
+        let mut shell=crate::managed_shells::Snapshot {
+            id:"shell".into(),conversation_id:"chat".into(),agent_id:None,
+            title:"title".into(),command:"command".into(),cwd:"cwd".into(),
+            status:"completed".into(),output:"output".into(),exit_code:Some(0),
+            revision:1,started_at:100,finished_at:Some(15_099),
+        };
+        assert_eq!(shell_recap(vec![shell.clone()])["shells"],json!([]));
+        shell.finished_at=Some(15_100);
+        assert_eq!(shell_recap(vec![shell.clone()])["shells"].as_array().unwrap().len(),1);
+        shell.status="running".into();shell.finished_at=None;
+        shell.output="\0".repeat(20_000);shell.command=shell.output.clone();
+        shell.title=shell.output.clone();shell.cwd=shell.output.clone();
+        let mut entries=vec![shell;30];
+        entries[0].status="completed".into();entries[0].finished_at=Some(30_000);
+        let recap=shell_recap(entries);
+        assert_eq!(recap["shells"].as_array().unwrap().len(),20);
+        assert_eq!(recap["truncated"],true);
+        assert_eq!(recap["shells"][0]["status"],"running");
+        assert!(serde_json::to_vec(&recap).unwrap().len()<750_000);
+    }
+    #[test]
+    fn remote_git_requires_confirmation_and_rejects_unsupported_operations() {
+        for operation in ["discover","status","stage","unstage","preview","generate","push_preview"] {
+            assert_eq!(remote_git_operation(&json!({"operation":operation})).unwrap(),operation);
+        }
+        for operation in ["commit","push"] {
+            assert_eq!(remote_git_operation(&json!({"operation":operation})).unwrap_err(),"git_confirmation_required");
+            assert!(remote_git_operation(&json!({"operation":operation,"confirmed":"true"})).is_err());
+            assert_eq!(remote_git_operation(&json!({"operation":operation,"confirmed":true})).unwrap(),operation);
+        }
+        for operation in ["discard","reset","execute_project_command",""] {
+            assert_eq!(remote_git_operation(&json!({"operation":operation,"confirmed":true})).unwrap_err(),"unsupported_remote_git_operation");
+        }
+        assert!(remote_git_operation(&json!({})).is_err());
+    }
     #[test]
     fn remote_chat_changes_are_scoped_confirmed_and_revision_checked() {
         let chat=json!({"id":"chat","title":"Original","created_at":1,"updated_at":2,"context_tokens":0,"messages":[]});

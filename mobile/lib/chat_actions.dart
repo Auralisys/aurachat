@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-enum ChatAction { rename, copy, delete }
+enum ChatAction { recap, rename, copy, delete }
 
 class ChatActionsMenu extends StatelessWidget {
   const ChatActionsMenu({
@@ -21,6 +21,16 @@ class ChatActionsMenu extends StatelessWidget {
     style: IconButton.styleFrom(minimumSize: const Size(48, 48)),
     onSelected: onSelected,
     itemBuilder: (context) => [
+      const PopupMenuItem(
+        value: ChatAction.recap,
+        child: ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(Icons.fact_check_outlined),
+          title: Text('Attività e cambiamenti'),
+          subtitle: Text('Git, output, fonti e agenti'),
+        ),
+      ),
+      const PopupMenuDivider(),
       PopupMenuItem(
         value: ChatAction.rename,
         enabled: canModify,

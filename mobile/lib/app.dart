@@ -21,6 +21,7 @@ import 'message_queue.dart';
 import 'queued_bubble.dart';
 import 'skills_page.dart';
 import 'chat_actions.dart';
+import 'chat_recap.dart';
 
 final push = PushNotifications();
 void startAuraChat() {
@@ -1120,6 +1121,57 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     final chat = chats.where((c) => c['id'] == conversationId).firstOrNull;
     if (chat == null) return;
     final id = chat['id'] as String;
+    if (action == ChatAction.recap) {
+      final target = deviceId;
+      composerFocus.unfocus();
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => ChatRecapPage(
+            title: chat['title']?.toString() ?? 'Chat',
+            conversationId: id,
+            pcName: device?['name']?.toString() ?? 'Nessun PC selezionato',
+            messages: List.of(messages),
+            online: online,
+            protocol: (device?['protocol'] as num? ?? 0).toInt(),
+            hasProject: chat['project_id'] != null,
+            liveTurn: activeLive,
+            anyRunning: workingChats.isNotEmpty || busy,
+            messagesStream: api
+                .messages(id)
+                .map(
+                  (snapshot) => snapshot.docs.map((doc) => doc.data()).toList(),
+                ),
+            liveStream: target == null
+                ? null
+                : api
+                      .liveTurns(target)
+                      .map(
+                        (snapshot) => snapshot.docs
+                            .map(
+                              (doc) => {
+                                ...doc.data(),
+                                'conversation_id': doc.id,
+                              },
+                            )
+                            .toList(),
+                      ),
+            deviceStream: target == null
+                ? null
+                : api.devices
+                      .doc(target)
+                      .snapshots()
+                      .map((snapshot) => snapshot.data() ?? {}),
+            request: (action, arguments) {
+              if (target == null) {
+                throw StateError('Seleziona un PC disponibile.');
+              }
+              return api.control(target, id, action, arguments);
+            },
+          ),
+        ),
+      );
+      return;
+    }
     if (action == ChatAction.copy) {
       await Clipboard.setData(
         ClipboardData(

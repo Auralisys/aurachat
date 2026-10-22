@@ -24,6 +24,7 @@ void main() {
     expect(find.text('Copia conversazione'), findsOneWidget);
     expect(find.text('Elimina chat'), findsOneWidget);
     expect(find.text('Nuova chat'), findsNothing);
+    expect(find.text('Attività e cambiamenti'), findsOneWidget);
     await tester.tap(find.text('Rinomina chat'));
     await tester.pumpAndSettle();
     expect(selected, ChatAction.rename);
@@ -53,7 +54,10 @@ void main() {
     for (final item in tester.widgetList<PopupMenuItem<ChatAction>>(
       find.byType(PopupMenuItem<ChatAction>),
     )) {
-      expect(item.enabled, item.value == ChatAction.copy);
+      expect(
+        item.enabled,
+        [ChatAction.copy, ChatAction.recap].contains(item.value),
+      );
     }
     await tester.tap(find.text('Copia conversazione'));
     await tester.pumpAndSettle();

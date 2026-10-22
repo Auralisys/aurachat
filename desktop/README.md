@@ -139,8 +139,12 @@ unstage, scarta, commit e push attendono che le conversazioni siano ferme. Contr
 conferma: cambiamenti di programmi esterni e hook Git restano responsabilità
 del repository. Limiti espliciti: 1000 file modificati, diff fino a 64 KB,
 output Git/file non tracciati fino a 2 MiB; submodule da gestire esternamente.
-Questa sezione è nel desktop, anche nella disposizione compatta; non aggiunge
-una nuova superficie Git al companion Flutter.
+Questa sezione è nel desktop, anche nella disposizione compatta. Il companion
+Flutter con protocollo 5 offre lo stesso flusso di lettura, stage/unstage,
+anteprima, commit e push da **Opzioni chat > Attività e cambiamenti**.
+Riusa i controlli Git nativi, vincola il progetto alla conversazione e
+l'account al richiedente; commit e push richiedono conferme esplicite distinte.
+Non espone scarto/reset remoto e non cambia repository tra commit e push.
 Verifiche dedicate: `tests/git-panel.cjs` per UI e conferme simulate; test Rust
 `git::tests` su repository temporanei e remoto bare locale, mai sul repository
 di lavoro; `llm::tests::commit_message_sends_only_the_selected_diff_without_tools_and_reports_errors`
