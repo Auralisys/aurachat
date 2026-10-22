@@ -503,7 +503,18 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 .voice-recording { display:flex; align-items:center; gap:10px; min-width:0; flex:1; }
 .voice-recording canvas { flex:1 1 0; width:0; min-width:0; height:32px; color:var(--c-text-muted); }
 .voice-recording .icon-button { flex:none; width:28px; height:28px; padding:0; border-radius:50%; background:var(--c-hover); }
-#voice-recording-status:not(.sr-only) { font-size:12px; }
+#voice-recording-status:not(.sr-only) { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:var(--c-text-muted); }
+.voice-loader { display:none; flex:none; align-items:center; gap:4px; height:28px; padding:0 2px; }
+.voice-recording.is-busy .voice-loader { display:inline-flex; }
+.voice-loader i { width:5px; height:5px; border-radius:50%; background:var(--c-accent); opacity:.85; }
+@media (prefers-reduced-motion:no-preference) {
+  .voice-loader i { animation:voice-dot 1.1s var(--motion-ease, ease-in-out) infinite; }
+  .voice-loader i:nth-child(2) { animation-delay:.15s; }
+  .voice-loader i:nth-child(3) { animation-delay:.3s; }
+  .voice-recording.is-busy #voice-recording-status { background:linear-gradient(90deg,var(--c-text-muted) 0%,var(--c-text-muted) 40%,var(--c-text) 50%,var(--c-text-muted) 60%,var(--c-text-muted) 100%) 0 0/250% 100%; -webkit-background-clip:text; background-clip:text; color:transparent; animation:voice-shimmer 2.2s linear infinite; }
+}
+@keyframes voice-dot { 0%,80%,100% { transform:translateY(0); opacity:.35; } 40% { transform:translateY(-3px); opacity:1; } }
+@keyframes voice-shimmer { from { background-position:100% 0; } to { background-position:0 0; } }
 /* Modello in caricamento: il microfono resta visibile ma inattivo, con un loader sull'icona. */
 #composer-mic { position:relative; }
 #composer-mic.is-loading { cursor:progress; }

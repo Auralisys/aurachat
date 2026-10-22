@@ -139,6 +139,11 @@ const assert=require('node:assert/strict');
  assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='transcribe_audio').length),calls);
  // Late inference results cannot land in a different draft.
  await page.evaluate(()=>window.__delayTranscript=true);await record();await page.click('#voice-stop');await page.waitForFunction(()=>window.__finishTranscript);
+ await page.waitForFunction(()=>!voice.mediaOperation);
+ assert.match(await page.locator('#voice-recording-status').textContent(),/Trascrizione/,'Transcribing label survives media resume');
+ assert.equal(await page.locator('#voice-recording-status').evaluate(el=>el.classList.contains('sr-only')),false);
+ assert.equal(await page.locator('.voice-loader').isVisible(),true);
+ await page.screenshot({path:resolve(shots,'voice-transcribing.png')});
  await page.click('#nav-home');await page.fill('#composer-input','Nuova bozza');
  assert.equal(await page.evaluate(()=>__playing),true,'Playback has already resumed during delayed transcription');
  assert.equal(await page.locator('#composer-mic').isVisible(),false);

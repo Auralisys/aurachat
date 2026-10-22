@@ -78,9 +78,13 @@ function voiceUi(message = '') {
   mic.setAttribute('aria-label', label);
   mic.title = label;
   mic.replaceChildren(icon(voice.recording ? 'stop' : 'mic'));
+  const busy = voice.pending || voice.transcribing || finishing;
+  // Intermediate refreshes (e.g. media resume) must not wipe the visible progress label.
+  voice.status = busy ? message || voice.status || '' : '';
   $('#voice-recording').hidden = !active;
-  $('#voice-recording-status').textContent = finishing ? t('voice.finishing') : message;
-  $('#voice-recording-status').classList.toggle('sr-only', !voice.pending && !voice.transcribing && !finishing);
+  $('#voice-recording').classList.toggle('is-busy', busy);
+  $('#voice-recording-status').textContent = finishing ? t('voice.finishing') : busy ? voice.status : message;
+  $('#voice-recording-status').classList.toggle('sr-only', !busy);
   $('#voice-waveform').hidden = voice.pending || voice.transcribing || finishing;
   $('#voice-recording-cancel').disabled = finishing;
   $('#voice-stop').hidden = !voice.recording;
