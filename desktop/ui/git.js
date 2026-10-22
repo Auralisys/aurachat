@@ -1,5 +1,5 @@
 // UI-only Git actions: previews never mutate the repository; commit/push need confirmation.
-const gitView = {key:null, root:null, repositories:null, truncated:false, epoch:0, operation:0, data:null, error:'', statusError:'', loading:false, working:false, staging:null, preview:null, message:'', combined:false, panel:null, editor:null, refreshTimer:null};
+const gitView = {key:null, root:null, manualRoot:false, repositories:null, truncated:false, epoch:0, operation:0, data:null, error:'', statusError:'', loading:false, working:false, staging:null, preview:null, message:'', combined:false, panel:null, editor:null, refreshTimer:null};
 
 function gitProject() {
   return activeConversation()?.project || state.data.projects.find(p => p.id === state.pendingProjectId);
@@ -11,7 +11,7 @@ function gitContext() {
   if (gitView.key !== key) {
     if ($('#git-push-confirm')?.open) $('#git-push-confirm').close('cancel');
     if ($('#git-discard-confirm')?.open) $('#git-discard-confirm').close('cancel');
-    Object.assign(gitView, {key, root:project?.source_folders?.[0], repositories:null, truncated:false, epoch:gitView.epoch + 1, data:null, error:'', statusError:'', loading:false, working:false, staging:null, preview:null, message:'', panel:null, editor:null});
+    Object.assign(gitView, {key, root:project?.source_folders?.[0], manualRoot:false, repositories:null, truncated:false, epoch:gitView.epoch + 1, data:null, error:'', statusError:'', loading:false, working:false, staging:null, preview:null, message:'', panel:null, editor:null});
     if (project && gitView.root) queueMicrotask(() => refreshGit());
   }
   return project;
@@ -40,11 +40,31 @@ async function refreshGit(background = false) {
       gitView.repositories = discovery.repositories;gitView.truncated = discovery.truncated;
       if (!gitView.repositories.includes(root)) {
         root = gitView.root = gitView.repositories[0] || null;
+        gitView.manualRoot = false;
         gitView.data = null;gitView.preview = null;gitView.message = '';gitView.editor = null;
       }
     }
     if (!root) {gitView.data = null;gitView.statusError = '';return;}
-    const data = await gitRequest('status');
+    let data;
+    if (gitView.repositories.length > 1 && !gitView.manualRoot && !gitView.preview && !gitView.message) {
+      const statuses = await Promise.all(gitView.repositories.map(async repository => ({
+        root:repository, data:await gitRequest('status', {root:repository}),
+      })));
+      if (epoch !== gitView.epoch || root !== gitView.root || operation !== gitView.operation) return;
+      // Prefer line changes, then changed files (including binary files); keep the current root on ties.
+      const score = item => [item.data.added + item.data.removed, item.data.files.length];
+      const best = statuses.reduce((best, item) => {
+        const a = score(item), b = score(best);
+        return a[0] > b[0] || (a[0] === b[0] && a[1] > b[1]) ? item : best;
+      }, statuses.find(item => item.root === root) || statuses[0]);
+      if (root !== best.root) {
+        root = gitView.root = best.root;
+        gitView.panel = null;gitView.editor = null;changed = true;
+      }
+      data = best.data;
+    } else {
+      data = await gitRequest('status');
+    }
     if (epoch !== gitView.epoch || root !== gitView.root) return;
     if (operation !== gitView.operation) {changed = false;return;}
     changed ||= !!gitView.statusError || JSON.stringify(data) !== JSON.stringify(gitView.data);
@@ -223,7 +243,7 @@ function renderGitPanel(content) {
     const select = document.createElement('select');select.setAttribute('aria-label', t('git.repository'));
     for (const root of gitView.repositories) {const option = document.createElement('option');option.value = root;option.textContent = root;option.selected = root === gitView.root;select.append(option);}
     select.disabled = gitView.working || gitView.loading || !!gitView.staging;
-    select.onchange = () => {gitView.root = select.value;gitView.epoch++;gitView.data = null;gitView.preview = null;gitView.message = '';gitView.editor = null;refreshGit();};panel.append(select);
+    select.onchange = () => {gitView.root = select.value;gitView.manualRoot = true;gitView.epoch++;gitView.data = null;gitView.preview = null;gitView.message = '';gitView.editor = null;refreshGit();};panel.append(select);
   }
   const header = activityText('div', '', 'git-actions');
   header.append(gitButton('git.refresh', () => refreshGit(), gitView.loading));

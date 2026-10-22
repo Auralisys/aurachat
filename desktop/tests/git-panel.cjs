@@ -40,7 +40,7 @@ const assert=require('node:assert/strict');
           if(args.action==='status'){
             if(window.__delayGitStatus)await new Promise(resolve=>window.__releaseGitStatus=resolve);
             if(window.__statusFailure)throw Error('Git: permission denied');
-            return stats();
+            return window.__repoStats?.[args.root] || stats();
           }
           if(['stage','unstage'].includes(args.action)){
             if(window.__delayStage)await new Promise(resolve=>window.__finishStage=resolve);
@@ -241,22 +241,66 @@ const assert=require('node:assert/strict');
     await page.evaluate(()=>{state.config.firebase_email='changed@example.com';renderActivity();});
     await page.locator('#git-discard-confirm').waitFor({state:'hidden'});
     assert.equal(await page.evaluate(()=>__calls.filter(c=>c.args?.action==='discard').length),discardCount,'Context change cancels pending confirmation');
-    await page.evaluate(async()=>{__repositories=['C:\\fixture\\one','C:\\fixture\\nested\\two'];await refreshGit();});
+    await page.waitForFunction(()=>!gitView.loading);
+    await page.evaluate(async()=>{
+      __repositories=['C:\\fixture\\one','C:\\fixture\\nested\\two','C:\\fixture\\three','C:\\fixture\\four'];
+      const clean={branch:'main',revision:'clean',added:0,removed:0,files:[]};
+      __repoStats={
+        [__repositories[0]]:clean,
+        [__repositories[1]]:{...clean,revision:'two',added:20,removed:5,files:[{path:'two.js'}]},
+        [__repositories[2]]:{...clean,revision:'three',added:2,removed:1,files:[{path:'three.js'}]},
+        [__repositories[3]]:clean,
+      };
+      gitView.preview=null;gitView.message='';await refreshGit();
+    });
     const repositories=page.getByRole('combobox',{name:locales['git.repository'],exact:true});
-    assert.deepEqual(await repositories.locator('option').evaluateAll(options=>options.map(option=>option.value)),['C:\\fixture\\one','C:\\fixture\\nested\\two']);
+    assert.equal(await repositories.inputValue(),'C:\\fixture\\nested\\two','Initial selection prefers the most changed repository, not the first');
+    assert.match(await card.innerText(),/\+20.*−5/s,'Sidebar uses the same dominant repository');
+    await page.evaluate(async()=>{
+      __repoStats[__repositories[2]]={...__repoStats[__repositories[2]],added:30,removed:2};
+      await refreshGit(true);
+    });
+    assert.equal(await repositories.inputValue(),'C:\\fixture\\three','Background edits in another repository update the automatic selection');
+    assert.match(await card.innerText(),/\+30.*−2/s);
+    await page.evaluate(async()=>{
+      __repoStats[__repositories[1]]={...__repoStats[__repositories[1]],added:30,removed:2};
+      await refreshGit(true);
+    });
+    assert.equal(await repositories.inputValue(),'C:\\fixture\\three','Equal changes keep the current repository');
+    await page.evaluate(async()=>{
+      __repoStats[__repositories[1]].files.push({path:'another.bin'});
+      await refreshGit(true);
+    });
+    assert.equal(await repositories.inputValue(),'C:\\fixture\\nested\\two','Changed file count breaks line-count ties');
+    await page.evaluate(async()=>{
+      gitView.preview={index_revision:gitView.data.revision};
+      __repoStats[__repositories[2]].added=100;
+      await refreshGit(true);
+    });
+    assert.equal(await repositories.inputValue(),'C:\\fixture\\nested\\two','An open commit preview keeps its repository');
+    await page.evaluate(async()=>{
+      gitView.preview=null;gitView.message='Commit in preparation';await refreshGit(true);
+    });
+    assert.equal(await repositories.inputValue(),'C:\\fixture\\nested\\two','A draft commit message keeps its repository');
+    await page.evaluate(async()=>{gitView.message='';await refreshGit(true);});
+    assert.equal(await repositories.inputValue(),'C:\\fixture\\three','Automatic selection resumes when commit preparation ends');
+    assert.deepEqual(await repositories.locator('option').evaluateAll(options=>options.map(option=>option.value)),['C:\\fixture\\one','C:\\fixture\\nested\\two','C:\\fixture\\three','C:\\fixture\\four']);
     await page.evaluate(()=>window.__delayGitStatus=true);
-    await repositories.selectOption('C:\\fixture\\nested\\two');
+    await repositories.selectOption('C:\\fixture\\one');
     await page.waitForFunction(()=>window.__releaseGitStatus);
     assert.equal(await repositories.isDisabled(),true,'Repository switching is disabled while the next context loads');
     await page.evaluate(()=>{window.__delayGitStatus=false;window.__releaseGitStatus();});
     await page.waitForFunction(()=>!gitView.loading);
-    assert.equal(await page.evaluate(()=>__calls.filter(c=>c.args?.action==='status').at(-1).args.root),'C:\\fixture\\nested\\two');
+    assert.equal(await page.evaluate(()=>__calls.filter(c=>c.args?.action==='status').at(-1).args.root),'C:\\fixture\\one');
+    await page.evaluate(async()=>{await refreshGit(true);});
+    assert.equal(await repositories.inputValue(),'C:\\fixture\\one','Explicit selection is not overridden by background refresh');
     await page.evaluate(async()=>{__repositories=[];await refreshGit();});
     await page.locator('#activity-panel').getByText(locales['git.no_repositories'],{exact:true}).waitFor();
     assert.equal(await page.locator('.git-group .activity-shell-error').count(),0);
     assert.equal(await page.evaluate(()=>gitView.data),null);
     await page.evaluate(async()=>{__repositories=['C:\\fixture\\restored'];await refreshGit();});
     assert.equal(await page.evaluate(()=>gitView.root),'C:\\fixture\\restored');
+    assert.equal(await page.evaluate(()=>gitView.manualRoot),false,'Removing the manually selected repository restores automatic selection');
     await page.evaluate(async()=>{__statusFailure=true;await refreshGit();});
     await page.locator('#activity-panel').getByRole('alert').filter({hasText:'permission denied'}).waitFor();
     await page.evaluate(async()=>{__statusFailure=false;await refreshGit();});

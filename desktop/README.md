@@ -117,7 +117,13 @@ configurato; i prompt interattivi sono disabilitati e gli errori sono mostrati.
 Git cerca le root di repository nelle cartelle collegate e autorizzate, anche
 nelle sottocartelle dei contenitori multi-repository. Il dettaglio offre un
 selettore quando ne trova più di una; senza repository mostra uno stato vuoto,
-non l'errore Git «not a git repository». La ricerca si esegue all'apertura e con
+non l'errore Git «not a git repository». Sidebar e dettaglio selezionano
+automaticamente il repository con più righe aggiunte/rimosse, poi più file
+modificati; a parità mantengono quello corrente. Gli aggiornamenti seguono
+le modifiche negli altri repository, senza cambiare una scelta manuale o
+spostare un'anteprima/messaggio di commit in preparazione. La selezione manuale
+si azzera cambiando progetto o quando il repository non è più disponibile.
+La ricerca si esegue all'apertura e con
 **Aggiorna**, non a ogni polling dello stato. Si ferma quando trova un repository,
 riconosce anche i worktree (`.git` come file), non segue link/junction e salta
 `.git`, `node_modules`, `target`, `.venv`, `build` e `dist`. Oltre 20.000 elementi
