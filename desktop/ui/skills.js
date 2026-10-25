@@ -103,7 +103,15 @@ function setupProjectSkills() {
     range.deleteContents();
     const textNode = document.createTextNode(replacement);
     range.insertNode(textNode);
-    placeCaretAfter(textNode);
+    // Place the caret *inside* the inserted text node (not at an element
+    // boundary) so caretOffset() can read its position; recolorSkills() then
+    // restores it instead of resetting the caret to 0.
+    const caretRange = document.createRange();
+    caretRange.setStart(textNode, textNode.textContent.length);
+    caretRange.collapse(true);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(caretRange);
     closeDropdown();
     dismissed = true;
     suppressNextSync = true;
