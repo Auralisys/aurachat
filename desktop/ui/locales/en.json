@@ -147,6 +147,8 @@
   "project.permission_note": "The app asks for consent before linking a folder. Read access applies only to this project on this device. Files are not uploaded automatically.",
   "project.allowed": "Read access allowed on this device",
   "project.not_allowed": "Access needed: select this folder again on this device",
+  "project.authorize": "Authorize",
+  "project.consent_required": "Authorize the project folder to continue.",
   "project.no_source": "No source folder linked",
   "project.first_chat": "Start the first chat",
   "project.save_failed": "Could not save the project. Try again.",

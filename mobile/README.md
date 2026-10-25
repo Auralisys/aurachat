@@ -28,7 +28,10 @@ ancora in coda oppure interrompe il turno del desktop, conservando il testo parz
 Durante un turno il telefono segue `live_turns`: mostra testo parziale, reasoning
 richiudibile, tool e sub-agenti, e un indicatore nelle chat che stanno lavorando,
 anche per i turni avviati dal desktop. A fine turno il testo definitivo arriva
-dai messaggi salvati.
+dai messaggi salvati. Le domande interattive (`ask_user`) compaiono come schede
+nella chat aperta e si rispondono dal telefono con le stesse azioni del desktop
+(risposta, scelta multipla, testo libero, discuti, salta o chiudi); generano
+anch'esse una notifica quando il turno resta in attesa.
 
 ## Configurazione esterna ancora necessaria
 
@@ -165,6 +168,10 @@ di distribuzione vengono eliminate dopo un giorno quando la policy è applicata.
   stato pending/running/completed/failed/cancelled. Presa in carico con precondizione
   sulla revisione Firestore, senza esecuzioni automatiche duplicate.
 - `users/{uid}/devices/{id}/approvals/{id}`: richieste di consenso con revisione.
+- `users/{uid}/devices/{id}/questions/{id}`: domande interattive `ask_user` in
+  attesa (scelta singola/multipla, risposta libera, batch fino a dodici); il
+  telefono risponde con l'azione `answer_question` e il desktop pubblica il
+  documento finché è pendente, poi lo rimuove alla risoluzione o all'annullamento.
 - `users/{uid}/devices/{id}/live_turns/{conversation_id}`: stato transitorio del
   turno in corso (`running/completed/failed/cancelled`, testo parziale,
   reasoning, activity). Il desktop lo aggiorna al massimo una volta al secondo,

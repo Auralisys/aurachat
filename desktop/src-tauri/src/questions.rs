@@ -95,6 +95,7 @@ pub struct Snapshot {
     pub id: String,
     pub conversation_id: String,
     pub agent_id: Option<String>,
+    pub created_at: u64,
     #[serde(flatten)]
     pub question: Question,
     pub status: String,
@@ -113,7 +114,7 @@ impl Questions {
         static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let snapshot = Snapshot {
             id: format!("question-{}", SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
-            conversation_id: conversation.into(), agent_id, question, status: "pending".into(),
+            conversation_id: conversation.into(), agent_id, created_at: crate::data::now_millis(), question, status: "pending".into(),
         };
         let response = Arc::new(Mutex::new(Response::default()));
         self.0.lock().unwrap().insert(snapshot.id.clone(), Entry {owner:owner.into(),snapshot:snapshot.clone(),response:response.clone()});

@@ -147,6 +147,8 @@
   "project.permission_note": "Il programma chiede il consenso prima di collegare una cartella. L’accesso in lettura vale solo per questo progetto su questo dispositivo. I file non vengono caricati automaticamente.",
   "project.allowed": "Lettura consentita su questo dispositivo",
   "project.not_allowed": "Da autorizzare: seleziona di nuovo la cartella su questo dispositivo",
+  "project.authorize": "Autorizza",
+  "project.consent_required": "Autorizza la cartella del progetto per continuare.",
   "project.no_source": "Nessuna cartella di origine collegata",
   "project.first_chat": "Avvia la prima chat",
   "project.save_failed": "Non riesco a salvare il progetto. Riprova.",

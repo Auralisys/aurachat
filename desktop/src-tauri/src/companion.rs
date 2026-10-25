@@ -303,6 +303,30 @@ pub fn start(app: &tauri::AppHandle) {
             }
         });
     });
+    // Interactive questions are published as transient documents so the phone can
+    // answer while the turn is paused; resolution/cancel retracts the document.
+    let questions_app=app.clone();
+    app.listen("question-activity",move |event| {
+        let Ok(value)=serde_json::from_str::<Value>(event.payload()) else{return};
+        let handle=questions_app.clone();
+        tauri::async_runtime::spawn(async move {
+            let state=handle.state::<AppState>();let Some(uid)=state.firestore.uid() else{return};
+            let Ok(auth)=crate::firebase_auth(&state) else{return};let (device,_)=identity();
+            let Some(id)=value["id"].as_str().map(str::to_owned) else{return};
+            let conversation=value["conversation_id"].as_str().unwrap_or("");
+            let path=format!("users/{uid}/devices/{device}/questions/{id}");
+            match value["status"].as_str() {
+                Some("pending") => {
+                    if let Err(e)=state.firestore.relay_upsert(&auth,&path,&value).await {eprintln!("Question publication failed: {e}");}
+                    notify(&handle,"question-requested",&format!("{process_started}/{id}"),conversation,"Una domanda attende la tua risposta","Apri AuraChat per rispondere dal telefono o dal PC.");
+                },
+                Some("answered") | Some("cancelled") => {
+                    let _=state.firestore.relay_delete(&auth,&path).await;
+                },
+                _ => {}
+            }
+        });
+    });
     // Intermediate work (tools, subagents, shell commands) stays in the app.
     // Only events that need the user are pushed: approval requests here, plus
     // one notification per chat turn and blocking errors from run_chat.
@@ -552,6 +576,13 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
         "stop_agent"=>return crate::stop_subagent(app.state::<AppState>(),app.state::<crate::agent_runs::AgentRuns>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["agent_id"].as_str().ok_or("invalid_agent")?.into()).await.map(|_|Value::Null),
         "stop_shell"=>return crate::stop_shell(app.state::<AppState>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["shell_id"].as_str().ok_or("invalid_shell")?.into()).await.map(|_|Value::Null),
         "approve"=>return app.state::<crate::approvals::Approvals>().resolve(uid,id,request["approval_id"].as_str().ok_or("invalid_approval")?,request["allow"].as_bool().ok_or("invalid_decision")?).map(|_|Value::Null),
+        "answer_question"=>{
+            let question_id=request["question_id"].as_str().ok_or("invalid_question")?;
+            let answer:crate::questions::Answer=serde_json::from_value(request["answer"].clone()).map_err(|_|"invalid_question_answer".to_string())?;
+            let snapshot=app.state::<crate::questions::Questions>().resolve(uid,id,question_id,answer)?;
+            let _=app.emit("question-activity",snapshot);
+            return Ok(Value::Null);
+        },
         "model"=>return crate::set_conversation_model(app.state::<AppState>(),id.into(),request["model"].as_str().ok_or("invalid_model")?.into()).await.map(|_|Value::Null),
         "skills_catalog"=>{
             let context=crate::skill_context(app,uid,request["project_id"].as_str())?;

@@ -575,7 +575,17 @@ function updateProjectEditor() {
       updateProjectEditor();
     });
     remove.disabled = projectEditorBusy;
-    row.append(icon('folder'),text,remove);list.appendChild(row);
+    row.append(icon('folder'),text,remove);
+    if (!projectDraft.allowed.includes(path)) {
+      const authorize = document.createElement('button');
+      authorize.type = 'button';
+      authorize.className = 'project-source__authorize';
+      authorize.textContent = t('project.authorize');
+      authorize.disabled = projectEditorBusy;
+      authorize.onclick = () => authorizeDraftFolder(path);
+      row.append(authorize);
+    }
+    list.appendChild(row);
   }
   $('#project-source-empty').hidden = projectDraft.source_folders.length > 0;
   $('#project-save').disabled = projectEditorBusy || !$('#project-name-input').value.trim() || !projectDraft.source_folders.length;
@@ -609,6 +619,20 @@ async function addProjectSource() {
       if (!projectDraft.source_folders.includes(path)) projectDraft.source_folders.push(path);
       if (!projectDraft.allowed.includes(path)) projectDraft.allowed.push(path);
       if (!$('#project-name-input').value.trim()) $('#project-name-input').value = path.split(/[\\/]/).filter(Boolean).at(-1) || path;
+    }
+  } catch (e) { projectEditorError(e); }
+  finally { projectEditorBusy = false;updateProjectEditor();$('#project-name-input').focus(); }
+}
+
+async function authorizeDraftFolder(oldPath) {
+  if (!projectDraft || projectEditorBusy) return;
+  projectEditorBusy = true;$('#project-error').hidden = true;updateProjectEditor();
+  try {
+    const path = await invoke('choose_project_folder',{project_id:projectDraft.id,lang});
+    if (path) {
+      const index = projectDraft.source_folders.indexOf(oldPath);
+      if (index >= 0) projectDraft.source_folders[index] = path;
+      if (!projectDraft.allowed.includes(path)) projectDraft.allowed.push(path);
     }
   } catch (e) { projectEditorError(e); }
   finally { projectEditorBusy = false;updateProjectEditor();$('#project-name-input').focus(); }
@@ -1075,12 +1099,14 @@ function composerHasContent() {
 function updateComposerControls() {
   const send = $('#composer-send'), stop = $('#composer-stop');
   const dictating = voice.pending || voice.transcribing || (!!voice.nativeOperation && !voice.recording);
+  const recording = !!voice.recording;
   const notReady = state.preparing || state.loadingConversation || state.changingModel || activeConversation()?.conversation.messages_loaded === false;
   const busy = state.busy, run = state.runs.get(state.activeConversationId);
   // Composer vuoto durante un turno: solo Stop. Con un messaggio scritto: Stop e Invia (accodato).
-  stop.hidden = !busy;
-  stop.disabled = !busy || notReady || dictating || !!run?.stopping;
-  send.hidden = busy && !composerHasContent();
+  // Durante la registrazione vocale lo stop del modello non ha senso: resta solo Invia (trascrivi e invia).
+  stop.hidden = !busy || recording;
+  stop.disabled = !busy || notReady || dictating || recording || !!run?.stopping;
+  send.hidden = busy && !composerHasContent() && !recording;
   send.disabled = notReady || dictating;
   const label = t(busy ? 'chat.queue_send' : 'titlebar.send');
   send.setAttribute('aria-label', label);
@@ -1122,6 +1148,16 @@ async function stopChat() {
   catch (e) { if (!errText(e).includes('chat_not_running')) composerStatus(localizeError(e)); }
 }
 
+async function missingActiveProjectFolder() {
+  try {
+    const project = activeConversation()?.project;
+    if (!project?.source_folders?.length) return null;
+    const granted = await invoke('project_folder_access',{project_id:project.id});
+    const path = project.source_folders.find(p => !granted.includes(p));
+    return path ? { project, path } : null;
+  } catch (_) { return null; }
+}
+
 async function send() {
   if (voice.recording) return stopVoice(true);
   if (state.preparing || state.loadingConversation || activeConversation()?.conversation.messages_loaded === false || state.changingModel || voice.pending || voice.transcribing || voice.nativeOperation) return;
@@ -1135,6 +1171,19 @@ async function send() {
   }
   const id = state.activeConversationId;
   if (!id) return;
+  const missingFolder = await missingActiveProjectFolder();
+  if (missingFolder) {
+    composerStatus(t('project.consent_required'));
+    try {
+      const path = await invoke('choose_project_folder',{project_id:missingFolder.project.id,lang});
+      if (!path) return;
+      const index = missingFolder.project.source_folders.indexOf(missingFolder.path);
+      if (index >= 0) missingFolder.project.source_folders[index] = path;
+      else missingFolder.project.source_folders.push(path);
+      if (!await persist()) return;
+      composerStatus();
+    } catch (e) { composerStatus(localizeError(e)); return; }
+  }
   input.value = '';autoGrow(input);state.attachments=[];state.editingMessageIndex=null;renderDraft();composerStatus();
   nameConversationFromMessage(id, text, attachments, editIndex);
   input.focus();
@@ -1188,13 +1237,14 @@ function setupComposerExtras() {
     ]);
   };
   $('#composer-attach').onclick=attachFiles;
-  $('#cancel-edit').onclick=()=>{state.editingMessageIndex=null;state.attachments=[];$('#composer-input').value='';renderDraft();};
+  $('#cancel-edit').onclick=()=>{state.editingMessageIndex=null;state.attachments=[];const ta=$('#composer-input');ta.value='';autoGrow(ta);renderDraft();};
   setupLocalVoice();
 }
 
 function autoGrow(ta) {
   ta.style.height = 'auto';
   ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
+  if (ta && ta.id === 'composer-input') skillsChooser?.renderHighlight?.();
 }
 
 function activeModel() {

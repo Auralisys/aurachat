@@ -133,6 +133,8 @@ class Companion {
       user.collection('companion').doc('state').snapshots();
   Stream<QuerySnapshot<Map<String, dynamic>>> liveTurns(String device) =>
       devices.doc(device).collection('live_turns').snapshots();
+  Stream<QuerySnapshot<Map<String, dynamic>>> questions(String device) =>
+      devices.doc(device).collection('questions').snapshots();
   Stream<QuerySnapshot<Map<String, dynamic>>> messages(String id) => user
       .collection('conversations')
       .doc(id)

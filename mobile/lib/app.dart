@@ -22,6 +22,7 @@ import 'queued_bubble.dart';
 import 'skills_page.dart';
 import 'chat_actions.dart';
 import 'chat_recap.dart';
+import 'question_card.dart';
 
 final push = PushNotifications();
 void startAuraChat() {
@@ -284,11 +285,12 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   indexSubscription;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? messageSubscription,
       approvalSubscription,
+      questionSubscription,
       liveSubscription;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
   requestSubscription;
   final List<Map<String, dynamic>> devices = [];
-  List<Map<String, dynamic>> chats = [], messages = [], approvals = [];
+  List<Map<String, dynamic>> chats = [], messages = [], approvals = [], questions = [];
   Map<String, Map<String, dynamic>> liveTurns = {};
   Map<String, dynamic> tree = {};
   String? deviceId,
@@ -399,6 +401,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
           await prefs.setString('device_${widget.user.uid}', deviceId!);
         }
         watchApprovals();
+        watchQuestions();
         watchLiveTurns();
         restoreRequest();
       }
@@ -436,6 +439,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     indexSubscription.cancel();
     messageSubscription?.cancel();
     approvalSubscription?.cancel();
+    questionSubscription?.cancel();
     liveSubscription?.cancel();
     requestSubscription?.cancel();
     push.target.removeListener(openNotification);
@@ -550,6 +554,31 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         }, onError: fail);
   }
 
+  void watchQuestions() {
+    questionSubscription?.cancel();
+    if (deviceId == null) {
+      return;
+    }
+    questionSubscription = api
+        .questions(deviceId!)
+        .listen((snapshot) {
+          if (mounted) {
+            setState(
+              () => questions = snapshot.docs
+                  .map((d) => d.data())
+                  .where(
+                    (q) =>
+                        q['status'] == 'pending' &&
+                        DateTime.now().millisecondsSinceEpoch -
+                                ((q['created_at'] as num?)?.toInt() ?? 0) <
+                            600000,
+                  )
+                  .toList(),
+            );
+          }
+        }, onError: fail);
+  }
+
   void watchLiveTurns() {
     liveSubscription?.cancel();
     if (deviceId == null) {
@@ -644,6 +673,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     });
     requestSubscription?.cancel();
     watchApprovals();
+    watchQuestions();
     watchLiveTurns();
     restoreRequest();
     final prefs = await SharedPreferences.getInstance();
@@ -1037,6 +1067,24 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       }
     } catch (e) {
       fail(e);
+    }
+  }
+
+  Future<void> answerQuestion(
+    Map<String, dynamic> question,
+    Map<String, dynamic> answer,
+  ) async {
+    final id = conversationId;
+    if (deviceId == null || id == null) {
+      throw StateError('Seleziona un PC disponibile.');
+    }
+    try {
+      await api.control(deviceId!, id, 'answer_question', {
+        'question_id': question['id'],
+        'answer': answer,
+      });
+    } on StateError catch (e) {
+      throw StateError(remoteError(e.message));
     }
   }
 
@@ -2228,6 +2276,31 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                         ),
                       ),
                     ),
+                  if (questions.any(
+                    (q) => q['conversation_id'] == conversationId,
+                  ))
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: MediaQuery.sizeOf(context).height * .5,
+                      ),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          children: questions
+                              .where(
+                                (q) => q['conversation_id'] == conversationId,
+                              )
+                              .map(
+                                (question) => QuestionCard(
+                                  key: ValueKey(question['id']),
+                                  question: question,
+                                  onSubmit: (answer) =>
+                                      answerQuestion(question, answer),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      ),
+                    ),
                   Padding(
                     key: const ValueKey('composer-area'),
                     padding: EdgeInsets.fromLTRB(12, 8, 12, keyboard ? 8 : 12),
@@ -2289,6 +2362,10 @@ String remoteError(String? error) => switch (error) {
   'conversation_conflict' =>
     'La chat è cambiata su un altro dispositivo. Riaprila prima di riprovare.',
   'conversation_not_found' => 'Questa conversazione non è più disponibile.',
+  'question_not_found' =>
+    'La domanda è già stata risolta o non è più disponibile.',
+  'invalid_question_answer' =>
+    'La risposta non è valida. Ricontrolla le opzioni.',
   'no_api_key' || 'model_not_found' =>
     'Configura un modello sul desktop prima di inviare messaggi.',
   _ => 'Il desktop non ha completato la richiesta. Controlla AuraChat sul PC.',
