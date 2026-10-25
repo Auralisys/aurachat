@@ -964,7 +964,7 @@ function messageEl(m, index) {
   } else if (role === 'user') {
     const edit = messageAction('rename','chat.edit',() => editMessage(index));edit.disabled = state.busy;actions.appendChild(edit);
   } else if (state.failedSend) actions.appendChild(messageAction('retry','chat.retry',() => {
-    $('#composer-input').value = state.failedSend.content;state.attachments = structuredClone(state.failedSend.attachments);renderDraft();send();
+    $('#composer-input').value = state.failedSend.content;state.attachments = structuredClone(state.failedSend.attachments);renderDraft();autoGrow($('#composer-input'));send();
   }));
   el.appendChild(actions);return el;
 }
@@ -1244,6 +1244,7 @@ function setupComposerExtras() {
 function autoGrow(ta) {
   ta.style.height = 'auto';
   ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
+  skillsChooser?.highlight();
 }
 
 function activeModel() {

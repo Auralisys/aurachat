@@ -1,6 +1,7 @@
 // Catalogs come only from the authenticated native project_skills command.
 function setupProjectSkills() {
   const input = document.querySelector('#composer-input');
+  const layer = document.querySelector('#composer-highlight');
   const panel = document.querySelector('#skill-chooser');
   const list = document.querySelector('#skill-options');
   const status = document.querySelector('#skill-status');
@@ -29,6 +30,30 @@ function setupProjectSkills() {
   }
   function query() {
     return currentToken()?.name ?? null;
+  }
+  // Overlay sopra la textarea: mostra SOLO i nomi skill installati, colorati; il resto resta trasparente.
+  function syncHighlightScroll() { layer.scrollTop = input.scrollTop; layer.scrollLeft = input.scrollLeft; }
+  function renderHighlight() {
+    layer.replaceChildren();
+    const text = input.value;
+    const names = new Set((catalog?.skills || []).map(skill => skill.name.toLowerCase()));
+    if (!names.size || !text) { layer.append(document.createTextNode(text)); syncHighlightScroll(); return; }
+    let last = 0;
+    for (const match of text.matchAll(/(\/[a-zA-Z0-9_-]+)/g)) {
+      const start = match.index, end = start + match[0].length;
+      if (start > 0 && !/\s/.test(text[start - 1])) continue;
+      if (end < text.length && !/\s/.test(text[end])) continue;
+      const name = match[1].slice(1).toLowerCase();
+      if (!names.has(name)) continue;
+      if (start > last) layer.append(document.createTextNode(text.slice(last, start)));
+      const span = document.createElement('span');
+      span.className = 'skill-token';
+      span.textContent = match[1];
+      layer.append(span);
+      last = end;
+    }
+    layer.append(document.createTextNode(text.slice(last)));
+    syncHighlightScroll();
   }
   function closeDropdown() {
     panel.hidden = true;list.replaceChildren();rows = [];
@@ -69,7 +94,8 @@ function setupProjectSkills() {
       for (const skill of catalog.skills) counts.set(skill.name, (counts.get(skill.name) || 0) + 1);
       rows = catalog.skills.filter(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(search))
         .map(skill => ({...skill, duplicate:counts.get(skill.name) > 1}));
-      status.textContent = !rows.length ? t('skills.no_match') : rows.some(skill => skill.duplicate) ? t('skills.duplicate') : t('skills.keys');
+      if (!rows.length && search.length > 0) { closeDropdown(); return; }
+      status.textContent = rows.some(skill => skill.duplicate) ? t('skills.duplicate') : t('skills.keys');
       if (catalog.truncated) status.textContent += ` ${t('skills.truncated')}`;
       rows.forEach((skill, index) => {
         const row = document.createElement('button');row.type = 'button';row.tabIndex = -1;
@@ -106,6 +132,7 @@ function setupProjectSkills() {
     }
     if (request !== epoch) return;
     pending = false;
+    renderHighlight();
     if (query() !== null && !dismissed) render();
   }
   function sync() {
@@ -114,7 +141,7 @@ function setupProjectSkills() {
       context = key;
       catalog = null;pending = false;failed = false;
       epoch++;dismissed = false;selected = 0;lastQuery = '';
-      closeDropdown();
+      closeDropdown();renderHighlight();
     }
     if (query() === null || dismissed) {if (!panel.hidden) closeDropdown();return;}
     if (!catalog && !pending && !failed) {fetchCatalog();return;}
@@ -123,6 +150,7 @@ function setupProjectSkills() {
 
   function invalidate() {closeDropdown();context = '';catalog = null;sync();}
   input.addEventListener('input', () => {dismissed = false;sync();});
+  input.addEventListener('scroll', syncHighlightScroll);
   input.addEventListener('focus', () => {dismissed = false;sync();});
   input.addEventListener('click', sync);
   input.addEventListener('blur', event => {if (!panel.contains(event.relatedTarget)) closeDropdown();});
@@ -139,7 +167,7 @@ function setupProjectSkills() {
   });
   retry.addEventListener('click', () => {input.focus();failed = false;sync();});
   document.addEventListener('pointerdown', event => {if (event.target !== input && !panel.contains(event.target)) {dismissed = true;closeDropdown();}});
-  return {sync, invalidate};
+  return {sync, invalidate, highlight: renderHighlight};
 }
 
   let skillSettingsEpoch = 0;
