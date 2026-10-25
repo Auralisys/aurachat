@@ -82,6 +82,29 @@ function caretOffset() {
   return offset;
 }
 
+// Place the caret at a character offset relative to the start of the composer
+// text (same convention as caretOffset()). Used after live re-coloring.
+function setCaretOffset(offset) {
+  const el = composerEl();
+  if (!el) return;
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let node, pos = 0;
+  const range = document.createRange();
+  while ((node = walker.nextNode())) {
+    const len = node.textContent.length;
+    if (offset <= pos + len) {
+      range.setStart(node, Math.max(0, Math.min(offset - pos, len)));
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return;
+    }
+    pos += len;
+  }
+  placeCaretAtEnd(el);
+}
+
 // Build a DOM Range covering the [start, end) character range of the composer
 // text (same convention as composerText()).
 function composerRange(start, end) {

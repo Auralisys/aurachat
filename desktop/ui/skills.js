@@ -31,6 +31,50 @@ function setupProjectSkills() {
   function query() {
     return currentToken()?.name ?? null;
   }
+  // Skill tokens present in the plain text whose names match an installed,
+  // enabled skill. A token is exactly "/name" (one word, no spaces) bounded by
+  // whitespace or the start/end of the message.
+  function findSkillTokens(text) {
+    if (!catalog || !text.includes('/')) return [];
+    const names = new Set(catalog.skills.map(skill => skill.name.toLowerCase()));
+    const tokens = [];
+    const regex = /(^|\s)(\/[a-zA-Z0-9_-]+)(?=\s|$)/g;
+    let match;
+    while ((match = regex.exec(text))) {
+      const raw = match[2];
+      if (names.has(raw.slice(1).toLowerCase())) {
+        tokens.push({start: match.index + match[1].length, end: match.index + match[1].length + raw.length, raw});
+      }
+    }
+    return tokens;
+  }
+  // Live re-coloring: flatten existing skill spans back to plain text, then
+  // wrap only the valid skill tokens. Preserves the caret offset.
+  function recolorSkills() {
+    const el = input;
+    const selection = window.getSelection();
+    if (!el || !selection || !selection.isCollapsed || !el.contains(selection.anchorNode)) return;
+    const text = composerText();
+    if (text.includes('\n')) return;
+    const caret = caretOffset();
+    const tokens = findSkillTokens(text);
+    const hasSpans = el.querySelector('.skill-token');
+    if (!tokens.length && !hasSpans) return;
+    if (hasSpans) {
+      el.querySelectorAll('.skill-token').forEach(span => span.replaceWith(document.createTextNode(span.textContent || '')));
+      el.normalize();
+    }
+    for (let i = tokens.length - 1; i >= 0; i--) {
+      const token = tokens[i];
+      const range = composerRange(token.start, token.end);
+      const span = document.createElement('span');
+      span.className = 'skill-token';
+      span.textContent = token.raw;
+      range.deleteContents();
+      range.insertNode(span);
+    }
+    setCaretOffset(caret);
+  }
   function closeDropdown() {
     panel.hidden = true;list.replaceChildren();rows = [];
     input.setAttribute('aria-expanded', 'false');input.removeAttribute('aria-activedescendant');
@@ -54,22 +98,16 @@ function setupProjectSkills() {
     const end = token.slash + tokenText.length;
     const after = composerText()[end] || '';
     const separator = after && /\s/.test(after) ? '' : ' ';
-    const span = document.createElement('span');
-    span.className = 'skill-token';
-    span.textContent = '/' + skill.name;
+    const replacement = '/' + skill.name + separator;
     const range = composerRange(token.slash, end);
     range.deleteContents();
-    range.insertNode(span);
-    if (separator) {
-      const space = document.createTextNode(separator);
-      span.after(space);
-      placeCaretAfter(space);
-    } else {
-      placeCaretAfter(span);
-    }
+    const textNode = document.createTextNode(replacement);
+    range.insertNode(textNode);
+    placeCaretAfter(textNode);
     closeDropdown();
     dismissed = true;
     suppressNextSync = true;
+    recolorSkills();
     notifyComposerInput();
     input.focus();
   }
@@ -123,6 +161,7 @@ function setupProjectSkills() {
     }
     if (request !== epoch) return;
     pending = false;
+    recolorSkills();
     if (query() !== null && !dismissed) render();
   }
   function sync() {
@@ -139,7 +178,7 @@ function setupProjectSkills() {
   }
 
   function invalidate() {closeDropdown();context = '';catalog = null;sync();}
-  input.addEventListener('input', () => {if (suppressNextSync) {suppressNextSync = false;return;} dismissed = false;sync();});
+  input.addEventListener('input', event => {if (suppressNextSync) {suppressNextSync = false;return;} dismissed = false;sync();if (!event.isComposing) recolorSkills();});
   input.addEventListener('focus', () => {dismissed = false;sync();});
   input.addEventListener('click', sync);
   input.addEventListener('blur', event => {if (!panel.contains(event.relatedTarget)) closeDropdown();});
@@ -156,7 +195,7 @@ function setupProjectSkills() {
   });
   retry.addEventListener('click', () => {input.focus();failed = false;sync();});
   document.addEventListener('pointerdown', event => {if (event.target !== input && !panel.contains(event.target)) {dismissed = true;closeDropdown();}});
-  return {sync, invalidate};
+  return {sync, invalidate, recolor: recolorSkills};
 }
 
   let skillSettingsEpoch = 0;
