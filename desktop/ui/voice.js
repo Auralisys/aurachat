@@ -234,7 +234,7 @@ async function stopVoice(sendAfter = false) {
     const text = await speechRequest('transcribe_audio', { samples, language: lang });
     if (epoch !== voice.epoch) return;
     if (!text?.trim()) { composerStatus(t('voice.speech_silence')); return; }
-    const input = $('#composer-input'); input.value += (input.value && !/\s$/.test(input.value) ? ' ' : '') + text.trim();
+    const input = $('#composer-input'); appendComposerText(text.trim());
     autoGrow(input); input.focus(); composerStatus();
     if (sendAfter) { voice.transcribing = false; voiceUi(); await send(); }
   } catch (error) {

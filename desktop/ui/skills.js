@@ -1,13 +1,12 @@
 // Catalogs come only from the authenticated native project_skills command.
 function setupProjectSkills() {
   const input = document.querySelector('#composer-input');
-  const layer = document.querySelector('#composer-highlight');
   const panel = document.querySelector('#skill-chooser');
   const list = document.querySelector('#skill-options');
   const status = document.querySelector('#skill-status');
   const retry = document.querySelector('#skill-retry');
   let context = '', epoch = 0, catalog = null, pending = false, failed = false;
-  let dismissed = false, rows = [], selected = 0, lastQuery = '';
+  let dismissed = false, rows = [], selected = 0, lastQuery = '', suppressNextSync = false;
 
   function projectId() {
     return findConversation(state.activeConversationId)?.project?.id || state.pendingProjectId || null;
@@ -18,9 +17,10 @@ function setupProjectSkills() {
   // Slash token at the caret, anywhere in the message (start or middle).
   function currentToken() {
     if (document.activeElement !== input || state.preparing || state.loadingConversation || state.changingModel) return null;
-    const cursor = input.selectionStart;
-    if (cursor !== input.selectionEnd) return null;
-    const before = input.value.slice(0, cursor);
+    const selection = window.getSelection();
+    if (!selection || !selection.isCollapsed) return null;
+    const cursor = caretOffset();
+    const before = composerText().slice(0, cursor);
     const slash = before.lastIndexOf('/');
     if (slash < 0) return null;
     if (slash > 0 && !/\s/.test(before[slash - 1])) return null;
@@ -30,30 +30,6 @@ function setupProjectSkills() {
   }
   function query() {
     return currentToken()?.name ?? null;
-  }
-  // Overlay sopra la textarea: mostra SOLO i nomi skill installati, colorati; il resto resta trasparente.
-  function syncHighlightScroll() { layer.scrollTop = input.scrollTop; layer.scrollLeft = input.scrollLeft; }
-  function renderHighlight() {
-    layer.replaceChildren();
-    const text = input.value;
-    const names = new Set((catalog?.skills || []).map(skill => skill.name.toLowerCase()));
-    if (!names.size || !text) { layer.append(document.createTextNode(text)); syncHighlightScroll(); return; }
-    let last = 0;
-    for (const match of text.matchAll(/(\/[a-zA-Z0-9_-]+)/g)) {
-      const start = match.index, end = start + match[0].length;
-      if (start > 0 && !/\s/.test(text[start - 1])) continue;
-      if (end < text.length && !/\s/.test(text[end])) continue;
-      const name = match[1].slice(1).toLowerCase();
-      if (!names.has(name)) continue;
-      if (start > last) layer.append(document.createTextNode(text.slice(last, start)));
-      const span = document.createElement('span');
-      span.className = 'skill-token';
-      span.textContent = match[1];
-      layer.append(span);
-      last = end;
-    }
-    layer.append(document.createTextNode(text.slice(last)));
-    syncHighlightScroll();
   }
   function closeDropdown() {
     panel.hidden = true;list.replaceChildren();rows = [];
@@ -74,13 +50,28 @@ function setupProjectSkills() {
     const skill = rows[index];
     if (!skill) return;
     if (skill.duplicate) {status.textContent = t('skills.duplicate');return;}
-    const end = input.selectionStart;
-    const after = input.value[end] || '';
+    const tokenText = '/' + token.name;
+    const end = token.slash + tokenText.length;
+    const after = composerText()[end] || '';
     const separator = after && /\s/.test(after) ? '' : ' ';
-    input.value = input.value.slice(0, token.slash) + `/${skill.name}` + separator + input.value.slice(end);
-    const caret = token.slash + skill.name.length + 1 + separator.length;
-    input.setSelectionRange(caret, caret);
-    closeDropdown();input.dispatchEvent(new Event('input', {bubbles:true}));input.focus();
+    const span = document.createElement('span');
+    span.className = 'skill-token';
+    span.textContent = '/' + skill.name;
+    const range = composerRange(token.slash, end);
+    range.deleteContents();
+    range.insertNode(span);
+    if (separator) {
+      const space = document.createTextNode(separator);
+      span.after(space);
+      placeCaretAfter(space);
+    } else {
+      placeCaretAfter(span);
+    }
+    closeDropdown();
+    dismissed = true;
+    suppressNextSync = true;
+    notifyComposerInput();
+    input.focus();
   }
   function render() {
     const search = query();
@@ -132,7 +123,6 @@ function setupProjectSkills() {
     }
     if (request !== epoch) return;
     pending = false;
-    renderHighlight();
     if (query() !== null && !dismissed) render();
   }
   function sync() {
@@ -141,7 +131,7 @@ function setupProjectSkills() {
       context = key;
       catalog = null;pending = false;failed = false;
       epoch++;dismissed = false;selected = 0;lastQuery = '';
-      closeDropdown();renderHighlight();
+      closeDropdown();
     }
     if (query() === null || dismissed) {if (!panel.hidden) closeDropdown();return;}
     if (!catalog && !pending && !failed) {fetchCatalog();return;}
@@ -149,8 +139,7 @@ function setupProjectSkills() {
   }
 
   function invalidate() {closeDropdown();context = '';catalog = null;sync();}
-  input.addEventListener('input', () => {dismissed = false;sync();});
-  input.addEventListener('scroll', syncHighlightScroll);
+  input.addEventListener('input', () => {if (suppressNextSync) {suppressNextSync = false;return;} dismissed = false;sync();});
   input.addEventListener('focus', () => {dismissed = false;sync();});
   input.addEventListener('click', sync);
   input.addEventListener('blur', event => {if (!panel.contains(event.relatedTarget)) closeDropdown();});
@@ -167,7 +156,7 @@ function setupProjectSkills() {
   });
   retry.addEventListener('click', () => {input.focus();failed = false;sync();});
   document.addEventListener('pointerdown', event => {if (event.target !== input && !panel.contains(event.target)) {dismissed = true;closeDropdown();}});
-  return {sync, invalidate, highlight: renderHighlight};
+  return {sync, invalidate};
 }
 
   let skillSettingsEpoch = 0;

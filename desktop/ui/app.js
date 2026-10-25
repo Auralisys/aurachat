@@ -80,7 +80,11 @@ function t(key) {
 function applyTranslations() {
   document.documentElement.lang = lang;
   document.querySelectorAll('[data-i18n]').forEach((el) => (el.textContent = t(el.dataset.i18n)));
-  document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => el.setAttribute('placeholder', t(el.dataset.i18nPlaceholder)));
+  document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
+    const value = t(el.dataset.i18nPlaceholder);
+    if (el.isContentEditable) el.setAttribute('data-placeholder', value);
+    else el.setAttribute('placeholder', value);
+  });
   document.querySelectorAll('[data-i18n-aria-label]').forEach((el) => el.setAttribute('aria-label', t(el.dataset.i18nAriaLabel)));
   document.querySelectorAll('[data-i18n-title]').forEach((el) => el.setAttribute('title', t(el.dataset.i18nTitle)));
 }
@@ -161,12 +165,12 @@ function conversationInData(data, id) {
 }
 
 function saveChatDraft() {
-  state.drafts.set(state.activeConversationId, {text:$('#composer-input').value, attachments:structuredClone(state.attachments), editing:state.editingMessageIndex});
+  state.drafts.set(state.activeConversationId, {text:composerText(), attachments:structuredClone(state.attachments), editing:state.editingMessageIndex});
 }
 
 function restoreChatDraft(id) {
   const draft = state.drafts.get(id);
-  $('#composer-input').value = draft?.text || '';autoGrow($('#composer-input'));
+  setComposerText(draft?.text || '');autoGrow();
   state.attachments = structuredClone(draft?.attachments || []);state.editingMessageIndex = draft?.editing ?? null;renderDraft();
 }
 
@@ -738,7 +742,7 @@ function clearChat() {
   state.activeConversationSection = null;
   state.pendingProjectId = null;
   state.messages = [];
-  $('#composer-input').value='';autoGrow($('#composer-input'));
+  clearComposer();autoGrow();
   state.lastUsage = null;
   renderMessages();
   updateContextInfo();
@@ -920,7 +924,7 @@ function editMessage(index) {
   if (state.busy || state.preparing) return;
   const message = state.messages[index];state.editingMessageIndex = index;
   state.attachments = structuredClone(message.attachments || []);
-  $('#composer-input').value = message.content;autoGrow($('#composer-input'));renderDraft();$('#composer-input').focus();
+  setComposerText(message.content);autoGrow();renderDraft();$('#composer-input').focus();
 }
 
 function messageEl(m, index) {
@@ -964,7 +968,7 @@ function messageEl(m, index) {
   } else if (role === 'user') {
     const edit = messageAction('rename','chat.edit',() => editMessage(index));edit.disabled = state.busy;actions.appendChild(edit);
   } else if (state.failedSend) actions.appendChild(messageAction('retry','chat.retry',() => {
-    $('#composer-input').value = state.failedSend.content;state.attachments = structuredClone(state.failedSend.attachments);renderDraft();autoGrow($('#composer-input'));send();
+    setComposerText(state.failedSend.content);state.attachments = structuredClone(state.failedSend.attachments);renderDraft();autoGrow();send();
   }));
   el.appendChild(actions);return el;
 }
@@ -1093,7 +1097,7 @@ function nameConversationFromMessage(id, text, attachments, editIndex) {
 
 // ===== Invio, coda e stop =====
 function composerHasContent() {
-  return !!$('#composer-input').value.trim() || state.attachments.length > 0;
+  return !!composerText().trim() || state.attachments.length > 0;
 }
 
 function updateComposerControls() {
@@ -1161,7 +1165,7 @@ async function missingActiveProjectFolder() {
 async function send() {
   if (voice.recording) return stopVoice(true);
   if (state.preparing || state.loadingConversation || activeConversation()?.conversation.messages_loaded === false || state.changingModel || voice.pending || voice.transcribing || voice.nativeOperation) return;
-  const input = $('#composer-input'), text = input.value.trim();
+  const input = $('#composer-input'), text = composerText().trim();
   const attachments = structuredClone(state.attachments), editIndex = state.editingMessageIndex;
   if (!text && !attachments.length) return;
   if (!state.activeConversationId) {
@@ -1184,7 +1188,7 @@ async function send() {
       composerStatus();
     } catch (e) { composerStatus(localizeError(e)); return; }
   }
-  input.value = '';autoGrow(input);state.attachments=[];state.editingMessageIndex=null;renderDraft();composerStatus();
+  setComposerText('');autoGrow();state.attachments=[];state.editingMessageIndex=null;renderDraft();composerStatus();
   nameConversationFromMessage(id, text, attachments, editIndex);
   input.focus();
   const message = {content:text, attachments, edit_index:editIndex};
@@ -1237,14 +1241,12 @@ function setupComposerExtras() {
     ]);
   };
   $('#composer-attach').onclick=attachFiles;
-  $('#cancel-edit').onclick=()=>{state.editingMessageIndex=null;state.attachments=[];const ta=$('#composer-input');ta.value='';autoGrow(ta);renderDraft();};
+  $('#cancel-edit').onclick=()=>{state.editingMessageIndex=null;state.attachments=[];clearComposer();autoGrow();renderDraft();};
   setupLocalVoice();
 }
 
-function autoGrow(ta) {
-  ta.style.height = 'auto';
-  ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
-  skillsChooser?.highlight();
+function autoGrow() {
+  // The composer is a contenteditable element that auto-sizes via CSS.
 }
 
 function activeModel() {
@@ -1601,13 +1603,24 @@ async function init() {
   // Composer
   skillsChooser = setupProjectSkills();
   const input = $('#composer-input');
-  input.addEventListener('input', () => {autoGrow(input);updateComposerControls();});
+  input.addEventListener('input', () => {autoGrow();updateComposerControls();});
   input.addEventListener('keydown', (e) => {
     if (e.defaultPrevented || e.isComposing) return;
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter') {
       e.preventDefault();
-      send();
+      if (e.shiftKey) {
+        insertComposerText('\n');
+        notifyComposerInput();
+      } else {
+        send();
+      }
     }
+  });
+  input.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData)?.getData('text/plain') || '';
+    insertComposerText(text);
+    notifyComposerInput();
   });
   $('#composer-send').addEventListener('click', send);
   $('#composer-stop').addEventListener('click', stopChat);

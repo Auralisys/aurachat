@@ -24,7 +24,7 @@ function editQueuedMessage(id, message) {
   removeQueuedMessage(id,message);
   const input = $('#composer-input');
   const text = (message.content || '').trim();
-  input.value = input.value.trim() ? `${input.value.replace(/\s+$/,'')}\n${text}` : text;
+  setComposerText(composerText().trim() ? `${composerText().trim()}\n${text}` : text);
   if (message.attachments?.length) state.attachments = [...state.attachments, ...structuredClone(message.attachments)];
   state.editingMessageIndex = null;
   autoGrow(input);renderDraft();input.focus();composerStatus();refreshQueue(id);
