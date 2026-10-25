@@ -592,6 +592,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     }
     liveSubscription = api.liveTurns(watchedDevice).listen((snapshot) {
       if (!mounted || deviceId != watchedDevice) return;
+      final follow =
+          !scroll.hasClients ||
+          scroll.positions.length != 1 ||
+          scroll.position.extentAfter < 120;
       setState(() {
         liveTurns = {for (final doc in snapshot.docs) doc.id: doc.data()};
         for (final lane in outbox.values.where(
@@ -601,16 +605,12 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         }
       });
       flushQueues();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted ||
-            !liveRunning ||
-            !scroll.hasClients ||
-            scroll.positions.length != 1 ||
-            scroll.position.extentAfter >= 120) {
-          return;
-        }
-        scroll.jumpTo(scroll.position.maxScrollExtent);
-      });
+      if (follow) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !liveRunning || !scroll.hasClients) return;
+          scroll.jumpTo(scroll.position.maxScrollExtent);
+        });
+      }
     }, onError: fail);
   }
 
@@ -680,6 +680,35 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     await prefs.setString('device_${widget.user.uid}', id);
   }
 
+  void scrollToBottom({bool animated = true}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !scroll.hasClients || scroll.positions.length != 1) {
+        return;
+      }
+      final target = scroll.position.maxScrollExtent;
+      if (!animated || MediaQuery.disableAnimationsOf(context)) {
+        scroll.jumpTo(target);
+        // A lazy ListView can report a partial maxScrollExtent on the first
+        // frame; re-check after layout settles so a freshly opened chat lands
+        // at the very end.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !scroll.hasClients || scroll.positions.length != 1) {
+            return;
+          }
+          if (scroll.position.pixels < scroll.position.maxScrollExtent) {
+            scroll.jumpTo(scroll.position.maxScrollExtent);
+          }
+        });
+      } else {
+        scroll.animateTo(
+          target,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
   void selectChat(Map<String, dynamic>? chat) {
     push.target.value = null;
     if (micActive) {
@@ -711,25 +740,18 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         if (!mounted || version != loadVersion) {
           return;
         }
+        final wasLoading = loadingMessages;
         final follow =
-            loadingMessages ||
+            wasLoading ||
             !scroll.hasClients ||
             scroll.positions.length == 1 && scroll.position.extentAfter < 100;
         setState(() {
           messages = decoded;
           loadingMessages = false;
         });
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (follow && scroll.hasClients && scroll.positions.length == 1) {
-            scroll.animateTo(
-              scroll.position.maxScrollExtent,
-              duration: MediaQuery.disableAnimationsOf(context)
-                  ? Duration.zero
-                  : const Duration(milliseconds: 200),
-              curve: Curves.easeOut,
-            );
-          }
-        });
+        if (follow) {
+          scrollToBottom(animated: !wasLoading);
+        }
       } catch (e) {
         if (version == loadVersion) {
           fail(e);
