@@ -1244,7 +1244,6 @@ function setupComposerExtras() {
 function autoGrow(ta) {
   ta.style.height = 'auto';
   ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
-  if (ta && ta.id === 'composer-input') skillsChooser?.renderHighlight?.();
 }
 
 function activeModel() {

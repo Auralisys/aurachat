@@ -5,7 +5,6 @@ function setupProjectSkills() {
   const list = document.querySelector('#skill-options');
   const status = document.querySelector('#skill-status');
   const retry = document.querySelector('#skill-retry');
-  const highlight = document.querySelector('#composer-highlight');
   let context = '', epoch = 0, catalog = null, pending = false, failed = false;
   let dismissed = false, rows = [], selected = 0, lastQuery = '';
 
@@ -21,9 +20,12 @@ function setupProjectSkills() {
     const cursor = input.selectionStart;
     if (cursor !== input.selectionEnd) return null;
     const before = input.value.slice(0, cursor);
-    const match = /(?:^|\s)\/([a-zA-Z0-9_-]*)$/.exec(before);
-    if (!match) return null;
-    return {slash: match.index + 1, name: match[1].toLowerCase()};
+    const slash = before.lastIndexOf('/');
+    if (slash < 0) return null;
+    if (slash > 0 && !/\s/.test(before[slash - 1])) return null;
+    const name = before.slice(slash + 1);
+    if (!/^[a-zA-Z0-9_-]*$/.test(name)) return null;
+    return {slash, name: name.toLowerCase()};
   }
   function query() {
     return currentToken()?.name ?? null;
@@ -85,35 +87,6 @@ function setupProjectSkills() {
     if (search !== lastQuery) selected = 0;
     lastQuery = search;selected = Math.min(selected, Math.max(0, rows.length - 1));highlightRow();
   }
-  function syncScroll() {
-    if (highlight) {highlight.scrollTop = input.scrollTop;highlight.scrollLeft = input.scrollLeft;}
-  }
-  // The textarea text is transparent; this backdrop draws the same text and
-  // colours installed skills. It always mirrors the full value so text is never hidden.
-  function renderHighlight() {
-    if (!highlight) return;
-    const value = input.value;
-    if (!value) {highlight.replaceChildren();syncScroll();return;}
-    const names = catalog ? new Set(catalog.skills.map(skill => skill.name.toLowerCase())) : null;
-    const fragment = document.createDocumentFragment();
-    const regex = /(^|\s)\/([a-zA-Z0-9_-]+)/g;
-    let last = 0, match;
-    while ((match = regex.exec(value))) {
-      if (match.index > last) fragment.append(document.createTextNode(value.slice(last, match.index)));
-      if (names && names.has(match[2].toLowerCase())) {
-        const token = document.createElement('span');
-        token.className = 'skill-token';
-        token.textContent = match[0];
-        fragment.append(token);
-      } else {
-        fragment.append(document.createTextNode(match[0]));
-      }
-      last = regex.lastIndex;
-    }
-    if (last < value.length) fragment.append(document.createTextNode(value.slice(last)));
-    highlight.replaceChildren(fragment);
-    syncScroll();
-  }
   async function fetchCatalog() {
     const request = ++epoch, key = context, id = projectId();
     pending = true;failed = false;
@@ -127,7 +100,6 @@ function setupProjectSkills() {
         Number.isSafeInteger(skill.root) && skill.root >= 0 && typeof skill.description === 'string' &&
         skill.enabled !== false && !skill.shadowed &&
         ['.agents', '.codex', '.aurachat', '.claude', '.cursor', '.github', '.copilot'].some(base => skill.path === `${base}/skills/${skill.name}/SKILL.md`))};
-      renderHighlight();
     } catch (_) {
       if (request !== epoch || key !== contextKey() || key !== context) return;
       failed = true;
@@ -142,18 +114,17 @@ function setupProjectSkills() {
       context = key;
       catalog = null;pending = false;failed = false;
       epoch++;dismissed = false;selected = 0;lastQuery = '';
-      closeDropdown();renderHighlight();
+      closeDropdown();
     }
-    if (!catalog && !pending && !failed) fetchCatalog();
     if (query() === null || dismissed) {if (!panel.hidden) closeDropdown();return;}
+    if (!catalog && !pending && !failed) {fetchCatalog();return;}
     render();
   }
 
   function invalidate() {closeDropdown();context = '';catalog = null;sync();}
-  input.addEventListener('input', () => {dismissed = false;sync();renderHighlight();});
+  input.addEventListener('input', () => {dismissed = false;sync();});
   input.addEventListener('focus', () => {dismissed = false;sync();});
   input.addEventListener('click', sync);
-  input.addEventListener('scroll', syncScroll);
   input.addEventListener('blur', event => {if (!panel.contains(event.relatedTarget)) closeDropdown();});
   input.addEventListener('keydown', event => {
     if (event.isComposing) return;
@@ -168,7 +139,7 @@ function setupProjectSkills() {
   });
   retry.addEventListener('click', () => {input.focus();failed = false;sync();});
   document.addEventListener('pointerdown', event => {if (event.target !== input && !panel.contains(event.target)) {dismissed = true;closeDropdown();}});
-  return {sync, invalidate, renderHighlight};
+  return {sync, invalidate};
 }
 
   let skillSettingsEpoch = 0;
