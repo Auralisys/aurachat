@@ -1,6 +1,6 @@
 [package]
 name = "aurachat"
-version = "0.1.1"
+version = "0.1.2"
 description = "AuraChat desktop gateway (tray + inferenza OpenAI-compatible)"
 edition = "2021"
 
