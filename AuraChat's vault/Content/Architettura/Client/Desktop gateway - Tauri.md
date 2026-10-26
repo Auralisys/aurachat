@@ -381,11 +381,12 @@ degli altri desktop: per questo una chat in esecuzione sul Mac non mostrava
 l'avanzamento su Windows. `remote_chat_snapshot` in
 `desktop/src-tauri/src/companion.rs` legge il relay dello stesso account,
 esclude il dispositivo locale e quelli senza heartbeat da oltre 60 secondi.
-`refreshRemoteTurn` in `desktop/ui/chat-progress.js` segue la chat aperta:
-testo, attivita e messaggi intermedi sono in sola lettura, senza Stop locale o
-invio sul computer sbagliato. Poll ogni 3 secondi durante il turno, 15 quando
-inattivo, sospeso con pagina nascosta; la lista dispositivi legge solo nome e
-heartbeat, non i cataloghi delle skill. A fine turno viene riletta la cronologia
+`refreshRemoteTurn` in `desktop/ui/chat-progress.js` segue la chat aperta.
+La prima implementazione era in sola lettura; il controllo remoto descritto
+sotto sostituisce questo limite. Poll ogni 3 secondi durante il turno, 15 quando
+inattivo; con pagina nascosta si seguono soltanto i turni remoti gia attivi.
+La lista dispositivi legge i metadati essenziali, non i cataloghi delle skill.
+A fine turno viene riletta la cronologia
 persistita; in caso di computer offline resta l'ultimo avanzamento ricevuto.
 Il relay conserva i limiti di dimensione gia usati dal telefono. Nuovi campi
 `keep_count` e `user_message` ricostruiscono anche modifica e rigenerazione.
@@ -400,3 +401,28 @@ nuova versione si usa la geometria predefinita del monitor locale, poi ogni
 computer conserva la propria disposizione.
 Su richiesta non sono stati eseguiti test, build o installazioni; nessuna
 modifica all'app di produzione in esecuzione.
+
+## Controllo remoto da desktop — 26 ottobre 2026
+
+Il desktop non e piu soltanto un osservatore: `conversationCommand` e
+`requestRemoteChat` in `desktop/ui/chat-progress.js` inoltrano messaggi, guida
+**Invia subito**, Stop, risposte alle domande e approvazioni allo stesso relay
+usato dal mobile. La coda FIFO prosegue sul computer remoto anche se si cambia
+chat; la destinazione resta associata alla conversazione per la sessione.
+Il riconoscimento del computer remoto avviene prima di richiedere cartelle locali
+o inviare il messaggio, evitando esecuzioni accidentali su Windows.
+
+`remote_chat_request`, `remote_chat_receipt` e `remote_chat_inbox` in
+`desktop/src-tauri/src/companion.rs` controllano account, identificativi, presenza
+e abilitazione remota. Le richieste hanno ID univoci e vengono create una volta
+sola, senza retry automatico in caso di esito ambiguo. Le letture delle ricevute
+escludono contenuto e allegati; quelle dei dispositivi escludono i cataloghi skill.
+Permessi ed esecuzione degli strumenti restano sul computer di destinazione.
+Il protocollo 6 aggiunge allegati testuali, modifica e rigenerazione al relay chat;
+se il gateway e precedente viene richiesto l'aggiornamento invece di perdere
+silenziosamente i campi. Il companion mobile resta compatibile.
+
+`remoteComputerIcon` aggiunge il glifo Lucide Monitor a sinistra del titolo della
+chat nella sidebar e nell'intestazione, con tooltip e nome accessibile del
+computer. Il loader resta a destra. Errori e offline sono espliciti: mai ripiego
+sull'esecuzione locale.

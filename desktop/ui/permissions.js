@@ -54,7 +54,10 @@ function renderPermissionRequests() {
         const button = document.createElement('button');button.type = 'button';button.textContent = t(key);button.className = allow ? 'approval-allow' : 'approval-deny';
         button.onclick = async () => {
           actions.querySelectorAll('button').forEach(b => b.disabled = true);
-          try {await invoke('resolve_approval',{conversation_id:item.conversation_id,id:item.id,allow});}
+          try {
+            await conversationCommand('resolve_approval',{conversation_id:item.conversation_id,id:item.id,allow});
+            retainApproval({...item,status:allow ? 'approved' : 'denied'});renderPermissionRequests();renderSidebar();
+          }
           catch(e) {composerStatus(localizeError(e));actions.querySelectorAll('button').forEach(b => b.disabled = false);}
         };actions.append(button);
       }
@@ -73,6 +76,7 @@ function retainApproval(item) {
 }
 
 async function refreshPermissionRequests(conversationId) {
+  if (remoteTarget(conversationId)) return;
   try {
     const items = await invoke('list_approvals',{conversation_id:conversationId});
     if (!Array.isArray(items)) return;

@@ -269,7 +269,7 @@ function icon(name) {
     }
     return svg;
   }
-  const glyph = {gear:'Settings', person:'UserRound', cpu:'Cpu', microphone:'Mic', search:'Search', back:'ArrowLeft', trash:'Trash2', compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', image:'Image', fileCode:'FileCode', fileData:'FileJson', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown', globe:'Globe', external:'ExternalLink'}[name];
+  const glyph = {computer:'Monitor', gear:'Settings', person:'UserRound', cpu:'Cpu', microphone:'Mic', search:'Search', back:'ArrowLeft', trash:'Trash2', compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', image:'Image', fileCode:'FileCode', fileData:'FileJson', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown', globe:'Globe', external:'ExternalLink'}[name];
   if (glyph && lucide.icons[glyph]) return lucide.createElement(lucide.icons[glyph], {class:'ui-icon','aria-hidden':'true'});
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
@@ -488,6 +488,8 @@ function conversationEl(conv, section) {
   const active = conv.id === state.activeConversationId && section === state.activeConversationSection;
   el.className = 'tree-conv' + (active ? ' is-active' : '');
   el.dataset.conversationId = conv.id;
+  const computer = remoteComputerIcon(conv.id);
+  if (computer) el.append(computer);
   const title = document.createElement('span');
   title.className = 'tree-conv__title';
   title.tabIndex = 0;
@@ -988,6 +990,9 @@ function renderMessages() {
   $('.composer__project').hidden = state.activeConversationId !== null;
   $('#view-chat').classList.toggle('is-empty', state.messages.length === 0 && !state.loadingConversation && !state.busy);
   $('#conversation-title').textContent = activeConversation()?.conversation.title || t('sidebar.new_chat');
+  $('#conversation-remote')?.remove();
+  const computer = remoteComputerIcon(state.activeConversationId);
+  if (computer) {computer.id = 'conversation-remote';$('#conversation-title').before(computer);}
   $('#conversation-options').disabled = !state.activeConversationId || state.busy;
   box.innerHTML = '';
   renderThinkingStatus();
@@ -1042,7 +1047,7 @@ async function requestChat(payload) {
   state.runs.set(id, run);if (isActive) {state.messages = run.messages;state.failedSend = null;}state.unread.delete(id);
   closeChoiceMenus();startTimer();if (isActive) renderMessages();renderSidebar();
   try {
-    const result = await invoke('chat',payload);
+    const result = remoteTarget(id) ? await requestRemoteChat(payload,run) : await invoke('chat',payload);
     await finishLiveTurn(run);
     run.messages = markGuidanceHistory(run, result.messages);run.usage = result.usage;run.completedEpoch = ++state.resultEpoch;run.queueOutcome = result.cancelled ? 'cancelled' : 'completed';
     const saved = conversationInData(result.data, id);
@@ -1060,7 +1065,7 @@ async function requestChat(payload) {
     return false;
   }
   finally {
-    run.pending = false;stopTimer();
+    run.pending = false;run.submitting = false;stopTimer();
     if (state.activeConversationId !== id && findConversation(id)) state.unread.add(id);
     if (state.activeConversationId === id) {
       state.messages = run.messages;state.lastUsage = run.usage;state.failedSend = run.failedSend;
@@ -1076,6 +1081,9 @@ async function requestChat(payload) {
 
 async function regenerateReply() {
   if (state.busy || state.preparing || state.loadingConversation || !state.activeConversationId) return;
+  try {await discoverRemoteTarget(state.activeConversationId);}
+  catch (error) {composerStatus(localizeError(error));return;}
+  if (state.busy) return;
   await requestChat({conversation_id:state.activeConversationId,content:'',retry:true});
 }
 
@@ -1111,11 +1119,10 @@ function updateComposerControls() {
   const busy = state.busy, run = state.runs.get(state.activeConversationId);
   // Composer vuoto durante un turno: solo Stop. Con un messaggio scritto: Stop e Invia (accodato).
   // Durante la registrazione vocale lo stop del modello non ha senso: resta solo Invia (trascrivi e invia).
-  const remote = !!run?.remote && busy;
-  stop.hidden = !busy || recording || remote;
+  stop.hidden = !busy || recording;
   stop.disabled = !busy || notReady || dictating || recording || !!run?.stopping;
   send.hidden = busy && !composerHasContent() && !recording;
-  send.disabled = notReady || dictating || remote;
+  send.disabled = notReady || dictating;
   const label = t(busy ? 'chat.queue_send' : 'titlebar.send');
   send.setAttribute('aria-label', label);
   send.title = label;
@@ -1148,15 +1155,16 @@ function flushQueue(id = state.activeConversationId) {
 
 async function stopChat() {
   const id = state.activeConversationId, run = state.runs.get(id);
-  if (!id || !run?.pending || run.remote || run.stopping) return;
+  if (!id || !run?.pending || run.stopping) return;
   run.stopping = true;
   composerStatus(t('chat.stopping'));
   updateComposerControls();
-  try { await invoke('stop_chat', {conversation_id:id}); }
-  catch (e) { if (!errText(e).includes('chat_not_running')) composerStatus(localizeError(e)); }
+  try { await conversationCommand('stop_chat', {conversation_id:id}); }
+  catch (e) {run.stopping = false;updateComposerControls();if (!errText(e).includes('chat_not_running')) composerStatus(localizeError(e));}
 }
 
 async function missingActiveProjectFolder() {
+  if (remoteTarget(state.activeConversationId)) return null;
   try {
     const project = activeConversation()?.project;
     if (!project) return null;
@@ -1168,7 +1176,6 @@ async function missingActiveProjectFolder() {
 }
 
 async function send() {
-  if (state.runs.get(state.activeConversationId)?.remote && state.busy) return;
   if (voice.recording) return stopVoice(true);
   if (state.preparing || state.loadingConversation || activeConversation()?.conversation.messages_loaded === false || state.changingModel || voice.pending || voice.transcribing || voice.nativeOperation) return;
   const input = $('#composer-input'), text = composerText().trim();
@@ -1181,6 +1188,11 @@ async function send() {
   }
   const id = state.activeConversationId;
   if (!id) return;
+  state.preparing = true;updateComposerControls();
+  try {await discoverRemoteTarget(id);}
+  catch (error) {composerStatus(localizeError(error));return;}
+  finally {state.preparing = false;updateComposerControls();}
+  if (id !== state.activeConversationId) return;
   const missingFolder = await missingActiveProjectFolder();
   if (missingFolder) {
     composerStatus(t('project.consent_required'));
@@ -1558,7 +1570,9 @@ async function init() {
     try {
       state.data = await invoke('get_data');state.persistedData = structuredClone(state.data);
       const saved = findConversation(id)?.conversation;
-      run.messages = [...(saved?.messages || []), {role:'user',content:payload.content,attachments:[]}];
+      const history = saved?.messages || [];
+      const prefix = Number.isInteger(payload.keep_count) ? history.slice(0,payload.keep_count) : history;
+      run.messages = [...prefix, payload.message || {role:'user',content:payload.content,attachments:[]}];
       if (state.activeConversationId === id) {state.messages=run.messages;startTimer();renderMessages();updateComposerControls();}
       renderSidebar();
     } catch (error) { showError(localizeError(error)); }

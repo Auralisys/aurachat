@@ -431,8 +431,9 @@ pub fn start(app: &tauri::AppHandle) {
 async fn pause(seconds:u64) {let _=tauri::async_runtime::spawn_blocking(move||std::thread::sleep(Duration::from_secs(seconds))).await;}
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn remote_chat_snapshot(state:tauri::State<'_,AppState>,conversation_id:String)->Result<Option<Value>,String> {
+pub async fn remote_chat_snapshot(state:tauri::State<'_,AppState>,conversation_id:String,device_id:Option<String>)->Result<Option<Value>,String> {
     data::valid_id(&conversation_id)?;
+    if let Some(device)=&device_id {data::valid_id(device)?;}
     let _account=state.account_lock.lock().await;
     let auth=crate::firebase_auth(&state)?;
     let uid=crate::ensure_uid(&state,&auth).await?;
@@ -441,14 +442,80 @@ pub async fn remote_chat_snapshot(state:tauri::State<'_,AppState>,conversation_i
     let now=data::now_millis();
     let mut latest:Option<Value>=None;
     for (device,info) in state.firestore.relay_devices(&auth,&uid).await? {
+        if device_id.as_ref().is_some_and(|preferred|preferred!=&device) {continue;}
         if device==local || now.saturating_sub(info["last_seen"].as_u64().unwrap_or(0))>60_000 {continue;}
         let Some(mut turn)=state.firestore.relay_get(&auth,&format!("users/{uid}/devices/{device}/live_turns/{conversation_id}")).await? else {continue};
         if turn["conversation_id"].as_str()!=Some(&conversation_id) {continue;}
         if latest.as_ref().is_some_and(|previous|previous["started_at"].as_u64()>=turn["started_at"].as_u64()) {continue;}
         turn["device_name"]=info["name"].clone();
+        turn["device_id"]=json!(device);
+        turn["remote_enabled"]=info["remote_enabled"].clone();
         latest=Some(turn);
     }
     Ok(latest)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn remote_chat_request(state:tauri::State<'_,AppState>,device_id:String,conversation_id:String,
+    action:String,arguments:Value)->Result<String,String> {
+    data::valid_id(&device_id)?;data::valid_id(&conversation_id)?;
+    let _account=state.account_lock.lock().await;
+    let auth=crate::firebase_auth(&state)?;
+    let uid=crate::ensure_uid(&state,&auth).await?;
+    if device_id==identity().0 {return Err("invalid_remote_device".into());}
+    let device=state.firestore.relay_fields(&auth,&format!("users/{uid}/devices/{device_id}"),&["last_seen","remote_enabled","protocol"]).await?
+        .ok_or("remote_device_offline")?;
+    if data::now_millis().saturating_sub(device["last_seen"].as_u64().unwrap_or(0))>60_000 {return Err("remote_device_offline".into());}
+    if device["remote_enabled"]!=true {return Err("remote_disabled".into());}
+    let needs_update=arguments["retry"]==true || arguments.get("edit_index").is_some_and(|index|!index.is_null())
+        || arguments["attachments"].as_array().is_some_and(|files|!files.is_empty());
+    if needs_update && device["protocol"].as_u64().unwrap_or(0)<6 {return Err("remote_update_required".into());}
+    if !matches!(action.as_str(),"chat"|"steer"|"stop"|"approve"|"answer_question"|"stop_agent"|"stop_shell"|"chat_recap") {
+        return Err("unsupported_remote_action".into());
+    }
+    let mut request=arguments.as_object().cloned().ok_or("invalid_remote_arguments")?;
+    request.insert("conversation_id".into(),json!(conversation_id));
+    request.insert("action".into(),json!(action));
+    request.insert("created_at".into(),json!(data::now_millis()));
+    request.insert("status".into(),json!("pending"));
+    request.insert("new_conversation".into(),json!(false));
+    let request=Value::Object(request);
+    if serde_json::to_vec(&request).map_err(|e|e.to_string())?.len()>750_000 {return Err("invalid_message_size".into());}
+    static SEQUENCE:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
+    let id=format!("desktop-{}-{}-{}",identity().0,data::now_millis(),SEQUENCE.fetch_add(1,std::sync::atomic::Ordering::Relaxed));
+    state.firestore.relay_put(&auth,&format!("users/{uid}/devices/{device_id}/requests/{id}"),&request,None).await?;
+    Ok(id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn remote_chat_receipt(state:tauri::State<'_,AppState>,device_id:String,request_id:String)->Result<Value,String> {
+    data::valid_id(&device_id)?;data::valid_id(&request_id)?;
+    let auth=crate::firebase_auth(&state)?;
+    let uid=crate::ensure_uid(&state,&auth).await?;
+    let receipt=state.firestore.relay_fields(&auth,&format!("users/{uid}/devices/{device_id}/requests/{request_id}"),
+        &["status","error","created_at","result"]).await?
+        .ok_or("remote_request_missing")?;
+    if matches!(receipt["status"].as_str(),Some("pending"|"running")) {
+        let device=state.firestore.relay_fields(&auth,&format!("users/{uid}/devices/{device_id}"),&["last_seen"]).await?
+            .ok_or("remote_device_offline")?;
+        if data::now_millis().saturating_sub(device["last_seen"].as_u64().unwrap_or(0))>60_000 {
+            return Err("remote_request_unconfirmed".into());
+        }
+    }
+    Ok(receipt)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn remote_chat_inbox(state:tauri::State<'_,AppState>,device_id:String,conversation_id:String)->Result<Value,String> {
+    data::valid_id(&device_id)?;data::valid_id(&conversation_id)?;
+    let auth=crate::firebase_auth(&state)?;
+    let uid=crate::ensure_uid(&state,&auth).await?;
+    let mut inbox=json!({});
+    for collection in ["approvals","questions"] {
+        let items=state.firestore.relay_items(&auth,&format!("users/{uid}/devices/{device_id}/{collection}")).await?;
+        inbox[collection]=json!(items.into_iter().filter(|item|item["conversation_id"].as_str()==Some(conversation_id.as_str())).collect::<Vec<_>>());
+    }
+    Ok(inbox)
 }
 
 async fn publish_live(app:&tauri::AppHandle,turns:&Arc<Mutex<HashMap<String,LiveTurn>>>) {
@@ -524,7 +591,7 @@ async fn heartbeat_once(app:&tauri::AppHandle)->Result<(),String>{
     }
     let speech=state.speech.status();
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/devices/{id}"),
-        &json!({"name":name,"platform":std::env::consts::OS,"identity_version":2,"last_seen":data::now_millis(),"protocol":5,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"speech":{"ready":speech.ready,"busy":speech.busy,"loading":speech.loading},"project_permissions":project_permissions,"project_skills":skills,"global_skills":global_skills})).await?;
+        &json!({"name":name,"platform":std::env::consts::OS,"identity_version":2,"last_seen":data::now_millis(),"protocol":6,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"speech":{"ready":speech.ready,"busy":speech.busy,"loading":speech.loading},"project_permissions":project_permissions,"project_skills":skills,"global_skills":global_skills})).await?;
     let tree=state.data.lock().unwrap().storage_tree()?;
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/companion/state"),&json!({"tree":tree})).await?;
     let outbox=state.config_dir.join("notification-outbox").join(&uid);
@@ -606,9 +673,11 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
             return Ok(shell_recap(app.state::<Arc<crate::managed_shells::Shells>>().list(uid,id)));
         },
         "stop"=>return state.chat_runs.stop(uid,id).map(|_|Value::Null),
-        "steer"=>return crate::steer_chat(app.state::<AppState>(),id.into(),request["content"].as_str().ok_or("empty_message")?.into(),None).map(|_|Value::Null),
+        "steer"=>return crate::steer_chat(app.state::<AppState>(),id.into(),request["content"].as_str().ok_or("empty_message")?.into(),
+            request.get("attachments").cloned().map(serde_json::from_value).transpose().map_err(|e|e.to_string())?).map(|_|Value::Null),
         "stop_agent"=>return crate::stop_subagent(app.state::<AppState>(),app.state::<crate::agent_runs::AgentRuns>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["agent_id"].as_str().ok_or("invalid_agent")?.into()).await.map(|_|Value::Null),
-        "stop_shell"=>return crate::stop_shell(app.state::<AppState>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["shell_id"].as_str().ok_or("invalid_shell")?.into()).await.map(|_|Value::Null),
+        "stop_shell"=>return crate::stop_shell(app.state::<AppState>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["shell_id"].as_str().ok_or("invalid_shell")?.into()).await
+            .and_then(|snapshot|serde_json::to_value(snapshot).map_err(|e|e.to_string())),
         "approve"=>return app.state::<crate::approvals::Approvals>().resolve(uid,id,request["approval_id"].as_str().ok_or("invalid_approval")?,request["allow"].as_bool().ok_or("invalid_decision")?).map(|_|Value::Null),
         "answer_question"=>{
             let question_id=request["question_id"].as_str().ok_or("invalid_question")?;
@@ -685,7 +754,13 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
         _=>return Err("unsupported_remote_action".into())
     }
     let content=request["content"].as_str().ok_or("empty_message")?;
-    if content.trim().is_empty() || content.len()>100_000 {return Err("invalid_message_size".into());}
+    let attachments:Vec<crate::llm::Attachment>=request.get("attachments").cloned()
+        .map(serde_json::from_value).transpose().map_err(|e|e.to_string())?.unwrap_or_default();
+    crate::llm::validate_attachments(&attachments)?;
+    let retry=request["retry"].as_bool().unwrap_or(false);
+    let edit_index=request.get("edit_index").filter(|v|!v.is_null()).map(|index|
+        index.as_u64().and_then(|index|usize::try_from(index).ok()).ok_or("invalid_message_index")).transpose()?;
+    if (!retry && content.trim().is_empty() && attachments.is_empty()) || content.len()>100_000 {return Err("invalid_message_size".into());}
     {
         let _save=state.history_save_lock.lock().await;
         if state.running_chats.lock().unwrap().contains(id){return Err("chat_in_progress".into());}
@@ -708,9 +783,17 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
         *state.data.lock().unwrap()=state.firestore.cached_tree(uid).unwrap_or(tree);
         state.data_loaded.store(true,std::sync::atomic::Ordering::SeqCst);
     }
-    let _=app.emit("companion-started",json!({"conversation_id":id,"content":content}));
+    let (user_message,keep_count)={
+        let tree=state.data.lock().unwrap();
+        let conversation=tree.find_conversation(id).ok_or("conversation_not_found")?;
+        let (_,message,keep)=crate::llm::prepare_turn(&conversation.messages,content.into(),attachments.clone(),retry,edit_index)?;
+        (message,keep)
+    };
+    let _=app.emit("companion-started",json!({"conversation_id":id,"content":user_message.content,
+        "message":user_message,"keep_count":keep_count}));
     drop(account);
-    crate::run_chat(app.clone(),app.state::<AppState>(),id.into(),content.into(),None,None,None,Some(uid.into())).await.map(|_|Value::Null)
+    crate::run_chat(app.clone(),app.state::<AppState>(),id.into(),content.into(),Some(attachments),Some(retry),edit_index,Some(uid.into())).await
+        .map(|reply|json!({"cancelled":reply.cancelled}))
 }
 
 fn shell_recap(mut shells:Vec<crate::managed_shells::Snapshot>)->Value {

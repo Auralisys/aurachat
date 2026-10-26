@@ -414,6 +414,8 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 .tree-project__head:hover,.tree-conv:hover,.tree-project__head:focus-within,.tree-conv:focus-within,.tree-project__head.is-menu-open,.tree-conv.is-menu-open { background:#252525; }
 .tree-conv.is-active { background:#303030; }
 .tree-conv__title { line-height:28px; }
+.remote-computer { display:inline-flex; align-items:center; justify-content:center; flex:none; width:16px; height:16px; color:var(--c-text-muted); }
+.remote-computer .ui-icon { width:14px; height:14px; }
 .tree-conv .tree-actions { position:absolute; right:var(--space-1); background:inherit; pointer-events:none; }
 .tree-conv:hover .tree-actions,.tree-conv:focus-within .tree-actions,.tree-conv.is-menu-open .tree-actions { pointer-events:auto; }
 .tree-conv:hover .tree-conv__title,.tree-conv:focus-within .tree-conv__title,.tree-conv.is-menu-open .tree-conv__title { padding-right:28px; }

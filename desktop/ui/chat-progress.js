@@ -171,58 +171,159 @@ async function finishLiveTurn(run) {
   await new Promise(resolve => {run.stream.resolve = resolve;revealTurn(run);});
 }
 
-const remoteTurnSync = {busy:false};
+const remoteTurnSync = {busy:false, targets:new Map()};
+
+function remoteTarget(id) {
+  return remoteTurnSync.targets.get(JSON.stringify([state.config?.firebase_email, id]));
+}
+
+function rememberRemoteTarget(id, snapshot) {
+  if (typeof snapshot?.device_id !== 'string') return false;
+  const previous = remoteTarget(id);
+  remoteTurnSync.targets.set(JSON.stringify([state.config?.firebase_email, id]),
+    {device_id:snapshot.device_id, device_name:snapshot.device_name});
+  return previous?.device_id !== snapshot.device_id || previous?.device_name !== snapshot.device_name;
+}
+
+function remoteComputerIcon(id) {
+  const target = remoteTarget(id);
+  if (!target) return null;
+  const indicator = document.createElement('span');indicator.className = 'remote-computer';
+  const label = t('chat.remote_device').replace('{device}', target.device_name || 'AuraChat');
+  indicator.title = label;indicator.setAttribute('role','img');indicator.setAttribute('aria-label',label);
+  indicator.append(icon('computer'));
+  return indicator;
+}
+
+async function waitRemoteReceipt(target, requestId, control = false) {
+  const owner = state.config.firebase_email, deadline = Date.now() + (control ? 45000 : 24 * 60 * 60 * 1000);
+  while (Date.now() < deadline) {
+    if (state.config.firebase_email !== owner) throw new Error('login_required');
+    const receipt = await invoke('remote_chat_receipt', {device_id:target.device_id,request_id:requestId});
+    if (state.config.firebase_email !== owner) throw new Error('login_required');
+    if (receipt.status === 'completed') return receipt;
+    if (['failed','cancelled'].includes(receipt.status)) throw new Error(receipt.error || 'remote_request_failed');
+    if (receipt.status === 'pending' && Date.now() - receipt.created_at > 300000) throw new Error('request_expired');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  throw new Error('remote_request_unconfirmed');
+}
+
+async function conversationCommand(command, args) {
+  const target = remoteTarget(args.conversation_id);
+  if (!target) return invoke(command, args);
+  const actions = {stop_chat:'stop',steer_chat:'steer',resolve_approval:'approve',
+    answer_question:'answer_question',stop_subagent:'stop_agent',stop_shell:'stop_shell',list_shells:'chat_recap'};
+  const action = actions[command];
+  if (!action) throw new Error('unsupported_remote_action');
+  const arguments_ = {...args};
+  if (command === 'resolve_approval') arguments_.approval_id = args.id;
+  if (command === 'answer_question') arguments_.question_id = args.id;
+  if (command === 'stop_subagent') arguments_.agent_id = args.id;
+  if (command === 'stop_shell') arguments_.shell_id = args.id;
+  delete arguments_.conversation_id;delete arguments_.id;
+  const requestId = await invoke('remote_chat_request', {device_id:target.device_id,
+    conversation_id:args.conversation_id,action,arguments:arguments_});
+  return (await waitRemoteReceipt(target,requestId,true)).result;
+}
+
+async function requestRemoteChat(payload, run) {
+  const target = remoteTarget(payload.conversation_id);
+  run.remote = true;run.submitting = true;
+  run.requestId = await invoke('remote_chat_request', {device_id:target.device_id,
+    conversation_id:payload.conversation_id,action:'chat',arguments:payload});
+  const receipt = await waitRemoteReceipt(target,run.requestId);
+  const saved = await invoke('get_conversation', {conversation_id:payload.conversation_id});
+  const data = await invoke('get_data');
+  return {messages:saved.messages, data, usage:null, cancelled:receipt.result?.cancelled === true};
+}
+
+async function discoverRemoteTarget(id) {
+  if (remoteTarget(id) || state.runs.get(id)?.pending) return;
+  const owner = state.config.firebase_email;
+  const snapshot = await invoke('remote_chat_snapshot', {conversation_id:id});
+  if (owner !== state.config.firebase_email) throw new Error('login_required');
+  rememberRemoteTarget(id, snapshot);
+  if (snapshot?.status === 'running') await refreshRemoteTurn(id);
+}
 
 function releaseRemoteTurn(id) {
-  if (!state.runs.get(id)?.remote) return;
+  if (!state.runs.get(id)?.remote || state.runs.get(id)?.pending) return;
   state.runs.delete(id);
   stopTimer();
 }
 
-async function refreshRemoteTurn() {
-  const id = state.activeConversationId, owner = state.config?.firebase_email;
+async function refreshRemoteTurn(id = state.activeConversationId) {
+  const owner = state.config?.firebase_email;
   const current = state.runs.get(id);
   if (!id || !owner || remoteTurnSync.busy || state.loadingConversation || (current?.pending && !current.remote)) return;
   remoteTurnSync.busy = true;
-  const stillActive = () => state.activeConversationId === id && state.config?.firebase_email === owner;
+  const sameOwner = () => state.config?.firebase_email === owner;
+  const stillActive = () => state.activeConversationId === id && sameOwner();
   try {
-    const snapshot = await invoke('remote_chat_snapshot', {conversation_id:id});
-    if (!stillActive()) return;
+    const snapshot = await invoke('remote_chat_snapshot', {conversation_id:id,device_id:remoteTarget(id)?.device_id || null});
+    if (!sameOwner()) return;
+    if (rememberRemoteTarget(id, snapshot)) {
+      renderSidebar();
+      if (stillActive()) renderMessages();
+      refreshActivityShells(id);
+    }
     let run = state.runs.get(id);
     if (run?.pending && !run.remote) return;
+    const target = remoteTarget(id);
+    if (target) {
+      const inbox = await invoke('remote_chat_inbox', {device_id:target.device_id,conversation_id:id});
+      if (!sameOwner()) return;
+      for (const item of inbox.approvals || []) retainApproval(item);
+      const questions = inbox.questions || [];
+      for (const item of pendingQuestions(id)) {
+        if (!questions.some(remote => remote.id === item.id)) retainQuestion({...item,status:'answered'});
+      }
+      for (const item of questions) retainQuestion(item);
+      if (stillActive()) {renderPermissionRequests();renderQuestions();}
+      renderSidebar();
+    }
     if (snapshot?.status === 'running') {
+      if (run?.submitting && snapshot.started_at < run.since) return;
       if (!run?.remote || run.turnId !== snapshot.turn_id) {
         const saved = await invoke('get_conversation', {conversation_id:id});
-        if (!stillActive()) return;
+        if (!sameOwner()) return;
         if (saved.updated_at > snapshot.started_at) return;
-        run = {pending:true, remote:true, turnId:snapshot.turn_id, since:snapshot.started_at,
-          initialMessages:structuredClone(saved.messages || []), messages:[], usage:null};
+        run = Object.assign(run?.submitting ? run : {}, {pending:true, remote:true, turnId:snapshot.turn_id, since:snapshot.started_at,
+          initialMessages:structuredClone(saved.messages || []), usage:null});
         state.runs.set(id, run);
       }
-      composerStatus(t('chat.remote_running').replace('{device}', snapshot.device_name || 'AuraChat'));
       if (run.remoteUpdatedAt === snapshot.updated_at) return;
       run.remoteUpdatedAt = snapshot.updated_at;
       const base = run.initialMessages;
       const prefix = Number.isInteger(snapshot.keep_count) ? base.slice(0, snapshot.keep_count) : base;
       const user = snapshot.user_message || (snapshot.user_content ? {role:'user',content:snapshot.user_content,attachments:[]} : null);
       run.messages = [...prefix, ...(user ? [user] : []), ...(snapshot.segments || [])];
+      let guidanceCursor = prefix.length + (user ? 1 : 0);
+      for (const pending of run.pendingGuidance || []) {
+        const position = run.messages.findIndex((message,index) => index >= guidanceCursor && message.role === 'user' && message.content === pending.message.content);
+        if (position >= 0) {pending.consumed = true;guidanceCursor = position + 1;}
+      }
       if (run.stream?.frame) cancelAnimationFrame(run.stream.frame);
       run.stream = {content:snapshot.content || '', shown:(snapshot.content || '').length, activity:snapshot.activity || [], frame:null};
-      state.messages = run.messages;
-      startTimer();renderSidebar();renderMessages();updateComposerControls();
-    } else if (run?.remote || (snapshot && snapshot.started_at > (findConversation(id)?.conversation.updated_at || 0))) {
+      if (stillActive()) {state.messages = run.messages;renderMessages();updateComposerControls();}
+      startTimer();renderSidebar();
+    } else if (!run?.submitting && (run?.pending && run.remote || (snapshot && snapshot.started_at > (findConversation(id)?.conversation.updated_at || 0)))) {
       const saved = await invoke('get_conversation', {conversation_id:id});
-      if (!stillActive()) return;
+      if (!sameOwner()) return;
       const target = findConversation(id)?.conversation;if (target) Object.assign(target, saved);
       const baseline = state.persistedData && conversationInData(state.persistedData, id);
       if (baseline) Object.assign(baseline, structuredClone(saved));
+      if (run) run.pending = false;
       state.runs.delete(id);
-      state.messages = saved.messages || [];
+      let messages = saved.messages || [];
       if (!snapshot && run?.stream && saved.updated_at < run.since) {
-        state.messages = [...run.messages, {role:'assistant',content:run.stream.content,activity:run.stream.activity}];
-        composerStatus(t('chat.remote_offline'));
-      } else composerStatus();
-      stopTimer();renderSidebar();renderMessages();updateContextInfo();updateComposerControls();
+        messages = [...run.messages, {role:'assistant',content:run.stream.content,activity:run.stream.activity}];
+        queuedTurns.paused.add(id);
+        if (stillActive()) composerStatus(t('chat.remote_offline'));
+      } else if (stillActive()) composerStatus();
+      if (stillActive()) {state.messages = messages;renderMessages();updateContextInfo();updateComposerControls();}
+      stopTimer();renderSidebar();flushQueue(id);
     }
   } catch (error) {
     console.error('Remote chat sync failed', error);
@@ -234,8 +335,10 @@ async function refreshRemoteTurn() {
 
 async function setupChatProgress() {
   const pollRemote = async () => {
-    if (!document.hidden) await refreshRemoteTurn();
-    const watching = state.runs.get(state.activeConversationId)?.remote && state.busy;
+    const ids = new Set([...state.runs].filter(([,run]) => run.remote && run.pending).map(([id]) => id));
+    if (!document.hidden) ids.add(state.activeConversationId);
+    for (const id of ids) await refreshRemoteTurn(id);
+    const watching = [...state.runs.values()].some(run => run.remote && run.pending);
     setTimeout(pollRemote, watching ? 3000 : 15000);
   };
   setTimeout(pollRemote, 3000);

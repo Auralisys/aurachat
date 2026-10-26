@@ -101,7 +101,7 @@ Il riepilogo segue i nuovi messaggi e il turno live. Le shell vengono richieste
 all'apertura, a fine turno e con Aggiorna: solo processi attivi o durati almeno
 15 secondi, fino a 20, con anteprima limitata dell'output.
 
-Con desktop **protocollo 5** e PC online, le chat di progetto mostrano anche
+Con desktop **protocollo 5 o successivo** e PC online, le chat di progetto mostrano anche
 Git: scoperta dei repository autorizzati, selezione iniziale del più modificato
 (righe aggiunte/rimosse, poi numero di file), scelta manuale e stage/unstage
 per file o gruppo. **Commit…** e **Commit e push…** richiedono uno stage non

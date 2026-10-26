@@ -88,7 +88,7 @@ async function steerQueuedMessage(id, message) {
   const pending = {message, accepted:false, consumed:false};
   (run.pendingGuidance ||= []).push(pending);queuedTurns.steering.set(id,pending);delete message.steer_error;refreshQueue(id);
   try {
-    await invoke('steer_chat',{conversation_id:id,content:message.content,attachments:message.attachments || []});
+    await conversationCommand('steer_chat',{conversation_id:id,content:message.content,attachments:message.attachments || []});
     pending.accepted = true;removeQueuedMessage(id,message);
   } catch (_) {
     if (!pending.consumed) {

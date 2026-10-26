@@ -542,7 +542,7 @@ async function stopActivityAgent(agent) {
   if (!['running','waiting'].includes(agent.status) || agent.stop_pending) return;
   const conversationId = state.activeConversationId;
   agent.stop_pending = true;renderActivity();
-  try {await invoke('stop_subagent',{conversation_id:conversationId,id:agent.id});}
+  try {await conversationCommand('stop_subagent',{conversation_id:conversationId,id:agent.id});}
   catch(e) {agent.stop_pending = false;composerStatus(localizeError(e));if (state.activeConversationId === conversationId) renderActivity();}
 }
 
@@ -620,7 +620,10 @@ function safeActivityURL(value) {
 
 async function refreshActivityShells(conversationId) {
   try {
-    const shells = await invoke('list_shells', {conversation_id:conversationId});
+    const remote = remoteTarget(conversationId);
+    const result = remote ? await conversationCommand('list_shells', {conversation_id:conversationId})
+      : await invoke('list_shells', {conversation_id:conversationId});
+    const shells = remote ? result?.shells : result;
     if (!Array.isArray(shells)) return;
     const record = activityRecord(conversationId);
     for (const shell of shells) {
@@ -637,7 +640,7 @@ async function stopActivityShell(shell) {
   const conversationId = state.activeConversationId;
   shell.status = 'stopping';shell.stop_error = '';renderActivity();
   try {
-    const result = await invoke('stop_shell', {id:shell.id, conversation_id:conversationId});
+    const result = await conversationCommand('stop_shell', {id:shell.id, conversation_id:conversationId});
     if (result?.id === shell.id) {
       if (result.revision == null || shell.revision == null || result.revision >= shell.revision) Object.assign(shell, result);
     }

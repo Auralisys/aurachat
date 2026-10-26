@@ -17,6 +17,7 @@ function retainQuestion(item) {
 }
 
 async function refreshQuestions(conversationId) {
+  if (remoteTarget(conversationId)) return;
   const owner = state.config.firebase_email;
   try {
     const items = await invoke('list_questions', {conversation_id:conversationId});
@@ -100,7 +101,7 @@ function questionCard(item) {
     } : {action,selected,custom:action==='skip'||action==='cancel'?'':custom.value};
     error.hidden = true;fieldset.disabled = true;form.querySelectorAll('button').forEach(button=>button.disabled=true);
     try {
-      await invoke('answer_question', {conversation_id:item.conversation_id,id:item.id,answer});
+      await conversationCommand('answer_question', {conversation_id:item.conversation_id,id:item.id,answer});
       retainQuestion({...item,status:'answered'});renderQuestions();renderSidebar();
     } catch (failure) {
       error.textContent = localizeError(failure);error.hidden = false;

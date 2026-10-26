@@ -88,8 +88,9 @@ trova un difetto, aggiungerlo a [[Problemi noti]] con il rimando alla nota dove
 ## Ultimo aggiornamento — 26 ottobre 2026
 
 In [[Desktop gateway - Tauri]]: collegamenti alle cartelle separati per computer
-e visualizzazione in sola lettura delle chat in esecuzione sull'altro desktop,
-riusando il relay del companion. Consensi locali invariati; entrambe le
+e controllo delle chat in esecuzione sull'altro desktop, riusando il relay del
+companion: invio, coda, guida immediata, Stop, domande e approvazioni.
+Icona computer a sinistra del titolo; consensi locali invariati. Entrambe le
 installazioni vanno aggiornate. Modifiche non ancora verificate sulle app
 installate; nessun test, build o reinstallazione eseguiti su richiesta.
 

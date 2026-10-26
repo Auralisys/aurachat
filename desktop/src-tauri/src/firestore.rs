@@ -359,17 +359,30 @@ impl Firestore {
         self.get_document(auth,path,None).await?.map(|doc|Ok(Value::Object(document_fields(&doc)?))).transpose()
     }
 
+    pub async fn relay_fields(&self,auth:&FirestoreAuth,path:&str,fields:&[&str])->Result<Option<Value>,String> {
+        self.get_document_fields(auth,path,fields).await?.map(|doc|document_fields(&doc).map(Value::Object)).transpose()
+    }
+
     pub async fn relay_devices(&self,auth:&FirestoreAuth,uid:&str) -> Result<Vec<(String,Value)>,String> {
-        self.list_documents(auth,&doc_url(&auth.project_id,&format!("users/{uid}/devices")),&["name","last_seen"]).await?.iter().map(|doc| {
+        self.list_documents(auth,&doc_url(&auth.project_id,&format!("users/{uid}/devices")),&["name","last_seen","remote_enabled","protocol"]).await?.iter().map(|doc| {
             let id=doc["name"].as_str().and_then(|name|name.rsplit('/').next()).ok_or("invalid_relay_name")?;
             Ok((id.to_string(),Value::Object(document_fields(doc)?)))
         }).collect()
     }
 
+    pub async fn relay_items(&self,auth:&FirestoreAuth,path:&str)->Result<Vec<Value>,String> {
+        self.list_documents(auth,&doc_url(&auth.project_id,path),&[]).await?.iter()
+            .map(|doc|document_fields(doc).map(Value::Object)).collect()
+    }
+
     async fn get_document(&self,auth:&FirestoreAuth,path:&str,mask:Option<&str>) -> Result<Option<Value>,String> {
+        self.get_document_fields(auth,path,&mask.into_iter().collect::<Vec<_>>()).await
+    }
+
+    async fn get_document_fields(&self,auth:&FirestoreAuth,path:&str,fields:&[&str]) -> Result<Option<Value>,String> {
         let token = self.id_token(auth).await?;
-        let mut request = self.http.get(doc_url(&auth.project_id,path)).bearer_auth(token);
-        if let Some(mask) = mask {request=request.query(&[("mask.fieldPaths",mask)]);}
+        let request = self.http.get(doc_url(&auth.project_id,path)).bearer_auth(token)
+            .query(&fields.iter().map(|field|("mask.fieldPaths",*field)).collect::<Vec<_>>());
         let response = request.send().await.map_err(|e|e.to_string())?;
         if response.status().as_u16()==404 {return Ok(None);}
         response_json(response).await.map(Some)

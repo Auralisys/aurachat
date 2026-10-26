@@ -55,10 +55,19 @@ Vedi la sezione finale e `../mobile/README.md` per lo stato delle verifiche.
 
 Il desktop segue anche il turno della chat aperta su un altro computer dello
 stesso account: usa i documenti `devices/{device}/live_turns/{chat}` gia pubblicati
-per il companion. La vista remota mostra testo e attivita in sola lettura,
-indica il computer di origine e non propone uno Stop locale. Il controllo avviene
-all'apertura, poi ogni 3 secondi durante il turno (15 quando inattivo), sospeso
-con pagina nascosta. Alla fine viene caricata la conversazione salvata; se il
+per il companion. Un'icona computer a sinistra del titolo (sidebar e intestazione)
+indica il dispositivo remoto nel tooltip; il loader resta a destra della riga.
+Messaggi, coda, **Invia subito**, **Stop**, domande interattive e approvazioni
+usano le richieste `devices/{device}/requests` del companion: l'esecuzione e i
+permessi restano sul computer di origine. La destinazione resta associata alla
+chat anche dopo la fine del turno, per poter continuare la conversazione da remoto.
+Allegati testuali, modifica e rigenerazione richiedono protocollo 6 sul gateway;
+i vecchi gateway vengono segnalati prima di inviare operazioni non supportate.
+Nessun errore remoto fa ripartire il messaggio in locale e gli esiti incerti non
+sono reinviati automaticamente.
+Il controllo avviene all'apertura, poi ogni 3 secondi durante il turno (15 quando
+inattivo). Con pagina nascosta si seguono solo i turni remoti gia attivi, anche
+per far proseguire le code. Alla fine viene caricata la conversazione salvata; se il
 computer non risponde rimane visibile l'ultimo avanzamento ricevuto. Il relay
 mantiene i suoi limiti di dimensione e puo troncare i dettagli intermedi.
 Aggiornare entrambe le installazioni per i collegamenti per dispositivo; non
