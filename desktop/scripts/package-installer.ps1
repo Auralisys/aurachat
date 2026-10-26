@@ -7,7 +7,7 @@ $bundle = Join-Path $desktop 'src-tauri\target\release\bundle\nsis'
 
 if (-not $SkipBuild) {
   Push-Location $desktop
-  try { cargo tauri build --bundles nsis; if ($LASTEXITCODE -ne 0) { throw "cargo tauri build failed ($LASTEXITCODE)" } }
+  try { node (Join-Path $PSScriptRoot 'release.cjs'); if ($LASTEXITCODE -ne 0) { throw "Signed release build failed ($LASTEXITCODE)" } }
   finally { Pop-Location }
 }
 $setup = Get-ChildItem $bundle -Filter 'AuraChat_*_x64-setup.exe' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1

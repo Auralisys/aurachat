@@ -8,7 +8,7 @@ $exe = Join-Path $env:LOCALAPPDATA 'AuraChat\aurachat.exe'
 
 if (-not $SkipBuild) {
   Push-Location $desktop
-  try { cargo tauri build; if ($LASTEXITCODE -ne 0) { throw "cargo tauri build failed ($LASTEXITCODE)" } }
+  try { node (Join-Path $PSScriptRoot 'release.cjs'); if ($LASTEXITCODE -ne 0) { throw "Signed release build failed ($LASTEXITCODE)" } }
   finally { Pop-Location }
 }
 $setup = Get-ChildItem (Join-Path $release 'bundle\nsis') -Filter 'AuraChat_*_x64-setup.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -19,7 +19,9 @@ $running = Get-Process | Where-Object { $_.Path -eq $exe }
 $running | ForEach-Object { Stop-Process -Id $_.Id -Force }
 if ($running) { Start-Sleep 2 }
 
-$install = Start-Process $setup.FullName -ArgumentList '/S' -Wait -PassThru
+$installerArgs = @('/S')
+if (Test-Path $exe) { $installerArgs += @('/UPDATE', '/NS') }
+$install = Start-Process $setup.FullName -ArgumentList $installerArgs -Wait -PassThru
 if ($install.ExitCode -ne 0) { throw "Installer failed ($($install.ExitCode))" }
 
 # Tauri patches the bundle type into the installed exe; normalize it before comparing.

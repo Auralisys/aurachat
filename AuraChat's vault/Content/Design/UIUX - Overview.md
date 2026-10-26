@@ -31,7 +31,7 @@ respiro.
 ## Palette e tipografia — Auralisys
 
 Sorgente verificata: `DESIGN.md` del sito Auralisys
-(`C:\Users\lofio\Desktop\Dev\Node.js\website`). Tema di default **scuro**.
+(checkout del sito esterno a questo repository). Tema di default **scuro**.
 
 - **Accento (Electric Violet)** `#8b3fe0` — il "lavanda" del brand, unico
   colore per azione primaria, link, stato attivo (regola: un solo accento).

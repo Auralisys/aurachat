@@ -1559,6 +1559,7 @@ async function prepareWindow(restoreSaved) {
 async function init() {
   await loadLocales();
   applyTranslations();
+  await runUpdateGate();
   document.querySelectorAll('[data-icon]').forEach(el => {
     el.replaceWith(icon(el.dataset.icon));
   });

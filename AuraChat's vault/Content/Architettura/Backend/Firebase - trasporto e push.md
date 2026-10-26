@@ -307,7 +307,7 @@ reasoning/tool/agente salvati. Questo non certifica ancora la consegna iOS.
 
 ## Identità Windows — regressione trovata durante i test
 
-Il riavvio con un launcher diverso ha prodotto `Ridney` invece di `RIDNEY`:
+Il riavvio con un launcher diverso ha prodotto `Computer` invece di `COMPUTER`:
 il vecchio hash case-sensitive creava due ID per lo stesso PC, lasciando
 il telefono collegato a un gateway offline. L’hash ora normalizza maiuscole
 e spazi dei nomi Windows (`identity_version: 2`). Il telefono riconosce un

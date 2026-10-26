@@ -570,6 +570,7 @@ async fn publish_live(app:&tauri::AppHandle,turns:&Arc<Mutex<HashMap<String,Live
 }
 
 async fn session(app:&tauri::AppHandle)->Result<Option<(FirestoreAuth,String)>,String>{
+    if !app.state::<crate::updates::Updates>().ready.load(std::sync::atomic::Ordering::SeqCst) {return Ok(None);}
     let state=app.state::<AppState>();
     if state.config.lock().unwrap().refresh_token.is_empty(){return Ok(None);}
     let auth=crate::firebase_auth(&state)?;

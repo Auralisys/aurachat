@@ -13,7 +13,7 @@ desktop="$(cd "$(dirname "$0")/.." && pwd)"
 bundle="$desktop/src-tauri/target/release/bundle/dmg"
 
 if [ "$build" = 1 ]; then
-  (cd "$desktop" && npm exec --yes --package @tauri-apps/cli@2 -- tauri build --bundles dmg)
+  node "$desktop/scripts/release.cjs"
 fi
 dmg="$(ls -t "$bundle"/AuraChat_*.dmg 2>/dev/null | head -n 1 || true)"
 [ -n "$dmg" ] || { echo "DMG not found: run without --skip-build." >&2; exit 1; }

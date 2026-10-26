@@ -24,7 +24,7 @@ rispetta la direzione smooth/minimale e i token, per non dover rifare la UI.
 ## 0 — Scaffold e ambiente
 
 **Intervento:** struttura del progetto: `desktop/` (Tauri/Rust), `mobile/`
-(Flutter), vault affiancato in `C:\Users\lofio\Desktop\Dev\AuraChat`. Progetto
+(Flutter), vault affiancato nella root del repository AuraChat. Progetto
 Firebase con Firestore e FCM abilitati. Configurazione DeepSeek (`base_url`,
 `model`, `api_key`) come valori locali, fuori dal repository.
 

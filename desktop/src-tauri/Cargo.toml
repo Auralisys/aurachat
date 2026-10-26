@@ -1,6 +1,6 @@
 [package]
 name = "aurachat"
-version = "0.1.0"
+version = "0.1.1"
 description = "AuraChat desktop gateway (tray + inferenza OpenAI-compatible)"
 edition = "2021"
 
@@ -25,6 +25,7 @@ base64 = "0.22"
 ort = "=2.0.0-rc.12"
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
 rmcp = { version = "3.6", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest-native-tls"] }
 mcp-http = { package = "reqwest", version = "0.13", default-features = false, features = ["native-tls"] }
 tokio = { version = "1", features = ["process", "time"] }

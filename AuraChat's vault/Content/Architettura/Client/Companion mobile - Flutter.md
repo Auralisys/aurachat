@@ -67,7 +67,7 @@ italiana; la persistenza offline non è implementata.
 
 
 Prove successive riuscite: login reale e ripristino sessione Android, presenza del
-PC `lofio · Ridney`, lettura della cronologia e apertura della chat dal tap su push.
+PC selezionato, lettura della cronologia e apertura della chat dal tap su push.
 FCM diretto ha consegnato notifiche con app in background e dopo terminazione del
 processo; registrazione FID attiva nel manifest. Verificata anche la notifica
 Windows nella cronologia di sistema. Corretto l'installer DirectML (risoluzione

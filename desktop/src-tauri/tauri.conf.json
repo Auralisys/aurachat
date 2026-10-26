@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AuraChat",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "dev.aurachat.desktop",
   "build": {
     "frontendDist": "../ui"
@@ -27,7 +27,22 @@
     }
   },
   "bundle": {
-    "windows": { "nsis": { "installerHooks": "windows-runtime.nsh" } },
+    "publisher": "Auralisys",
+    "copyright": "Copyright (c) Auralisys",
+    "homepage": "https://auralisys.com/",
+    "shortDescription": "AuraChat desktop AI gateway",
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows-runtime.nsh",
+        "installerIcon": "icons/windows/icon.ico",
+        "uninstallerIcon": "icons/windows/icon.ico",
+        "headerImage": "../assets/installer/header.bmp",
+        "sidebarImage": "../assets/installer/sidebar.bmp",
+        "languages": ["English", "Italian"],
+        "displayLanguageSelector": false
+      }
+    },
     "active": true,
     "targets": [
       "nsis"
@@ -38,5 +53,15 @@
       "icons/windows/128x128@2x.png",
       "icons/windows/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE0Q0FEOTFFNkZDNEMwRUYKUldUdndNUnZIdG5LRkZiM1BrNU9jTmM5Snkwa0xCK2s1c2hXRUVNMmtzaklLY1NrR2RNOS8rM3cK",
+      "endpoints": ["https://github.com/Auralisys/aurachat/releases/latest/download/latest.json"],
+      "windows": {
+        "installMode": "passive",
+        "installerArgs": ["/NS"]
+      }
+    }
   }
 }

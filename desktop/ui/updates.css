@@ -1,0 +1,22 @@
+.update-dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  padding: 28px;
+  border: 0;
+  border-radius: var(--radius-2xl);
+  background: var(--c-panel);
+  color: var(--c-text);
+  box-shadow: var(--shadow-overlay);
+}
+.update-dialog::backdrop { background: #0d081fe6; }
+.update-dialog img { width: 40px; height: 40px; }
+.update-dialog h2 { margin: 20px 0 8px; font-size: 21px; line-height: 1.25; letter-spacing: -.02em; }
+.update-dialog p { margin: 8px 0; color: var(--c-text-muted); line-height: 1.6; }
+.update-dialog progress { display: block; width: 100%; height: 8px; margin-top: 24px; accent-color: var(--c-glow); }
+.update-dialog [data-update-detail] { font-size: 12px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.update-dialog__actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+.update-dialog__actions:has(button:not([hidden])) { min-height: 40px; }
+.update-dialog button { min-height: 40px; padding: 8px 14px; border-radius: var(--radius-md); }
+.update-dialog [data-update-retry] { background: var(--c-accent); color: white; }
+.update-dialog [data-update-retry]:hover { background: var(--c-accent-hover); }

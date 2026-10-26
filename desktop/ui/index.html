@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="activity.css" />
     <link rel="stylesheet" href="skills.css" />
+    <link rel="stylesheet" href="updates.css" />
   </head>
   <body>
     <div class="backdrop" aria-hidden="true"></div>
@@ -214,6 +215,18 @@
     <script src="queue.js"></script>
     <dialog id="git-push-confirm" class="permission-confirm" aria-labelledby="git-push-title"><form method="dialog"><h2 id="git-push-title" data-i18n="git.confirm_push"></h2><p id="git-push-target"></p><p data-i18n="git.push_note"></p><div><button value="cancel" data-i18n="project.cancel" autofocus></button><button value="push" class="approval-allow" data-i18n="git.push"></button></div></form></dialog>
     <dialog id="git-discard-confirm" class="permission-confirm" aria-labelledby="git-discard-title" aria-describedby="git-discard-note"><form method="dialog"><h2 id="git-discard-title" data-i18n="git.discard_title"></h2><p id="git-discard-note" data-i18n="git.discard_note"></p><ul id="git-discard-files"></ul><div><button value="cancel" data-i18n="project.cancel" autofocus></button><button value="discard" class="git-discard-confirm-action" data-i18n="git.discard_confirm"></button></div></form></dialog>
+    <dialog id="update-dialog" class="update-dialog" aria-labelledby="update-title" aria-describedby="update-message" tabindex="-1">
+      <img src="assets/logo-auralisys.svg" alt="" />
+      <h2 id="update-title"></h2>
+      <p id="update-message" data-update-message role="status" aria-live="polite"></p>
+      <progress max="1" data-i18n-aria-label="updates.progress"></progress>
+      <p data-update-detail></p>
+      <div class="update-dialog__actions">
+        <button type="button" data-update-offline hidden></button>
+        <button type="button" data-update-retry hidden></button>
+      </div>
+    </dialog>
+    <script src="updates.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

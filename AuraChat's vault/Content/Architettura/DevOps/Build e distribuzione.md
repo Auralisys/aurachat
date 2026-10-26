@@ -50,7 +50,7 @@ bash desktop/scripts/package-installer.sh
 ## Verifiche
 
 - `package-installer.ps1` eseguito il 22 ottobre 2026: installer da 18 MB copiato
-  in `C:\Users\lofio\Desktop`, hash identico, app installata non toccata.
+  nel Desktop dell'utente, hash identico, app installata non toccata.
 - `install-prod.ps1`: sintassi verificata con il parser PowerShell; la stessa
   sequenza di comandi era già stata usata a mano per le reinstallazioni.
 - Script macOS: solo `bash -n` da Windows. **Non ancora eseguiti su un Mac.**

@@ -1,7 +1,7 @@
 # RD Core e Nuifit — riferimenti riusati
 
 Su richiesta dell’utente, lettura del 18 ottobre 2026 nei repository locali
-`C:/Users/lofio/Desktop/Dev/Flutter/Auralisys/rdcore` e `nuifit`, senza modificarli.
+`rdcore` e `nuifit` (checkout esterni al repository), senza modificarli.
 
 ## Interazioni
 

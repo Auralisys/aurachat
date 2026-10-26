@@ -196,7 +196,7 @@ I percorsi seguenti sono locali e ignorati da Git, relativi alla root del proget
   con AuraChat. Solo gli SVG selezionati diventano asset dell'app.
 
 Estrazione completa fuori repo:
-`C:\Users\lofio\Desktop\Dev\ChatGPT-REA-26.1013.4894\extracted-app`.
+`<directory di analisi esterna al repository>\extracted-app`.
 
 Identificativi REA: estrazione
 `ev_567cc227033905b6895d3ac63930e0c3a6cd52187f09e7f8fedcc36ea1fabe9c`;

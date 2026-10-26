@@ -10,6 +10,18 @@ Vedi `../AuraChat's vault/` per le decisioni: `Overview.md`,
 
 ## Cosa fa (implementato)
 
+### Aggiornamenti desktop
+
+La versione 0.1.1 introduce l'updater firmato Windows/macOS: controllo all'avvio,
+download e installazione obbligatori quando viene trovata una nuova versione,
+riavvio automatico e nessuna ricreazione dei collegamenti durante l'update.
+Il gateway resta sospeso durante il controllo; offline/errori del servizio
+vengono segnalati esplicitamente. Il monorepo mobile resta indipendente.
+Preparazione, versionamento, chiavi e pubblicazione sul repository pubblico
+sono descritti nel [runbook delle release](RELEASING.md), da seguire per
+ogni nuova versione. La prima installazione e la pubblicazione remota sono
+prerequisiti: il solo push dei sorgenti non distribuisce un aggiornamento.
+
 - **Tray** con menu (Apri AuraChat / Esci) e processo in background: chiudere la
   finestra nasconde nel tray, non termina. Si esce dal menu del tray.
 - **Onboarding dell'inferenza a preset**: *DeepSeek* (basta la key, endpoint e

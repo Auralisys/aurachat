@@ -10,7 +10,7 @@ computer e si comanda dal telefono, come ChatGPT/Copilot. BYOK: ognuno usa la
 propria API key.
 
 Il vault è una cartella del progetto AuraChat
-(`C:\Users\lofio\Desktop\Dev\AuraChat`): codice e documentazione vivono
+(`AuraChat's vault/`, dalla root del repository): codice e documentazione vivono
 insieme. Aprire questa cartella come vault in Obsidian.
 
 ## Mappa

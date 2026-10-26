@@ -15,7 +15,7 @@ app="$desktop/src-tauri/target/release/bundle/macos/AuraChat.app"
 target=/Applications/AuraChat.app
 
 if [ "$build" = 1 ]; then
-  (cd "$desktop" && npm exec --yes --package @tauri-apps/cli@2 -- tauri build --bundles app)
+  node "$desktop/scripts/release.cjs"
 fi
 [ -d "$app" ] || { echo "AuraChat.app not found: run without --skip-build." >&2; exit 1; }
 

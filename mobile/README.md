@@ -246,7 +246,7 @@ fare una volta, dalla console e da macOS:
 ## Esito delle prove reali del 17 ottobre 2026
 
 - Accesso email/password Android riuscito; ripristino della sessione verificato.
-- Nome PC effettivo rilevato anche senza la variabile COMPUTERNAME: `lofio · Ridney`.
+- Nome PC effettivo rilevato anche senza la variabile COMPUTERNAME.
 - Lettura della cronologia reale, inclusa apertura della chat tramite tap su push.
 - Registrazione FID Firebase riuscita con il flag Android
   `firebase_messaging_installation_id_enabled`.

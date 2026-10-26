@@ -3,3 +3,11 @@
 # Keep the legacy folder local if an older script recreates it.
 /artifacts/
 *.lock
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+*.key
+*.p12
+*.mobileprovision

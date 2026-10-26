@@ -17,6 +17,7 @@ mod agent_runs;
 mod chat_runs;
 mod questions;
 mod companion;
+mod updates;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -560,6 +561,7 @@ async fn chat_inner(
     edit_index: Option<usize>,
     expected_owner: Option<String>,
 ) -> Result<ChatResponse, String> {
+    if !app.state::<updates::Updates>().ready.load(Ordering::SeqCst) {return Err("update_required".into());}
     let account=state.account_lock.lock().await;
     if !state.running_chats.lock().unwrap().insert(conversation_id.clone()) { return Err("chat_in_progress".into()); }
     let _run = ConversationRun {active:&state.running_chats, id:conversation_id.clone(), app:app.clone()};
@@ -1186,9 +1188,11 @@ pub fn run() {
         .manage(approvals::Approvals::default())
         .manage(questions::Questions::default())
         .manage(agent_runs::AgentRuns::default())
+        .manage(updates::Updates::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let config = AppConfig::load(&config_dir);
@@ -1253,6 +1257,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            updates::check_app_update, updates::finish_update_check, updates::install_app_update,
             get_config,
             get_local_config,
             login,

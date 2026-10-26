@@ -7,7 +7,7 @@ tags: [aurachat, client]
 ← [[Architettura - Overview]]
 
 Due app in due cartelle affiancate al vault, dentro
-`C:\Users\lofio\Desktop\Dev\AuraChat`:
+la root del repository AuraChat:
 
 - `desktop/` — **gateway Tauri/Rust**. Possiede la API key, chiama il LLM, sta
   nel tray, ascolta Firestore.

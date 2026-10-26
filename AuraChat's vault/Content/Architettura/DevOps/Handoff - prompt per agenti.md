@@ -15,7 +15,7 @@ Electric Violet `#8b3fe0`), smooth e minimale.
 
 ## Prompt 1 — Riprendere il desktop esistente (Tauri/Rust)
 
-Lavora in `C:\Users\lofio\Desktop\Dev\AuraChat`. Il progetto desktop esiste
+Lavora nella root del repository AuraChat. Il progetto desktop esiste
 in `desktop/`: non ricreare lo scaffold. Leggi `Overview.md` del vault, poi
 [[UI desktop - Refactor flat]], [[Desktop gateway - Tauri]],
 [[Account - Login e ripristino sessione]], [[Firebase - trasporto e push]],
@@ -54,14 +54,14 @@ telefono un gateway locale che fa inferenza su un LLM OpenAI-compatible
 (DeepSeek di default) con la propria API key.
 
 La documentazione è un vault Obsidian in
-`C:\Users\lofio\Desktop\Dev\AuraChat\AuraChat's vault`. Leggi in quest'ordine:
+`AuraChat's vault/`, relativo alla root del repository. Leggi in quest'ordine:
 `Overview.md`, `Content/Architettura/Architettura - Overview.md`,
 `Content/Design/UIUX - Overview.md`,
 `Content/Architettura/Client/Client - Overview.md`,
 `Content/Architettura/Client/Companion mobile - Flutter.md`,
 `Content/Architettura/DevOps/Roadmap.md` (scope 0 e 2).
 
-Poi crea il progetto mobile in `C:\Users\lofio\Desktop\Dev\AuraChat\mobile`
+Poi crea il progetto mobile in `mobile/`, relativo alla root del repository
 (cartella nuova, accanto al vault): un'app **Flutter** (Android/iOS) con una
 schermata chat minimale e una schermata di inserimento del codice di pairing.
 Per ora l'invio del prompt restituisce una risposta fake locale (senza rete):
