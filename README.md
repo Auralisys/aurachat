@@ -127,6 +127,10 @@ Build locally on the target operating system; GitHub hosts the release files
 but does not have to compile them. The
 [release runbook](desktop/RELEASING.md) covers versioning, signing keys, generated
 `latest.json`, Windows/macOS publishing and first-install requirements.
+The Windows-first workflow includes a Mac handoff: after pulling the repository,
+run `bash desktop/scripts/release-macos.command`. It builds the exact Windows
+release commit and adds the Mac packages to the same release. Initial tool
+authorizations and a secure, one-time transfer of the signing key are required.
 
 A normal source push does **not** publish an app update. Updates use public
 release downloads, so the installed app needs no GitHub account or token.

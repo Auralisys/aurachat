@@ -79,7 +79,10 @@ function credentialEnvironment(repo) {
     encoding: 'utf8', windowsHide: true, timeout: 5000,
   });
   if (result.status === 0) candidates.push(result.stdout.split(/\r?\n/).find(line => line.startsWith('password='))?.slice(9));
-  const gh = spawnSync('gh', ['auth', 'token', '--hostname', 'github.com'], {env, encoding: 'utf8', windowsHide: true, timeout: 5000});
+  const stored = {...env};
+  delete stored.GH_TOKEN;
+  delete stored.GITHUB_TOKEN;
+  const gh = spawnSync('gh', ['auth', 'token', '--hostname', 'github.com'], {env: stored, encoding: 'utf8', windowsHide: true, timeout: 5000});
   if (gh.status === 0) candidates.push(gh.stdout.trim());
   for (const token of candidates.filter(Boolean)) {
     const candidate = {...env, GH_TOKEN: token};
@@ -118,6 +121,10 @@ function manifest(config, target, url, signature, previous) {
     pub_date: previous?.pub_date || new Date().toISOString(),
     platforms: {...previous?.platforms, [target]: {url, signature: signature.trim()}},
   };
+}
+
+function downloadUrl(config, filename) {
+  return `https://github.com/${repository(config)}/releases/download/v${config.version}/${encodeURIComponent(filename)}`;
 }
 
 async function main() {
@@ -171,7 +178,7 @@ async function main() {
   fs.copyFileSync(item.file + '.sig', installer + '.sig');
   const signature = fs.readFileSync(installer + '.sig', 'utf8');
   const manifestPath = path.join(output, 'latest.json');
-  let latest = manifest(config, item.target, `https://github.com/${repo}/releases/download/v${config.version}/${filename}`, signature);
+  let latest = manifest(config, item.target, downloadUrl(config, filename), signature);
   fs.writeFileSync(manifestPath, JSON.stringify(latest, null, 2) + '\n');
   console.log(`Signed package and latest.json: ${output}`);
   if (!publish) {console.log('Local preparation only: nothing uploaded.'); return;}
@@ -186,8 +193,12 @@ async function main() {
   if (!release) {
     // This creates a remote tag/release only when --publish was explicitly requested.
     run('gh', ['release', 'create', tag, '--repo', repo, '--target', sourceCommit, '--draft', '--title', `AuraChat ${config.version}`, '--notes', `AuraChat ${config.version}`], {env});
-    const drafts = JSON.parse(api(`repos/${repo}/releases?per_page=100`));
-    release = drafts.find(release => release.tag_name === tag);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (attempt) await new Promise(resolve => setTimeout(resolve, 2000));
+      const drafts = JSON.parse(api(`repos/${repo}/releases?per_page=100`));
+      release = drafts.find(release => release.tag_name === tag);
+      if (release) break;
+    }
     if (!release) throw new Error('Created draft could not be found.');
   }
   if (release.assets.some(asset => asset.name === filename)) throw new Error('This platform/version already exists. Increment the version; published binaries are immutable.');
@@ -203,7 +214,8 @@ async function main() {
   release = JSON.parse(api(`repos/${repo}/releases/${release.id}`));
   const uploaded = release.assets.find(asset => asset.name === filename);
   if (!uploaded) throw new Error('Uploaded installer could not be verified.');
-  latest = manifest(config, item.target, uploaded.browser_download_url, signature, previous);
+  // GitHub gives new draft assets temporary /untagged-.../ URLs until publication.
+  latest = manifest(config, item.target, downloadUrl(config, filename), signature, previous);
   fs.writeFileSync(manifestPath, JSON.stringify(latest, null, 2) + '\n');
   run('gh', ['release', 'upload', tag, manifestPath, '--repo', repo, '--clobber'], {env});
   run('gh', ['release', 'edit', tag, '--repo', repo, '--draft=false', '--latest'], {env});
@@ -215,5 +227,5 @@ async function main() {
   console.log(`Published and verified: ${verified.html_url}`);
 }
 
-module.exports = {repository, manifest, artifact};
+module.exports = {repository, manifest, artifact, downloadUrl};
 if (require.main === module) main().catch(error => {console.error(error.message); process.exitCode = 1;});

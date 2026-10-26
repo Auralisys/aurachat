@@ -22,6 +22,13 @@ sono descritti nel [runbook delle release](RELEASING.md), da seguire per
 ogni nuova versione. La prima installazione e la pubblicazione remota sono
 prerequisiti: il solo push dei sorgenti non distribuisce un aggiornamento.
 
+Il flusso operativo e **Windows prima, Mac dopo**: dopo la pubblicazione Windows,
+sul Mac fare pull e lanciare `bash desktop/scripts/release-macos.command`.
+Lo script prepara gli strumenti mancanti con conferma, verifica login e chiave,
+compila il commit della release Windows e aggiunge il pacchetto Mac e il DMG alla
+stessa release. I prerequisiti iniziali e il trasferimento sicuro una tantum della
+chiave sono descritti nel runbook; nessun segreto va inserito nel repository.
+
 - **Tray** con menu (Apri AuraChat / Esci) e processo in background: chiudere la
   finestra nasconde nel tray, non termina. Si esce dal menu del tray.
 - **Onboarding dell'inferenza a preset**: *DeepSeek* (basta la key, endpoint e

@@ -19,8 +19,83 @@ nuova versione. Il monorepo contiene anche `mobile/`: questo flusso riguarda sol
   Renderlo nuovamente privato interromperebbe gli aggiornamenti anonimi.
 - Per pubblicare, lo script prova credenziali CLI e Git gia disponibili senza
   aprire prompt o salvare token nei sorgenti. L'account CLI/Git disponibile
-  durante l'implementazione ha `push: false`: il repository e leggibile, ma
-  nessuna release remota puo essere pubblicata con tale account.
+  iniziale aveva `push: false`. L'utente ha poi autorizzato `Auralisys`, che ha
+  accesso in scrittura. Un `GH_TOKEN` di Copilot puo dare precedenza al vecchio
+  account: il publisher prova anche il login `gh` salvato senza tale override.
+
+## Flusso concordato: Windows prima, poi pull e uno script sul Mac
+
+### Ogni nuova versione su Windows
+
+L'agente prepara versione, modifiche e build firmata, segue i controlli sotto e
+fa commit. **Il push dei sorgenti resta all'utente con GitHub Desktop**.
+Dopo il push, l'agente pubblica Windows oppure l'utente esegue dalla root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File desktop\scripts\publish-windows.ps1
+```
+
+Lo script usa il login GitHub autorizzato, ricompila e firma, pubblica installer,
+firma e `latest.json`, e copia l'installer sul Desktop. Non fa commit/push e non
+incrementa la versione: questi passaggi devono essere gia completati.
+La release e il tag vengono fissati al commit pubblicato. Non eseguire nuovamente
+per sostituire un installer della stessa versione: incrementare prima la versione.
+
+### Ogni nuova versione sul Mac
+
+Dopo la conferma che Windows e stato pubblicato, fare **pull** in GitHub Desktop.
+Dalla root del repository eseguire un solo comando:
+
+```bash
+bash desktop/scripts/release-macos.command
+```
+
+Lo script:
+
+1. Controlla strumenti Apple, Node, Rust/Cargo, CMake, Tauri e GitHub CLI.
+   Propone esplicitamente le installazioni mancanti: non esegue installazioni
+   nascoste. L'installazione Apple puo richiedere di rilanciare lo script.
+2. Usa il login `gh` salvato (senza token di sessione Copilot), oppure guida
+   all'autorizzazione nel browser; verifica i permessi sul repository.
+3. Legge la versione dal checkout dopo il pull e richiede che esista gia la
+   corrispondente release Windows pubblica con manifest.
+4. Risolve il commit del tag remoto e lo compila in un clone locale temporaneo,
+   senza cambiare branch, modificare file, fare stash o aggiornare il checkout
+   dell'utente. Anche se il pull include script/documenti successivi alla release,
+   il codice compilato rimane esattamente quello pubblicato per Windows.
+5. Verifica la chiave locale; al primo uso permette di importare i file gia
+   trasferiti in modo sicuro. Non genera una nuova identita di firma.
+6. Costruisce app, archivio updater firmato e DMG per l'architettura del Mac.
+   Node e Rust devono avere architettura coerente; non genera automaticamente
+   anche il pacchetto per l'altra architettura.
+7. Carica il DMG, poi pubblica archivio/firma e unisce la piattaforma Mac al JSON
+   Windows della stessa versione. Non sovrascrive pacchetti diversi.
+8. Copia il DMG sul Desktop e comunica l'esito. Un secondo avvio dopo una
+   pubblicazione gia conclusa segnala che la piattaforma e gia presente.
+
+La cartella temporanea viene stampata e conservata, anche in caso di errore, per
+non perdere pacchetti/log utili al recupero. Non pubblicare contemporaneamente da
+Windows e Mac. Se un upload si interrompe lasciando asset parziali, ispezionare
+la release: non cancellare o sostituire automaticamente pacchetti gia distribuiti.
+
+### Preparazione iniziale del Mac: limite non eliminabile con un pull
+
+Un pull trasferisce i sorgenti pubblici, **non credenziali o chiavi private**.
+Una sola volta occorre:
+
+- autorizzare nel browser GitHub CLI con un account che puo pubblicare;
+- accettare le installazioni degli strumenti mancanti e le eventuali richieste
+  di macOS; se ci sono gia, lo script non li reinstalla;
+- trasferire da Windows `%USERPROFILE%\.tauri\AuraChat\updater.key` e
+  `updater.key.pub` attraverso un canale sicuro sotto il controllo dell'utente
+  (per esempio un supporto personale protetto), mai nel repository pubblico,
+  nelle release o nella chat. Lo script chiede il percorso locale della chiave
+  trasferita e la importa in `$HOME/.tauri/AuraChat/` con permessi restrittivi.
+
+Poi normalmente bastano **pull + script**. La prima installazione dell'app sul
+Mac rimane manuale dal DMG; le successive versioni usano l'updater. La firma
+ad hoc non elimina le protezioni Gatekeeper: l'agente non le aggira.
+Non dichiarare il primo Mac operativo prima di una build/installazione reale.
 
 ## Chiave di firma: preservarla
 
@@ -48,8 +123,12 @@ Gatekeeper e l'installazione/riapertura su un Mac reale vanno verificati.
    trailer `Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>`.
    Il push resta manuale a cura dell'utente: non eseguirlo automaticamente.
 2. Eseguire i test relativi alle modifiche e quelli dell'updater:
-   `node desktop/tests/release.cjs` e `node desktop/tests/updates.cjs`
+   `node desktop/tests/release.cjs`, `node desktop/tests/release-publish.cjs`
+   e `node desktop/tests/updates.cjs`
    (quest'ultimo richiede il runtime Playwright gia usato dagli altri test UI).
+   `bash desktop/tests/release-macos.sh` verifica l'orchestrazione Mac con
+   strumenti simulati (importazione chiave, commit del tag, ordine degli upload,
+   seconda esecuzione e rifiuto di una chiave pubblica diversa).
    Su Windows i test nativi usano `desktop/tests/run-native.ps1`.
 3. Per incrementare patch e costruire localmente:
 
@@ -151,10 +230,17 @@ i mock non gestiscono `refresh_data`; lo smoke contiene anche aspettative sul
 vecchio input del compositore. Questi test non sono stati modificati come parte
 dell'updater. Non considerare questa verifica una suite completa verde.
 
-Restano bloccati la pubblicazione remota (account disponibile con `push: false`)
-e il ciclo reale di aggiornamento/installazione su Mac (nessun host macOS
-disponibile da questa sessione). L'endpoint pubblico del manifest risponde 404
-finche non viene pubblicata la prima release con `latest.json`.
+La release Windows **v0.1.1**, commit
+`b6144cd9ff3887f6d46bb1081609b077887bdcd2`, e stata pubblicata su GitHub con
+installer, firma e `latest.json`. L'endpoint anonimo non richiede login.
+Durante la prima pubblicazione sono emersi consistenza ritardata del draft e
+URL temporanei `untagged-...`: il publisher ora attende il draft e genera URL
+canonici del tag, non quelli temporanei. Il draft iniziale e stato completato
+senza sostituire binari gia pubblicati.
+
+Restano da eseguire sul Mac la preparazione iniziale, build, pubblicazione e il
+ciclo reale di installazione/aggiornamento: nessun host macOS e disponibile
+in questa sessione Windows. I controlli statici non sostituiscono tale prova.
 
 ## Controlli sulla pubblicazione del repository
 

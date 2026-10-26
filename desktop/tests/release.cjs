@@ -1,10 +1,13 @@
 const assert = require('node:assert/strict');
 const {readFileSync} = require('node:fs');
 const {resolve} = require('node:path');
-const {manifest, artifact, repository} = require('../scripts/release.cjs');
+const {manifest, artifact, repository, downloadUrl} = require('../scripts/release.cjs');
 const config = JSON.parse(readFileSync(resolve(__dirname, '../src-tauri/tauri.conf.json'), 'utf8'));
 const repo = repository(config);
 assert.equal(repo, 'Auralisys/aurachat');
+assert.equal(downloadUrl(config, 'AuraChat setup.exe'),
+  `https://github.com/${repo}/releases/download/v${config.version}/AuraChat%20setup.exe`);
+assert.ok(!downloadUrl(config, 'package.exe').includes('untagged-'));
 const api = id => `https://github.com/${repo}/releases/download/v${config.version}/package-${id}.exe`;
 const first = manifest(config, 'windows-x86_64', api(123), 'signature-windows');
 const combined = manifest(config, 'darwin-aarch64', api(456), 'signature-mac', first);
