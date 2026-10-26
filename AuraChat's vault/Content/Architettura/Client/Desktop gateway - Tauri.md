@@ -391,5 +391,12 @@ Il relay conserva i limiti di dimensione gia usati dal telefono. Nuovi campi
 `keep_count` e `user_message` ricostruiscono anche modifica e rigenerazione.
 
 Entrambe le installazioni vanno aggiornate per usare i collegamenti separati.
+Anche posizione, dimensioni e stato massimizzato della finestra sono separati
+per computer: `FirestoreClient::load_window` e `save_window` usano
+`users/{uid}/devices/{device}/preferences/window`. Il documento e distinto
+dall'heartbeat, che non puo sovrascriverlo. Il vecchio campo condiviso
+`users/{uid}.window` resta intatto ma non viene importato: al primo avvio della
+nuova versione si usa la geometria predefinita del monitor locale, poi ogni
+computer conserva la propria disposizione.
 Su richiesta non sono stati eseguiti test, build o installazioni; nessuna
 modifica all'app di produzione in esecuzione.

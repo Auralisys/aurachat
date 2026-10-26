@@ -38,7 +38,9 @@ Vedi `../AuraChat's vault/` per le decisioni: `Overview.md`,
   e chiudi sono gestiti dal sistema, senza pulsanti HTML duplicati. La chiusura
   continua a nascondere nel tray; il ridimensionamento si abilita dopo lo splash.
 
-La persistenza Firestore usa `users/{uid}`: `config`, `tree` e `window` sono mappe native,
+La persistenza Firestore usa `users/{uid}`: `config` e `tree` sono mappe native,
+mentre la geometria finestra e separata per computer in
+`users/{uid}/devices/{device}/preferences/window`.
 con aggiornamenti separati che preservano gli altri campi. Il vecchio `config`
 JSON stringificato resta leggibile; il database di sviluppo e stato migrato
 il 17 ottobre 2026, con backup locale e rimozione di `data/tree`. Le regole remote
@@ -500,7 +502,10 @@ un server separato.
 ## Disposizione finestra
 
 Dimensioni, posizione e stato massimizzato sono salvati nella mappa Firestore
-`users/{uid}.window` dopo una pausa di 1 secondo dai cambiamenti. La splash parte
+`users/{uid}/devices/{device}/preferences/window` dopo una pausa di 1 secondo dai
+cambiamenti, senza influenzare gli altri computer dello stesso account. Il vecchio
+campo condiviso `users/{uid}.window` non viene importato per evitare di riprendere
+la disposizione dell'altro computer. La splash parte
 centrata a 480x320; prima di mostrare la chat viene ripristinata la finestra
 salvata. Senza dati precedenti la finestra e 1080x880, adattata al monitor.
 Spostamenti e ridimensionamenti della splash non sovrascrivono i dati utente.

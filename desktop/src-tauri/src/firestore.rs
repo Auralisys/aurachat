@@ -558,7 +558,8 @@ impl Firestore {
     }
 
     pub async fn load_window(&self, uid: &str, auth: &FirestoreAuth) -> Result<Option<WindowGeometry>, String> {
-        match self.get_field(auth, &format!("users/{uid}"), "window").await? {
+        let (device, _) = crate::companion::identity();
+        match self.relay_get(auth, &format!("users/{uid}/devices/{device}/preferences/window")).await? {
             Some(value) => {
                 let geometry: WindowGeometry = serde_json::from_value(value).map_err(|e| format!("parse window: {e}"))?;
                 if !geometry.valid() { return Err("Firestore: invalid window dimensions".into()); }
@@ -571,7 +572,8 @@ impl Firestore {
     pub async fn save_window(&self, uid: &str, auth: &FirestoreAuth, geometry: &WindowGeometry) -> Result<(), String> {
         if !geometry.valid() { return Err("invalid window dimensions".into()); }
         let value = serde_json::to_value(geometry).map_err(|e| e.to_string())?;
-        self.set_field(auth, &format!("users/{uid}"), "window", &value).await
+        let (device, _) = crate::companion::identity();
+        self.relay_upsert(auth, &format!("users/{uid}/devices/{device}/preferences/window"), &value).await
     }
 
     pub async fn save_user(
