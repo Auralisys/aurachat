@@ -488,7 +488,7 @@ impl Firestore {
         let mut conversation:Conversation=serde_json::from_value(Value::Object(metadata)).map_err(|e|e.to_string())?;
         if let Some(tree)=self.trees.lock().unwrap().get_mut(uid) {
             if let Some(summary)=tree.find_conversation_mut(id) {
-                conversation.title=summary.title.clone();*summary=conversation.clone();
+                conversation.title=summary.title.clone();conversation.title_state=summary.title_state.clone();*summary=conversation.clone();
             }
         }
         Ok(conversation)
@@ -514,6 +514,7 @@ impl Firestore {
             if old.and_then(|c|c.messages.get(index)).is_some_and(|before|serde_json::to_value(before).ok()==serde_json::to_value(message).ok()){continue;}
             writes.append(&mut self.replace_message_writes(auth,&path,index,message).await?);
         }
+
         for index in conversation.messages.len()..old_count {
             writes.push(json!({"delete":document_name(auth,&message_path(&path,index))}));
             for part in self.list_parts(auth,&path,index).await? {writes.push(part_delete(&part)?);}
@@ -525,6 +526,30 @@ impl Firestore {
         *cached.find_conversation_mut(&saved.id).ok_or("conversation_not_found")?=saved.clone();
         self.trees.lock().unwrap().insert(uid.into(),cached);
         Ok(saved)
+    }
+
+    pub async fn update_auto_title(&self,uid:&str,auth:&FirestoreAuth,id:&str,expected_title:&str,
+        expected_state:&str,title:&str,state:&str)->Result<bool,String> {
+        valid_id(uid)?;valid_id(id)?;
+        let path=format!("users/{uid}");
+        for _ in 0..3 {
+            let parent=self.get_document(auth,&path,Some("tree")).await?.ok_or("user_not_found")?;
+            let mut tree=document_fields(&parent)?.get("tree").cloned().ok_or("history_not_loaded")?;
+            let Some(summary)=tree["conversations"].get_mut(id) else{return Ok(false)};
+            if summary["title"].as_str()!=Some(expected_title) || summary["title_state"].as_str()!=Some(expected_state) {return Ok(false);}
+            summary["title"]=json!(title);summary["title_state"]=json!(state);
+            match self.commit(auth,vec![field_write(auth,&path,"tree",&tree,version(&parent)?)?]).await {
+                Ok(_)=>{
+                    if let Some(cached)=self.trees.lock().unwrap().get_mut(uid).and_then(|tree|tree.find_conversation_mut(id)) {
+                        cached.title=title.into();cached.title_state=Some(state.into());
+                    }
+                    return Ok(true);
+                },
+                Err(error) if error=="conversation_conflict"=>continue,
+                Err(error)=>return Err(error),
+            }
+        }
+        Err("conversation_conflict".into())
     }
 
     /// Explicit migration only; callers select a private application-data backup directory.
@@ -938,7 +963,7 @@ mod tests {
             let chat_path=format!("{path}/conversations/{id}");
             let outcome:Result<(),String>=async {
                 let mut draft=original.clone();
-                draft.conversations.push(Conversation {id:id.clone(),title:"Temporary CRUD fixture".into(),model:None,messages:vec![],created_at:1,updated_at:1,context_tokens:0,messages_loaded:true,revision:None});
+                draft.conversations.push(Conversation {id:id.clone(),title:"Temporary CRUD fixture".into(),title_state:None,model:None,messages:vec![],created_at:1,updated_at:1,context_tokens:0,messages_loaded:true,revision:None});
                 client.save_tree(&uid,&auth,&draft).await?;
                 let mut tree=client.cached_tree(&uid).ok_or("missing_draft_cache")?;
                 check(tree.find_conversation(&id).and_then(|c|c.revision.as_ref()).is_some(),"draft revision")?;

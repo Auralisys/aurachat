@@ -131,6 +131,18 @@ fork/rigenerazione e ripristino dopo riavvio restano solo parzialmente indagati.
 
 ## Icone selezionate per AuraChat
 
+### Aggiornamenti del titolo — approfondimento del 26 ottobre 2026
+
+La lettura mirata degli estratti gia conservati mostra in
+`webview/assets/app-initial-5851df3f6cb1.js` l'evento `thread/name/updated`
+(offset UTF-16 @2480877) che applica un nome non vuoto tramite
+`threadStore.applyThreadTitleUpdate`, e la richiesta `thread/name/set`
+(@2822038) usata da `persistThreadTitle`. Sono percorsi del bridge thread,
+non una prova del prompt o del modello usati per generare i titoli ChatGPT.
+L'algoritmo server di generazione non e stato ricostruito.
+AuraChat implementa una propria richiesta breve in background, documentata in
+[[Desktop gateway - Tauri]], senza copiare il codice del target.
+
 Su richiesta dell'utente, importati 206 SVG da `webview/assets` nelle famiglie
 `alarm_*`, `alert_*`, `align_*`, `archive_*`, `arrow_*`, `app_*`, `bot_*`,
 `chevron_*`, `check_*`, `folder_*`, comprese le rispettive basi quando presenti, più Home

@@ -173,6 +173,27 @@ async function finishLiveTurn(run) {
 
 const remoteTurnSync = {busy:false, targets:new Map()};
 
+function applyConversationTitle(id, title, titleState) {
+  const conversation = findConversation(id)?.conversation;
+  if (!conversation || conversation.title_state === 'manual') return;
+  const order = {pending:1,generating:2,generated:3,failed:3,manual:4};
+  if ((order[titleState] || 0) < (order[conversation.title_state] || 0)) return;
+  const titleFailed = titleState === 'failed' && conversation.title_state !== 'failed';
+  if (conversation.title === title && conversation.title_state === titleState) return;
+  for (const target of [conversation, state.persistedData && conversationInData(state.persistedData,id), state.runs.get(id)?.saved]) {
+    if (target) {target.title = title;target.title_state = titleState;}
+  }
+  const refreshTitle = () => {
+    renderSidebar();
+    const label = $('#conversation-title');
+    if (state.activeConversationId === id && label) label.textContent = findConversation(id)?.conversation.title || title;
+  };
+  const editor = document.querySelector('.tree-input');
+  if (editor) editor.addEventListener('blur',refreshTitle,{once:true});
+  else refreshTitle();
+  if (state.activeConversationId === id && titleFailed) composerStatus(t('chat.title_failed'));
+}
+
 function remoteTarget(id) {
   return remoteTurnSync.targets.get(JSON.stringify([state.config?.firebase_email, id]));
 }
@@ -263,6 +284,7 @@ async function refreshRemoteTurn(id = state.activeConversationId) {
   try {
     const snapshot = await invoke('remote_chat_snapshot', {conversation_id:id,device_id:remoteTarget(id)?.device_id || null});
     if (!sameOwner()) return;
+    if (typeof snapshot?.title === 'string') applyConversationTitle(id,snapshot.title,snapshot.title_state);
     if (rememberRemoteTarget(id, snapshot)) {
       renderSidebar();
       if (stillActive()) renderMessages();

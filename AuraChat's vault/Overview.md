@@ -90,9 +90,12 @@ trova un difetto, aggiungerlo a [[Problemi noti]] con il rimando alla nota dove
 In [[Desktop gateway - Tauri]]: collegamenti alle cartelle separati per computer
 e controllo delle chat in esecuzione sull'altro desktop, riusando il relay del
 companion: invio, coda, guida immediata, Stop, domande e approvazioni.
-Icona computer a sinistra del titolo; consensi locali invariati. Entrambe le
-installazioni vanno aggiornate. Modifiche non ancora verificate sulle app
-installate; nessun test, build o reinstallazione eseguiti su richiesta.
+Icona computer a sinistra del titolo; consensi locali invariati. Le
+nuove chat generano inoltre un titolo sintetico in background dopo la prima
+risposta, con contesto ridotto e protezione delle rinomine manuali.
+Entrambe le installazioni vanno aggiornate. Modifiche non ancora verificate
+sulle app installate; eseguiti solo controlli statici, nessuna suite di test,
+build di produzione o reinstallazione.
 
 ## Aggiornamento precedente — 22 ottobre 2026
 

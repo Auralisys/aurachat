@@ -59,6 +59,7 @@
   "chat.stop": "Ferma",
   "chat.stopping": "Interruzione in corso",
   "chat.stopped": "Interrotto.",
+  "chat.title_failed": "Titolo automatico non disponibile. Il titolo provvisorio è stato mantenuto.",
   "chat.remote_running": "In esecuzione su {device}.",
   "chat.remote_device": "Computer remoto: {device}",
   "errors.remote_device_offline": "Il computer remoto non risponde. Nessun messaggio è stato avviato in locale.",

@@ -69,6 +69,8 @@ struct LiveTurn {
     user_content: String,
     user_message: Option<Value>,
     keep_count: Option<usize>,
+    title: Option<String>,
+    title_state: Option<String>,
     content: String,
     reasoning: String,
     activity: Vec<Value>,
@@ -140,6 +142,8 @@ impl LiveTurn {
                 "role":"user","content":truncate_chars(message["content"].as_str().unwrap_or(""),LIVE_MAX_FIELD),"attachments":[]
             })),
             "keep_count": self.keep_count,
+            "title": self.title,
+            "title_state": self.title_state,
             "content": truncate_chars(&self.content, LIVE_MAX_CONTENT),
             "reasoning": truncate_chars(&self.reasoning, LIVE_MAX_REASONING),
             "activity": self.activity.iter().rev().take(LIVE_MAX_ACTIVITY).rev().map(sanitize_activity).collect::<Vec<_>>(),
@@ -401,6 +405,19 @@ pub fn start(app: &tauri::AppHandle) {
             let Some(id)=snapshot["conversation_id"].as_str() else{return};
             if let Some(turn)=live.lock().unwrap().get_mut(id) {
                 if update_shell_activity(&mut turn.activity,&snapshot){turn.touch(data::now_millis());}
+            }
+        });
+    }
+    {
+        let live=live.clone();
+        app.listen("conversation-title-updated",move |event| {
+            let Ok(value)=serde_json::from_str::<Value>(event.payload()) else{return};
+            let Some(id)=value["conversation_id"].as_str() else{return};
+            if let Some(turn)=live.lock().unwrap().get_mut(id) {
+                if turn.uid.as_deref()!=value["owner"].as_str() {return;}
+                turn.title=value["title"].as_str().map(String::from);
+                turn.title_state=value["title_state"].as_str().map(String::from);
+                turn.touch(data::now_millis());
             }
         });
     }
@@ -771,7 +788,7 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
             let now=data::now_millis();
             let model=request["model"].as_str().map(str::to_string);
             if let Some(model)=&model {if !crate::load_user_cached(&state,auth,uid).await?.models.contains_key(model){return Err("model_not_found".into());}}
-            let conversation=Conversation{id:id.into(),title:crate::truncate_title(content),model,messages:vec![],created_at:now,updated_at:now,context_tokens:0,messages_loaded:true,revision:None};
+            let conversation=Conversation{id:id.into(),title:crate::truncate_title(content),title_state:None,model,messages:vec![],created_at:now,updated_at:now,context_tokens:0,messages_loaded:true,revision:None};
             if let Some(project)=request["project_id"].as_str().filter(|p|!p.is_empty()) {
                 tree.projects.iter_mut().find(|p|p.id==project).ok_or("project_not_found")?.conversations.push(conversation);
             }else{tree.conversations.push(conversation);}
@@ -830,7 +847,8 @@ fn change_chat(tree:&mut data::ChatData,id:&str,request:&Value)->Result<(),Strin
     match request["action"].as_str() {
         Some("rename_chat")=>{
             let title=request["title"].as_str().map(str::trim).filter(|s|!s.is_empty() && s.chars().count()<=160 && !s.chars().any(char::is_control)).ok_or("invalid_chat_title")?;
-            tree.find_conversation_mut(id).ok_or("conversation_not_found")?.title=title.into();
+            let conversation=tree.find_conversation_mut(id).ok_or("conversation_not_found")?;
+            conversation.title=title.into();conversation.title_state=Some("manual".into());
         },
         Some("delete_chat")=>{
             if request["confirm_delete"]!=true {return Err("chat_delete_confirmation_required".into());}

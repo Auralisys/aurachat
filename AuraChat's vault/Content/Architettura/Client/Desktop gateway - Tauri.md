@@ -426,3 +426,35 @@ silenziosamente i campi. Il companion mobile resta compatibile.
 chat nella sidebar e nell'intestazione, con tooltip e nome accessibile del
 computer. Il loader resta a destra. Errori e offline sono espliciti: mai ripiego
 sull'esecuzione locale.
+
+## Titoli sintetici delle chat — 26 ottobre 2026
+
+Il testo troncato del primo messaggio resta soltanto un titolo provvisorio.
+Dopo una risposta riuscita, `generate_chat_title` in
+`desktop/src-tauri/src/lib.rs` avvia una richiesta separata in background tramite
+`llm::conversation_title` (`desktop/src-tauri/src/llm.rs`). Usa il modello della
+chat, nessuno strumento, massimo 2.000 caratteri del primo messaggio e 1.000 della
+prima risposta, output 128 token e timeout 25 secondi. Il prompt chiede 3-6
+parole nella lingua dell'utente. Sul dominio ufficiale DeepSeek viene anche
+disabilitato il thinking; sugli endpoint custom non vengono imposti parametri
+reasoning proprietari. E una chiamata AI aggiuntiva, non un servizio gratuito.
+
+`Conversation::title_state` distingue pending/generating/generated/manual/failed.
+`FirestoreClient::update_auto_title` aggiorna il riepilogo condiviso con confronto
+del titolo e dello stato attesi e precondizione sulla revisione Firestore. Solo
+chi prenota pending -> generating chiama il modello; nessun altro desktop o
+telefono deve farlo. Una rinomina manuale annulla l'applicazione del risultato.
+Errori o output non valido mantengono il titolo provvisorio, registrano l'errore
+e mostrano un avviso sulla chat aperta, senza retry AI automatici.
+
+Il desktop riceve `conversation-title-updated`; il relay live e il tree del
+companion propagano il titolo a desktop remoto e mobile. La generazione e sempre
+sul gateway che esegue il turno. Le vecchie chat non vengono rinominate in massa.
+
+Le notifiche di completamento usano i primi 200 caratteri della risposta
+conclusiva del modello, separata dal testo accumulato prima delle chiamate agli
+strumenti tramite il callback interno `__final_response`. Non cambiano il testo
+della chat. La notifica della nuova chat attende il tentativo di titolo AI in
+background; la risposta viene restituita alla UI senza attendere. In caso di
+errore del titolo rimane il provvisorio; Stop ed errori notificano lo stato
+esplicitamente, senza riciclare testo di ragionamento o lavoro ancora parziale.

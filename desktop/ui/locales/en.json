@@ -59,6 +59,7 @@
   "chat.stop": "Stop",
   "chat.stopping": "Stopping",
   "chat.stopped": "Stopped.",
+  "chat.title_failed": "Automatic title unavailable. The provisional title was kept.",
   "chat.remote_running": "Running on {device}.",
   "chat.remote_device": "Remote computer: {device}",
   "errors.remote_device_offline": "The remote computer is not responding. No message was started locally.",

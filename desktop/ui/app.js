@@ -729,6 +729,7 @@ function renameConversation(id, title) {
   const c = findConversation(id);
   if (c) {
     c.conversation.title = title;
+    c.conversation.title_state = 'manual';
     persist();
   }
 }
@@ -1052,7 +1053,11 @@ async function requestChat(payload) {
     run.messages = markGuidanceHistory(run, result.messages);run.usage = result.usage;run.completedEpoch = ++state.resultEpoch;run.queueOutcome = result.cancelled ? 'cancelled' : 'completed';
     const saved = conversationInData(result.data, id);
     run.saved = {...saved, messages:result.messages, messages_loaded:true};
-    const target = findConversation(id)?.conversation;if (target) Object.assign(target, run.saved);
+    const target = findConversation(id)?.conversation;
+    if (target?.title_state === 'manual' || (saved?.title_state === 'pending' && ['generating','generated','failed'].includes(target?.title_state))) {
+      run.saved.title = target.title;run.saved.title_state = target.title_state;
+    }
+    if (target) Object.assign(target, run.saved);
     const baseline = state.persistedData && conversationInData(state.persistedData, id);if (baseline) Object.assign(baseline, structuredClone(run.saved));
     if (result.cancelled && state.activeConversationId === id) composerStatus(t('chat.stopped'));
     return true;
@@ -1097,7 +1102,7 @@ function titleFromMessage(text, attachments) {
 
 function nameConversationFromMessage(id, text, attachments, editIndex) {
   const found = findConversation(id);
-  if (!found || editIndex !== null || state.messages.length) return;
+  if (!found || found.conversation.title_state === 'manual' || editIndex !== null || state.messages.length) return;
   const title = titleFromMessage(text, attachments);
   if (found.conversation.title === title) return;
   found.conversation.title = title;
@@ -1562,6 +1567,13 @@ async function init() {
   setupComposerExtras();
   setupSidebarSections();
   await setupActivity();
+  await appWindow.listen('conversation-title-updated', ({payload}) => {
+    if (payload?.email !== state.config.firebase_email || typeof payload.title !== 'string') return;
+    applyConversationTitle(payload.conversation_id,payload.title,payload.title_state);
+  });
+  await appWindow.listen('conversation-title-error', ({payload}) => {
+    if (payload?.email === state.config.firebase_email && state.activeConversationId === payload.conversation_id) composerStatus(t('chat.title_failed'));
+  });
   await appWindow.listen('companion-permissions', () => {refreshPermissions();skillsChooser?.invalidate();if(settingsTab==='skills')refreshSkillSettings();});
   await appWindow.listen('companion-started', async ({payload}) => {
     const id = payload?.conversation_id;if (!id || state.runs.get(id)?.pending) return;

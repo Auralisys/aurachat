@@ -487,6 +487,8 @@ async fn set_conversation_model(state: tauri::State<'_, AppState>, conversation_
 #[derive(serde::Serialize)]
 struct ChatResponse {
     content: String,
+    #[serde(skip)]
+    final_content: String,
     usage: Usage,
     messages: Vec<ChatMessage>,
     data: ChatData,
@@ -514,6 +516,9 @@ async fn run_chat(
     let event_id=format!("{}-{}",conversation_id,data::now_millis());
     let _=app.emit("live-turn",serde_json::json!({"conversation_id":conversation_id.clone(),"turn_id":event_id.clone(),"status":"running","user_content":content.clone()}));
     let result=chat_inner(app.clone(),state.clone(),conversation_id.clone(),content,attachments,retry,edit_index,expected_owner).await;
+    let title_job=result.as_ref().ok().filter(|reply|!reply.cancelled)
+        .and_then(|reply|reply.data.find_conversation(&conversation_id))
+        .filter(|chat|chat.title_state.as_deref()==Some("pending")).cloned();
     let turn_status=match &result {Ok(reply) if reply.cancelled=>"cancelled",Ok(_)=>"completed",Err(_)=>"failed"};
     let _=app.emit("live-turn",serde_json::json!({"conversation_id":conversation_id.clone(),"turn_id":event_id.clone(),"status":turn_status}));
     let (title,body)=match &result {
@@ -521,15 +526,27 @@ async fn run_chat(
         Ok(_) => ("Risposta pronta", "AuraChat ha terminato la risposta."),
         Err(_) => ("Chat terminata con errore", "Apri AuraChat per controllare il problema."),
     };
-    if state.firestore.uid().as_deref()==Some(notification_owner.as_str()) {
+    let preview=match &result {
+        Ok(reply) if !reply.cancelled && !reply.final_content.trim().is_empty()=>companion::notification_preview(&reply.final_content,200),
+        _=>body.into(),
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Some(conversation)=title_job {
+            if let Err(error)=generate_chat_title(&app,&notification_owner,&conversation).await {
+                eprintln!("Conversation title generation failed: {error}");
+                let state=app.state::<AppState>();
+                if state.firestore.uid().as_deref()==Some(notification_owner.as_str()) {
+                    let email=state.config.lock().unwrap().firebase_email.clone();
+                    let _=app.emit("conversation-title-error",serde_json::json!({"conversation_id":conversation.id,"email":email}));
+                }
+            }
+        }
+        let state=app.state::<AppState>();
+        if state.firestore.uid().as_deref()!=Some(notification_owner.as_str()) {return;}
         let chat_title=state.data.lock().unwrap().find_conversation(&conversation_id)
             .map(|chat|chat.title.clone()).filter(|name|!name.trim().is_empty()).unwrap_or_else(||title.into());
-        let preview=match &result {
-            Ok(reply) if !reply.content.trim().is_empty()=>companion::notification_preview(&reply.content,200),
-            _=>body.into(),
-        };
         companion::notify(&app,"chat",&event_id,&conversation_id,&companion::notification_preview(&chat_title,100),&preview);
-    }
+    });
     result
 }
 
@@ -587,7 +604,10 @@ async fn chat_inner(
     // Il nome e il modello della chat nascono dal primo messaggio, prima della risposta del modello.
     if let Some(conversation) = state.data.lock().unwrap().find_conversation_mut(&conversation_id) {
         if conversation.messages.is_empty() {
-            conversation.title = first_title(&user_message.content, &user_message.attachments);
+            if conversation.title_state.as_deref()!=Some("manual") {
+                conversation.title = first_title(&user_message.content, &user_message.attachments);
+                conversation.title_state=Some("pending".into());
+            }
             conversation.model = Some(effective_model.clone());
         }
     }
@@ -604,9 +624,14 @@ async fn chat_inner(
     };
     let turn_activity = std::sync::Mutex::new(Vec::<serde_json::Value>::new());
     let streamed = std::sync::Mutex::new(String::new());
+    let final_content = std::sync::Mutex::new(String::new());
     let content_offset = std::sync::atomic::AtomicUsize::new(0);
     let segments = std::sync::Mutex::new(Vec::<ChatMessage>::new());
     let progress = |action:&str,text:&str| {
+        if action=="__final_response" {
+            *final_content.lock().unwrap()=text.into();
+            return;
+        }
         let mut events = turn_activity.lock().unwrap();
         if matches!(action,"__steering"|"__question_summary") {
             if let Ok(message) = serde_json::from_str::<ChatMessage>(text) {
@@ -720,11 +745,51 @@ async fn chat_inner(
     if let Some(error)=deferred_error {return Err(error);}
     Ok(ChatResponse {
         content: reply,
+        final_content: final_content.into_inner().unwrap(),
         usage,
         messages,
         data: tree,
         cancelled,
     })
+}
+
+async fn change_auto_title(app:&tauri::AppHandle,owner:&str,conversation:&data::Conversation,
+    expected_state:&str,title:&str,status:&str)->Result<bool,String> {
+    let state=app.state::<AppState>();
+    let _account=state.account_lock.lock().await;
+    if state.firestore.uid().as_deref()!=Some(owner) {return Ok(false);}
+    let _save=state.history_save_lock.lock().await;
+    let auth=firebase_auth(&state)?;
+    if !state.firestore.update_auto_title(owner,&auth,&conversation.id,&conversation.title,expected_state,title,status).await? {return Ok(false);}
+    if let Some(cached)=state.data.lock().unwrap().find_conversation_mut(&conversation.id) {
+        cached.title=title.into();cached.title_state=Some(status.into());
+    }
+    let _=app.emit("conversation-title-updated",serde_json::json!({"conversation_id":conversation.id,
+        "title":title,"title_state":status,"owner":owner,"email":state.config.lock().unwrap().firebase_email}));
+    Ok(true)
+}
+
+async fn generate_chat_title(app:&tauri::AppHandle,owner:&str,conversation:&data::Conversation)->Result<(),String> {
+    let state=app.state::<AppState>();
+    let auth=firebase_auth(&state)?;
+    if state.firestore.uid().as_deref()!=Some(owner) {return Ok(());}
+    let user=load_user_cached(&state,&auth,owner).await?;
+    let model=conversation.model.as_ref().unwrap_or(&user.active_model);
+    let config=user.models.get(model).ok_or("model_not_found")?;
+    let key=user.model_key(config);
+    if !change_auto_title(app,owner,conversation,"pending",&conversation.title,"generating").await? {return Ok(());}
+    let prompt=conversation.messages.iter().find(|message|message.role=="user").map(|message| {
+        if message.content.trim().is_empty() {message.attachments.iter().map(|file|file.name.as_str()).collect::<Vec<_>>().join(", ")}
+        else {message.content.clone()}
+    }).unwrap_or_default();
+    let reply=conversation.messages.iter().find(|message|message.role=="assistant").map(|message|message.content.as_str()).unwrap_or("");
+    match llm::conversation_title(&state.client,&config.base_url,&config.model,key,&prompt,reply).await {
+        Ok(title)=>{change_auto_title(app,owner,conversation,"generating",&title,"generated").await?;Ok(())},
+        Err(error)=>{
+            change_auto_title(app,owner,conversation,"generating",&conversation.title,"failed").await?;
+            Err(error)
+        }
+    }
 }
 
 /// Reports which chat the UI is showing. The window focus is checked when a
