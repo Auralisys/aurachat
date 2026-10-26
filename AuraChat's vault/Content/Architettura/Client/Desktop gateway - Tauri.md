@@ -363,3 +363,33 @@ pallino giallo da 8 px (`styles.css:554`, `app.js:519`) al posto dell'icona che
 veniva tagliata; il pallino viola resta per i messaggi non letti.
 
 Script di build e installazione: [[Build e distribuzione]].
+
+## Progetti e chat tra desktop — 26 ottobre 2026
+
+Le cartelle del progetto non sono piu un unico elenco valido per tutti i
+computer: `Project::bind_device_folders` in `desktop/src-tauri/src/data.rs`
+salva `source_folders_by_device` usando l'identita del companion. Nome e chat
+restano condivisi; i consensi restano nel file locale `folder-permissions.json`.
+La scelta di una cartella sul Mac non cambia il collegamento Windows, neppure
+fra due computer dello stesso sistema operativo. I collegamenti legacy sono
+conservati per la migrazione, ma proposti soltanto sulla piattaforma compatibile.
+Se manca una cartella locale, l'invio chiede di sceglierla su quel computer,
+senza chiedere di autorizzare il percorso dell'altro sistema.
+
+Il desktop pubblicava gia `live_turns` per il telefono, ma non leggeva quelli
+degli altri desktop: per questo una chat in esecuzione sul Mac non mostrava
+l'avanzamento su Windows. `remote_chat_snapshot` in
+`desktop/src-tauri/src/companion.rs` legge il relay dello stesso account,
+esclude il dispositivo locale e quelli senza heartbeat da oltre 60 secondi.
+`refreshRemoteTurn` in `desktop/ui/chat-progress.js` segue la chat aperta:
+testo, attivita e messaggi intermedi sono in sola lettura, senza Stop locale o
+invio sul computer sbagliato. Poll ogni 3 secondi durante il turno, 15 quando
+inattivo, sospeso con pagina nascosta; la lista dispositivi legge solo nome e
+heartbeat, non i cataloghi delle skill. A fine turno viene riletta la cronologia
+persistita; in caso di computer offline resta l'ultimo avanzamento ricevuto.
+Il relay conserva i limiti di dimensione gia usati dal telefono. Nuovi campi
+`keep_count` e `user_message` ricostruiscono anche modifica e rigenerazione.
+
+Entrambe le installazioni vanno aggiornate per usare i collegamenti separati.
+Su richiesta non sono stati eseguiti test, build o installazioni; nessuna
+modifica all'app di produzione in esecuzione.

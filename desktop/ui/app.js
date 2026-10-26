@@ -732,6 +732,7 @@ function renameConversation(id, title) {
 }
 
 function clearChat() {
+  releaseRemoteTurn(state.activeConversationId);
   saveChatDraft();
   state.conversationLoadEpoch++;state.loadingConversation=false;
   cancelVoice();
@@ -755,6 +756,7 @@ function clearChat() {
 
 async function openConversation(id, refresh = true, section = null) {
   saveChatDraft();
+  if (id !== state.activeConversationId) releaseRemoteTurn(state.activeConversationId);
   const epoch=++state.conversationLoadEpoch;
   state.loadingConversation=false;
   cancelVoice();
@@ -766,9 +768,9 @@ async function openConversation(id, refresh = true, section = null) {
   const found = findConversation(id);
   state.activeConversationSection = section || (found?.project ? 'projects' : 'recents');
   const freshPreload = state.preloaded.get(id) != null && Date.now() - state.preloaded.get(id) < 60000;
-  const needsLoad=found && !run && (found.conversation.messages_loaded===false || (refresh && found.conversation.revision != null && !freshPreload));
+  const needsLoad=found && !run?.pending && (found.conversation.messages_loaded===false || (refresh && found.conversation.revision != null && !freshPreload));
   state.loadingConversation=!!needsLoad;
-  state.messages = run ? run.messages.slice() : found ? (found.conversation.messages || []).slice() : [];
+  state.messages = run?.pending ? run.messages.slice() : found ? (found.conversation.messages || []).slice() : [];
   state.lastUsage = run?.usage || null;state.failedSend = run?.failedSend || null;
   restoreChatDraft(id);
   renderSidebar();
@@ -792,6 +794,7 @@ async function openConversation(id, refresh = true, section = null) {
       if(epoch===state.conversationLoadEpoch){state.loadingConversation=false;renderSidebar();renderMessages();voiceUi();}
     }
   }
+  if (epoch === state.conversationLoadEpoch) refreshRemoteTurn();
 }
 
 function preloadRecentConversations(excludeId) {
@@ -1108,10 +1111,11 @@ function updateComposerControls() {
   const busy = state.busy, run = state.runs.get(state.activeConversationId);
   // Composer vuoto durante un turno: solo Stop. Con un messaggio scritto: Stop e Invia (accodato).
   // Durante la registrazione vocale lo stop del modello non ha senso: resta solo Invia (trascrivi e invia).
-  stop.hidden = !busy || recording;
+  const remote = !!run?.remote && busy;
+  stop.hidden = !busy || recording || remote;
   stop.disabled = !busy || notReady || dictating || recording || !!run?.stopping;
   send.hidden = busy && !composerHasContent() && !recording;
-  send.disabled = notReady || dictating;
+  send.disabled = notReady || dictating || remote;
   const label = t(busy ? 'chat.queue_send' : 'titlebar.send');
   send.setAttribute('aria-label', label);
   send.title = label;
@@ -1144,7 +1148,7 @@ function flushQueue(id = state.activeConversationId) {
 
 async function stopChat() {
   const id = state.activeConversationId, run = state.runs.get(id);
-  if (!id || !run?.pending || run.stopping) return;
+  if (!id || !run?.pending || run.remote || run.stopping) return;
   run.stopping = true;
   composerStatus(t('chat.stopping'));
   updateComposerControls();
@@ -1155,7 +1159,8 @@ async function stopChat() {
 async function missingActiveProjectFolder() {
   try {
     const project = activeConversation()?.project;
-    if (!project?.source_folders?.length) return null;
+    if (!project) return null;
+    if (!project.source_folders.length) return {project, path:null};
     const granted = await invoke('project_folder_access',{project_id:project.id});
     const path = project.source_folders.find(p => !granted.includes(p));
     return path ? { project, path } : null;
@@ -1163,6 +1168,7 @@ async function missingActiveProjectFolder() {
 }
 
 async function send() {
+  if (state.runs.get(state.activeConversationId)?.remote && state.busy) return;
   if (voice.recording) return stopVoice(true);
   if (state.preparing || state.loadingConversation || activeConversation()?.conversation.messages_loaded === false || state.changingModel || voice.pending || voice.transcribing || voice.nativeOperation) return;
   const input = $('#composer-input'), text = composerText().trim();
@@ -1724,7 +1730,7 @@ async function restoreSession() {
 
 async function enterChat() {
   try {
-    state.data = await invoke('get_data');
+    state.data = await invoke('refresh_data');
     state.persistedData = structuredClone(state.data);
   } catch (e) {
     throw e;

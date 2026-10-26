@@ -59,6 +59,8 @@
   "chat.stop": "Ferma",
   "chat.stopping": "Interruzione in corso",
   "chat.stopped": "Interrotto.",
+  "chat.remote_running": "In esecuzione su {device}. Visualizzazione in sola lettura.",
+  "chat.remote_offline": "Il computer remoto non risponde. Mostrato l'ultimo avanzamento ricevuto.",
   "chat.queued": "Messaggio in coda: parte dopo la risposta attuale.",
   "chat.queue_send": "Invia in coda",
   "chat.guide": "Guida",

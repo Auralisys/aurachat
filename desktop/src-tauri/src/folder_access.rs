@@ -87,7 +87,7 @@ mod tests {
         assert_eq!(grants.paths("u", "p").len(), 1);
         assert!(grants.paths("other", "p").is_empty());
         assert!(grants.paths("u", "other").is_empty());
-        let tree = ChatData { projects: vec![Project { id: "p".into(), name: "Work".into(), source_folders: vec!["C:/work".into()], conversations: vec![] }], conversations: vec![] };
+        let tree = ChatData { projects: vec![Project { id: "p".into(), name: "Work".into(), source_folders: vec!["C:/work".into()], source_folders_by_device: Default::default(), legacy_source_folders: None, conversations: vec![] }], conversations: vec![] };
         assert!(grants.validate_links("u", &ChatData::default(), &tree).is_ok());
         assert!(grants.validate_links("other", &ChatData::default(), &tree).is_err());
         let restored: FolderAccess = serde_json::from_slice(&serde_json::to_vec(&grants).unwrap()).unwrap();

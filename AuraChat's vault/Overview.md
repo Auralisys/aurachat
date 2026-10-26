@@ -85,7 +85,15 @@ Quando cambia un comportamento, aggiornare insieme codice e nota. Quando si
 trova un difetto, aggiungerlo a [[Problemi noti]] con il rimando alla nota dove
 è descritto.
 
-## Ultimo aggiornamento — 22 ottobre 2026
+## Ultimo aggiornamento — 26 ottobre 2026
+
+In [[Desktop gateway - Tauri]]: collegamenti alle cartelle separati per computer
+e visualizzazione in sola lettura delle chat in esecuzione sull'altro desktop,
+riusando il relay del companion. Consensi locali invariati; entrambe le
+installazioni vanno aggiornate. Modifiche non ancora verificate sulle app
+installate; nessun test, build o reinstallazione eseguiti su richiesta.
+
+## Aggiornamento precedente — 22 ottobre 2026
 
 Nuova nota [[Build e distribuzione]] con gli script per installare la build di
 prod e generare installer Windows/macOS sul Desktop. In [[Desktop gateway - Tauri]]:

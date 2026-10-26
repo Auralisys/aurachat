@@ -23,7 +23,13 @@ pub struct ChatData {
 pub struct Project {
     pub id: String,
     pub name: String,
+    /// Effective folders for this computer; never use another device's mapping.
     pub source_folders: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub source_folders_by_device: std::collections::BTreeMap<String, Vec<String>>,
+    /// Preserve the old cloud field while migrating device-specific links.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_source_folders: Option<Vec<String>>,
     pub conversations: Vec<Conversation>,
 }
 
@@ -33,6 +39,10 @@ struct StoredProject {
     name: String,
     #[serde(default)]
     source_folders: Vec<String>,
+    #[serde(default)]
+    source_folders_by_device: std::collections::BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    legacy_source_folders: Option<Vec<String>>,
     #[serde(default)]
     conversations: Vec<Conversation>,
     #[serde(default)]
@@ -50,7 +60,22 @@ impl From<StoredProject> for Project {
         for folder in stored.folders {
             conversations.extend(folder.conversations);
         }
-        Self { id: stored.id, name: stored.name, source_folders: stored.source_folders, conversations }
+        Self { id: stored.id, name: stored.name, source_folders: stored.source_folders,
+            source_folders_by_device: stored.source_folders_by_device,
+            legacy_source_folders: stored.legacy_source_folders, conversations }
+    }
+}
+
+impl Project {
+    fn resolve_device_folders(&mut self) {
+        let legacy = self.legacy_source_folders.get_or_insert_with(|| self.source_folders.clone());
+        let (device, _) = crate::companion::identity();
+        self.source_folders = self.source_folders_by_device.get(&device).cloned().unwrap_or_else(|| {
+            legacy.iter().filter(|path| {
+                let windows = path.as_bytes().get(1) == Some(&b':') || path.starts_with(r"\\");
+                windows == cfg!(windows)
+            }).cloned().collect()
+        });
     }
 }
 
@@ -80,6 +105,14 @@ impl Default for ChatData {
 }
 
 impl ChatData {
+    pub fn bind_device_folders(&mut self) {
+        let (device, _) = crate::companion::identity();
+        for project in &mut self.projects {
+            project.legacy_source_folders.get_or_insert_with(Vec::new);
+            project.source_folders_by_device.insert(device.clone(), project.source_folders.clone());
+        }
+    }
+
     /// Rebase sidebar edits over answers that finished while the UI was saving.
     pub fn rebase(base: &Self, desired: &Self, current: &Self) -> Result<Self, String> {
         let metadata = crate::firestore::merge_changes(&base.storage_tree()?, &desired.storage_tree()?, &current.storage_tree()?)?;
@@ -114,8 +147,13 @@ impl ChatData {
         let mut conversations = serde_json::Map::new();
         for p in &self.projects {
             valid_id(&p.id)?;
-            if projects.insert(p.id.clone(), json!({"name":p.name,"source_folders":p.source_folders,
-                "conversation_ids":p.conversations.iter().map(|c| &c.id).collect::<Vec<_>>()})).is_some() { return Err("duplicate_project_id".into()); }
+            let mut metadata = json!({"name":p.name,
+                "source_folders":p.legacy_source_folders.as_ref().unwrap_or(&p.source_folders),
+                "conversation_ids":p.conversations.iter().map(|c| &c.id).collect::<Vec<_>>()});
+            if !p.source_folders_by_device.is_empty() {
+                metadata["source_folders_by_device"] = json!(p.source_folders_by_device);
+            }
+            if projects.insert(p.id.clone(), metadata).is_some() { return Err("duplicate_project_id".into()); }
         }
         for c in self.conversations_all() {
             valid_id(&c.id)?;
@@ -131,7 +169,9 @@ impl ChatData {
     pub fn from_storage(value: serde_json::Value) -> Result<Self, String> {
         use serde_json::Value;
         if value.get("schema_version").and_then(Value::as_u64) != Some(2) {
-            return serde_json::from_value(value).map_err(|e| format!("parse tree: {e}"));
+            let mut tree: Self = serde_json::from_value(value).map_err(|e| format!("parse tree: {e}"))?;
+            for project in &mut tree.projects { project.resolve_device_folders(); }
+            return Ok(tree);
         }
         let refs = value["conversations"].as_object().ok_or("invalid_conversation_index")?;
         let chats = |ids: &Value| -> Result<Vec<Conversation>, String> {
@@ -150,10 +190,14 @@ impl ChatData {
             let p = &value["projects"][id];
             projects.push(Project { id:id.into(),name:p["name"].as_str().ok_or("invalid_project_name")?.into(),
                 source_folders:serde_json::from_value(p["source_folders"].clone()).map_err(|e|e.to_string())?,
+                source_folders_by_device:p.get("source_folders_by_device").cloned()
+                    .map(serde_json::from_value).transpose().map_err(|e|e.to_string())?.unwrap_or_default(),
+                legacy_source_folders:None,
                 conversations:chats(&p["conversation_ids"])? });
         }
-        let tree = Self { projects, conversations:chats(&value["standalone_conversation_ids"])? };
+        let mut tree = Self { projects, conversations:chats(&value["standalone_conversation_ids"])? };
         if tree.storage_tree()? != value { return Err("invalid_tree_references".into()); }
+        for project in &mut tree.projects { project.resolve_device_folders(); }
         Ok(tree)
     }
     pub fn find_conversation(&self, id: &str) -> Option<&Conversation> {

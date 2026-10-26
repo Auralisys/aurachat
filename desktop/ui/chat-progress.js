@@ -171,7 +171,74 @@ async function finishLiveTurn(run) {
   await new Promise(resolve => {run.stream.resolve = resolve;revealTurn(run);});
 }
 
+const remoteTurnSync = {busy:false};
+
+function releaseRemoteTurn(id) {
+  if (!state.runs.get(id)?.remote) return;
+  state.runs.delete(id);
+  stopTimer();
+}
+
+async function refreshRemoteTurn() {
+  const id = state.activeConversationId, owner = state.config?.firebase_email;
+  const current = state.runs.get(id);
+  if (!id || !owner || remoteTurnSync.busy || state.loadingConversation || (current?.pending && !current.remote)) return;
+  remoteTurnSync.busy = true;
+  const stillActive = () => state.activeConversationId === id && state.config?.firebase_email === owner;
+  try {
+    const snapshot = await invoke('remote_chat_snapshot', {conversation_id:id});
+    if (!stillActive()) return;
+    let run = state.runs.get(id);
+    if (run?.pending && !run.remote) return;
+    if (snapshot?.status === 'running') {
+      if (!run?.remote || run.turnId !== snapshot.turn_id) {
+        const saved = await invoke('get_conversation', {conversation_id:id});
+        if (!stillActive()) return;
+        if (saved.updated_at > snapshot.started_at) return;
+        run = {pending:true, remote:true, turnId:snapshot.turn_id, since:snapshot.started_at,
+          initialMessages:structuredClone(saved.messages || []), messages:[], usage:null};
+        state.runs.set(id, run);
+      }
+      composerStatus(t('chat.remote_running').replace('{device}', snapshot.device_name || 'AuraChat'));
+      if (run.remoteUpdatedAt === snapshot.updated_at) return;
+      run.remoteUpdatedAt = snapshot.updated_at;
+      const base = run.initialMessages;
+      const prefix = Number.isInteger(snapshot.keep_count) ? base.slice(0, snapshot.keep_count) : base;
+      const user = snapshot.user_message || (snapshot.user_content ? {role:'user',content:snapshot.user_content,attachments:[]} : null);
+      run.messages = [...prefix, ...(user ? [user] : []), ...(snapshot.segments || [])];
+      if (run.stream?.frame) cancelAnimationFrame(run.stream.frame);
+      run.stream = {content:snapshot.content || '', shown:(snapshot.content || '').length, activity:snapshot.activity || [], frame:null};
+      state.messages = run.messages;
+      startTimer();renderSidebar();renderMessages();updateComposerControls();
+    } else if (run?.remote || (snapshot && snapshot.started_at > (findConversation(id)?.conversation.updated_at || 0))) {
+      const saved = await invoke('get_conversation', {conversation_id:id});
+      if (!stillActive()) return;
+      const target = findConversation(id)?.conversation;if (target) Object.assign(target, saved);
+      const baseline = state.persistedData && conversationInData(state.persistedData, id);
+      if (baseline) Object.assign(baseline, structuredClone(saved));
+      state.runs.delete(id);
+      state.messages = saved.messages || [];
+      if (!snapshot && run?.stream && saved.updated_at < run.since) {
+        state.messages = [...run.messages, {role:'assistant',content:run.stream.content,activity:run.stream.activity}];
+        composerStatus(t('chat.remote_offline'));
+      } else composerStatus();
+      stopTimer();renderSidebar();renderMessages();updateContextInfo();updateComposerControls();
+    }
+  } catch (error) {
+    console.error('Remote chat sync failed', error);
+    if (stillActive()) composerStatus(localizeError(error));
+  } finally {
+    remoteTurnSync.busy = false;
+  }
+}
+
 async function setupChatProgress() {
+  const pollRemote = async () => {
+    if (!document.hidden) await refreshRemoteTurn();
+    const watching = state.runs.get(state.activeConversationId)?.remote && state.busy;
+    setTimeout(pollRemote, watching ? 3000 : 15000);
+  };
+  setTimeout(pollRemote, 3000);
   document.addEventListener('visibilitychange', () => {
     document.documentElement.classList.toggle('is-backgrounded',document.hidden);
     if (!document.hidden) return;

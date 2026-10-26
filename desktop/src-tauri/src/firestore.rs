@@ -359,6 +359,13 @@ impl Firestore {
         self.get_document(auth,path,None).await?.map(|doc|Ok(Value::Object(document_fields(&doc)?))).transpose()
     }
 
+    pub async fn relay_devices(&self,auth:&FirestoreAuth,uid:&str) -> Result<Vec<(String,Value)>,String> {
+        self.list_documents(auth,&doc_url(&auth.project_id,&format!("users/{uid}/devices")),&["name","last_seen"]).await?.iter().map(|doc| {
+            let id=doc["name"].as_str().and_then(|name|name.rsplit('/').next()).ok_or("invalid_relay_name")?;
+            Ok((id.to_string(),Value::Object(document_fields(doc)?)))
+        }).collect()
+    }
+
     async fn get_document(&self,auth:&FirestoreAuth,path:&str,mask:Option<&str>) -> Result<Option<Value>,String> {
         let token = self.id_token(auth).await?;
         let mut request = self.http.get(doc_url(&auth.project_id,path)).bearer_auth(token);
@@ -368,12 +375,13 @@ impl Firestore {
         response_json(response).await.map(Some)
     }
 
-    async fn list_documents(&self,auth:&FirestoreAuth,collection_url:&str) -> Result<Vec<Value>,String> {
+    async fn list_documents(&self,auth:&FirestoreAuth,collection_url:&str,fields:&[&str]) -> Result<Vec<Value>,String> {
         let mut documents = Vec::new();let mut page = String::new();
         loop {
             let token=self.id_token(auth).await?;
             let response=self.http.get(collection_url)
                 .bearer_auth(token).query(&[("pageSize","1000"),("pageToken",page.as_str()),("orderBy","__name__")])
+                .query(&fields.iter().map(|field|("mask.fieldPaths",*field)).collect::<Vec<_>>())
                 .send().await.map_err(|e|e.to_string())?;
             let value=response_json(response).await?;
             if let Some(docs)=value["documents"].as_array(){documents.extend(docs.iter().cloned());}
@@ -384,11 +392,11 @@ impl Firestore {
     }
 
     async fn list_messages(&self,auth:&FirestoreAuth,path:&str) -> Result<Vec<Value>,String> {
-        self.list_documents(auth,&format!("{}/messages",doc_url(&auth.project_id,path))).await
+        self.list_documents(auth,&format!("{}/messages",doc_url(&auth.project_id,path)),&[]).await
     }
 
     async fn list_parts(&self,auth:&FirestoreAuth,path:&str,index:usize) -> Result<Vec<Value>,String> {
-        self.list_documents(auth,&format!("{}/parts",doc_url(&auth.project_id,&message_path(path,index)))).await
+        self.list_documents(auth,&format!("{}/parts",doc_url(&auth.project_id,&message_path(path,index))),&[]).await
     }
 
     /// Write necessarie per sostituire il messaggio all'indice `index`,

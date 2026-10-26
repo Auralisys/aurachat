@@ -67,6 +67,8 @@ struct LiveTurn {
     turn_id: String,
     status: String,
     user_content: String,
+    user_message: Option<Value>,
+    keep_count: Option<usize>,
     content: String,
     reasoning: String,
     activity: Vec<Value>,
@@ -134,6 +136,10 @@ impl LiveTurn {
             "turn_id": self.turn_id,
             "status": self.status,
             "user_content": self.user_content,
+            "user_message": self.user_message.as_ref().map(|message|json!({
+                "role":"user","content":truncate_chars(message["content"].as_str().unwrap_or(""),LIVE_MAX_FIELD),"attachments":[]
+            })),
+            "keep_count": self.keep_count,
             "content": truncate_chars(&self.content, LIVE_MAX_CONTENT),
             "reasoning": truncate_chars(&self.reasoning, LIVE_MAX_REASONING),
             "activity": self.activity.iter().rev().take(LIVE_MAX_ACTIVITY).rev().map(sanitize_activity).collect::<Vec<_>>(),
@@ -347,6 +353,13 @@ pub fn start(app: &tauri::AppHandle) {
                 let conflict=turns.get(id).is_some_and(|turn|turn.status=="running" && turn.turn_id!=turn_id);
                 if !conflict {turns.insert(id.into(),LiveTurn::running(now,uid,turn_id,value["user_content"].as_str().unwrap_or("")));}
             }
+            else if status=="context" {
+                if let Some(turn)=turns.get_mut(id) {
+                    turn.keep_count=value["keep_count"].as_u64().map(|count|count as usize);
+                    turn.user_message=value.get("user_message").cloned();
+                    turn.touch(now);
+                }
+            }
             else if let Some(turn)=turns.get_mut(id) {
                 if turn.turn_id==turn_id {turn.finish(status,now);}
             }
@@ -416,6 +429,27 @@ pub fn start(app: &tauri::AppHandle) {
 }
 
 async fn pause(seconds:u64) {let _=tauri::async_runtime::spawn_blocking(move||std::thread::sleep(Duration::from_secs(seconds))).await;}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn remote_chat_snapshot(state:tauri::State<'_,AppState>,conversation_id:String)->Result<Option<Value>,String> {
+    data::valid_id(&conversation_id)?;
+    let _account=state.account_lock.lock().await;
+    let auth=crate::firebase_auth(&state)?;
+    let uid=crate::ensure_uid(&state,&auth).await?;
+    if state.running_chats.lock().unwrap().contains(&conversation_id) {return Ok(None);}
+    let (local,_)=identity();
+    let now=data::now_millis();
+    let mut latest:Option<Value>=None;
+    for (device,info) in state.firestore.relay_devices(&auth,&uid).await? {
+        if device==local || now.saturating_sub(info["last_seen"].as_u64().unwrap_or(0))>60_000 {continue;}
+        let Some(mut turn)=state.firestore.relay_get(&auth,&format!("users/{uid}/devices/{device}/live_turns/{conversation_id}")).await? else {continue};
+        if turn["conversation_id"].as_str()!=Some(&conversation_id) {continue;}
+        if latest.as_ref().is_some_and(|previous|previous["started_at"].as_u64()>=turn["started_at"].as_u64()) {continue;}
+        turn["device_name"]=info["name"].clone();
+        latest=Some(turn);
+    }
+    Ok(latest)
+}
 
 async fn publish_live(app:&tauri::AppHandle,turns:&Arc<Mutex<HashMap<String,LiveTurn>>>) {
     let now=data::now_millis();

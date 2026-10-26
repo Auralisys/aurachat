@@ -408,10 +408,24 @@ async fn get_data(state: tauri::State<'_, AppState>) -> Result<ChatData, String>
 }
 
 #[tauri::command]
+async fn refresh_data(state: tauri::State<'_, AppState>) -> Result<ChatData, String> {
+    if !state.data_loaded.load(Ordering::SeqCst) { return get_data(state).await; }
+    let _save = state.history_save_lock.lock().await;
+    let auth = firebase_auth(&state)?;
+    let uid = ensure_uid(&state, &auth).await?;
+    let local = state.data.lock().unwrap().clone();
+    let tree = state.firestore.refresh_tree_preserving_history(&uid, &auth, &local).await?;
+    *state.data.lock().unwrap() = tree.clone();
+    Ok(tree)
+}
+
+#[tauri::command]
 async fn save_data(state: tauri::State<'_, AppState>, data: ChatData, base: Option<ChatData>) -> Result<ChatData, String> {
     let auth = firebase_auth(&state)?;
     let uid = ensure_uid(&state, &auth).await?;
     let _save = state.history_save_lock.lock().await;
+    let mut data = data;
+    data.bind_device_folders();
     let data = if let Some(base) = base { ChatData::rebase(&base, &data, &state.data.lock().unwrap())? } else { data };
     {
         let old = state.data.lock().unwrap();
@@ -566,6 +580,9 @@ async fn chat_inner(
         let conv = data.find_conversation(&conversation_id).ok_or("conversation_not_found")?;
         llm::prepare_turn(&conv.messages,content,attachments,retry,edit_index)?
     };
+    let _=app.emit("live-turn",serde_json::json!({"conversation_id":conversation_id,
+        "status":"context","keep_count":keep_count,
+        "user_message":{"role":"user","content":user_message.content,"attachments":[]}}));
 
     // Il nome e il modello della chat nascono dal primo messaggio, prima della risposta del modello.
     if let Some(conversation) = state.data.lock().unwrap().find_conversation_mut(&conversation_id) {
@@ -1181,6 +1198,8 @@ pub fn run() {
             set_model,
             set_conversation_model,
             get_data,
+            refresh_data,
+            companion::remote_chat_snapshot,
             get_conversation,
             save_data,
             chat,

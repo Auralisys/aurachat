@@ -59,6 +59,8 @@
   "chat.stop": "Stop",
   "chat.stopping": "Stopping",
   "chat.stopped": "Stopped.",
+  "chat.remote_running": "Running on {device}. Read-only view.",
+  "chat.remote_offline": "The remote computer is not responding. Showing the last received progress.",
   "chat.queued": "Queued: it is sent after the current answer.",
   "chat.queue_send": "Send and queue",
   "chat.guide": "Guide",

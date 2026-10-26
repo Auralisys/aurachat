@@ -51,6 +51,17 @@ Relay e notifiche sono implementati; l'attivazione remota richiede le regole
 Firestore limitate al proprietario e il deploy della funzione FCM su Blaze.
 Vedi la sezione finale e `../mobile/README.md` per lo stato delle verifiche.
 
+Il desktop segue anche il turno della chat aperta su un altro computer dello
+stesso account: usa i documenti `devices/{device}/live_turns/{chat}` gia pubblicati
+per il companion. La vista remota mostra testo e attivita in sola lettura,
+indica il computer di origine e non propone uno Stop locale. Il controllo avviene
+all'apertura, poi ogni 3 secondi durante il turno (15 quando inattivo), sospeso
+con pagina nascosta. Alla fine viene caricata la conversazione salvata; se il
+computer non risponde rimane visibile l'ultimo avanzamento ricevuto. Il relay
+mantiene i suoi limiti di dimensione e puo troncare i dettagli intermedi.
+Aggiornare entrambe le installazioni per i collegamenti per dispositivo; non
+sono necessarie nuove regole Firestore rispetto al relay esistente.
+
 ## Struttura
 
 ### Card attività e pannello destro
@@ -501,6 +512,11 @@ La creazione apre il selettore del computer e chiede il consenso alla lettura;
 Modifica progetto permette di cambiare nome e collegamenti. Rimuovere un
 collegamento non elimina i file o le chat. I consensi restano locali, per utente
 e progetto; i percorsi su Firestore non autorizzano altri dispositivi.
+I collegamenti sono salvati in `source_folders_by_device`, usando l'identita
+del computer (non soltanto Windows/macOS): scegliere la cartella sul Mac non
+sostituisce quella del PC. I vecchi percorsi vengono proposti solo sul sistema
+operativo compatibile; un progetto senza collegamenti locali chiede una cartella
+di questo computer prima del primo invio.
 Il modello può esplorare le root autorizzate e leggere file UTF-8 pertinenti alla richiesta con strumenti nativi. Scrittura ed esecuzione dipendono dalla modalità locale del progetto.
 I vecchi gruppi virtuali vengono appiattiti in chat dirette senza perderle.
 
