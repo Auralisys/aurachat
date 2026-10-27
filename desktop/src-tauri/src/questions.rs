@@ -25,11 +25,27 @@ pub struct Question {
 
 fn plain_dashes(text: &str) -> String {text.replace(['\u{2014}','\u{2013}','\u{2015}'], "-")}
 
+/// Reverses the UTF-8 -> Latin-1 double-encoding the model occasionally emits in
+/// tool-call arguments (e.g. "giÃ " for "già", "â‚¬" for "€"). It runs before the
+/// form is shown and before the mobile relay, so desktop and companion both get
+/// the intended text.
+fn repair_mojibake(text: &str) -> String {
+    let mut bytes = Vec::with_capacity(text.len());
+    for ch in text.chars() {
+        if (ch as u32) > 0xFF { return text.to_string(); }
+        bytes.push(ch as u8);
+    }
+    match String::from_utf8(bytes) {
+        Ok(fixed) if fixed != text => fixed,
+        _ => text.to_string(),
+    }
+}
+
 impl Question {
     // Long dashes read poorly in the form and the answer summary; use a plain hyphen.
     fn normalize(&mut self) {
-        self.question = plain_dashes(&self.question);
-        for choice in &mut self.choices {*choice = plain_dashes(choice);}
+        self.question = plain_dashes(&repair_mojibake(&self.question));
+        for choice in &mut self.choices {*choice = plain_dashes(&repair_mojibake(choice));}
         for question in &mut self.questions {question.normalize();}
     }
 
@@ -239,6 +255,18 @@ mod tests {
         let (snapshot,_)=registry.begin("u","c",None,batch).unwrap();
         assert_eq!(snapshot.question.questions[0].question,"Q4 - Redo");
         assert_eq!(snapshot.question.questions[0].choices,vec!["A - B"]);
+    }
+    #[test]
+    fn latin1_mojibake_in_questions_is_repaired() {
+        assert_eq!(repair_mojibake("però"),"però");
+        assert_eq!(repair_mojibake("café"),"café");
+        assert_eq!(repair_mojibake("gi\u{00c3}\u{00a0} pagato?"),"già pagato?");
+        assert_eq!(repair_mojibake("\u{00e2}\u{0082}\u{00ac}0"),"€0");
+        let registry = Questions::default();
+        let batch:Question=serde_json::from_value(json!({"question":"gi\u{00c3}\u{00a0} pagato?","choices":["\u{00e2}\u{0082}\u{00ac}0"]})).unwrap();
+        let (snapshot,_)=registry.begin("u","c",None,batch).unwrap();
+        assert_eq!(snapshot.question.question,"già pagato?");
+        assert_eq!(snapshot.question.choices,vec!["€0"]);
     }
     #[test]
     fn cancelling_one_request_retracts_only_its_form() {

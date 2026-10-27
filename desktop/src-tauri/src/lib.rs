@@ -173,8 +173,8 @@ fn first_title(content: &str, attachments: &[Attachment]) -> String {
 }
 
 fn truncate_title(s: &str) -> String {
-    let t: String = s.chars().take(40).collect();
-    let t = t.replace('\n', " ").trim().to_string();
+    let t: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let t: String = t.chars().take(40).collect();
     if t.is_empty() {
         "Chat".to_string()
     } else {
