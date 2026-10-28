@@ -992,10 +992,14 @@ async fn project_git_for_owner(state: tauri::State<'_,AppState>, project_id:Stri
     if state.firestore.uid().as_deref()!=Some(uid.as_str()) {return Err("account_changed".into());}
     if !generate {return Ok(result);}
     let user=load_user_cached(&state,&auth,&uid).await?;
+    let context=match conversation_id.as_ref() {
+        Some(id)=>state.data.lock().unwrap().find_conversation(id).map(|c|llm::conversation_context(&c.messages,4000)),
+        None=>None,
+    };
     let model_id=conversation_id.and_then(|id|state.data.lock().unwrap().find_conversation(&id).and_then(|c|c.model.clone())).unwrap_or_else(||user.active_model.clone());
     let model=user.models.get(&model_id).ok_or("model_not_found")?;
     if user.model_key(model).is_empty() {return Err("no_api_key".into());}
-    let message=llm::commit_message(&state.client,&model.base_url,&model.model,user.model_key(model),result["diff"].as_str().ok_or("Invalid Git preview.")?).await?;
+    let message=llm::commit_message(&state.client,&model.base_url,&model.model,user.model_key(model),result["diff"].as_str().ok_or("Invalid Git preview.")?,context.as_deref()).await?;
     let mut result=result;result["message"]=serde_json::json!(message);Ok(result)
 }
 

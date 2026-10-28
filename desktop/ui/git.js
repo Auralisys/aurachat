@@ -111,10 +111,20 @@ function openGitMenu(row, trigger) {
   const current = action => () => {if (epoch === gitView.epoch && root === gitView.root) action();};
   const unavailable = gitView.working || !!gitView.staging || state.busy || !gitView.data?.files.length;
   showTreeMenu(row, trigger, t('git.changes'), [
-    ['check', 'git.commit', current(() => gitPreview(false)), unavailable],
-    ['send', 'git.commit_push', current(() => gitPreview(true)), unavailable || !gitView.data?.upstream],
+    ['check', 'git.commit', current(() => gitChatCommit(false)), unavailable],
+    ['send', 'git.commit_push', current(() => gitChatCommit(true)), unavailable || !gitView.data?.upstream],
     ['file', 'git.open_detail', current(() => openActivity('git'))],
   ]);
+}
+
+// "Commit" / "Commit e push" from the sidebar delegate to the agent, exactly as
+// if the user typed the request in the chat: the model generates the message and
+// performs the action with the conversation context.
+function gitChatCommit(combined) {
+  const instruction = combined ? t('git.chat_commit_push') : t('git.chat_commit');
+  setComposerText(instruction);
+  autoGrow();
+  send();
 }
 
 function gitFiles(side) {return (gitView.data?.files || []).filter(file => file[side]);}
