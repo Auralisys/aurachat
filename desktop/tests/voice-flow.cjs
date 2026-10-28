@@ -137,7 +137,8 @@ const assert=require('node:assert/strict');
  await page.waitForFunction(()=>!voice.mediaOperation);
  assert.equal(await page.evaluate(()=>__playing),true,'Cancel restores playback');
  assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='transcribe_audio').length),calls);
- // Late inference results cannot land in a different draft.
+ // Late inference keeps running in the background and lands in the original draft.
+ const originId = await page.evaluate(()=>state.activeConversationId);
  await page.evaluate(()=>window.__delayTranscript=true);await record();await page.click('#voice-stop');await page.waitForFunction(()=>window.__finishTranscript);
  await page.waitForFunction(()=>!voice.mediaOperation);
  assert.match(await page.locator('#voice-recording-status').textContent(),/Trascrizione/,'Transcribing label survives media resume');
@@ -147,9 +148,11 @@ const assert=require('node:assert/strict');
  await page.click('#nav-home');await page.fill('#composer-input','Nuova bozza');
  assert.equal(await page.evaluate(()=>__playing),true,'Playback has already resumed during delayed transcription');
  assert.equal(await page.locator('#composer-mic').isVisible(),false);
- assert.match(await page.locator('#voice-recording-status').textContent(),/annullata/);
+ assert.match(await page.locator('#voice-recording-status').textContent(),/Trascrizione/,'Transcription keeps running after switching chat');
  await page.evaluate(()=>window.__finishTranscript());
- await page.waitForFunction(()=>!voice.nativeOperation && !voice.transcribing);assert.equal(await page.locator('#composer-input').inputValue(),'Nuova bozza');
+ await page.waitForFunction(()=>!voice.nativeOperation && !voice.transcribing);
+ assert.equal(await page.locator('#composer-input').inputValue(),'Nuova bozza','Transcribed text does not leak into the current composer');
+ assert.match(await page.evaluate(id=>state.drafts.get(id)?.text || '', originId),/test dettatura$/,'Transcribed text lands in the original chat draft');
  await page.evaluate(()=>{window.__delayTranscript=false;window.__transcribeError=true;});
  await record();await page.click('#voice-stop');await page.waitForFunction(()=>!voice.transcribing);
  assert.equal(await page.locator('#composer-input').inputValue(),'Nuova bozza');

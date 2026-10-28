@@ -228,6 +228,8 @@
   "voice.preparing": "Preparing microphone…",
   "voice.recording": "Listening…",
   "voice.transcribing": "Transcribing on your device…",
+  "voice.recording_in": "Recording in progress in",
+  "voice.added_to": "Transcript added to",
   "voice.permission": "Microphone access denied. Enable it in system settings.",
   "voice.error": "Voice operation failed. Check your device or download connection and try again.",
   "voice.speech_busy": "The model is busy. Wait and try again.",

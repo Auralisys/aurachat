@@ -174,6 +174,13 @@ function restoreChatDraft(id) {
   state.attachments = structuredClone(draft?.attachments || []);state.editingMessageIndex = draft?.editing ?? null;renderDraft();
 }
 
+function appendConversationDraft(id, text) {
+  const draft = state.drafts.get(id) || { text: '', attachments: [], editing: null };
+  const separator = draft.text && !/\s$/.test(draft.text) ? ' ' : '';
+  draft.text = (draft.text || '') + separator + text;
+  state.drafts.set(id, draft);
+}
+
 async function persist() {
   try {
     const epoch = state.resultEpoch;
@@ -738,7 +745,6 @@ function clearChat() {
   releaseRemoteTurn(state.activeConversationId);
   saveChatDraft();
   state.conversationLoadEpoch++;state.loadingConversation=false;
-  cancelVoice();
   state.attachments=[];state.editingMessageIndex=null;state.failedSend=null;renderDraft();composerStatus();
   window.speechSynthesis?.cancel();
   state.activeConversationId = null;
@@ -762,7 +768,6 @@ async function openConversation(id, refresh = true, section = null) {
   if (id !== state.activeConversationId) releaseRemoteTurn(state.activeConversationId);
   const epoch=++state.conversationLoadEpoch;
   state.loadingConversation=false;
-  cancelVoice();
   state.attachments=[];state.editingMessageIndex=null;renderDraft();composerStatus();window.speechSynthesis?.cancel();
   state.activeConversationId = id;
   reportViewingChat(id);
@@ -1181,7 +1186,12 @@ async function missingActiveProjectFolder() {
 }
 
 async function send() {
-  if (voice.recording) return stopVoice(true);
+  if (voice.recording) {
+    if (voice.conversationId === state.activeConversationId) return stopVoice(true);
+    const voiceTitle = findConversation(voice.conversationId)?.conversation.title;
+    composerStatus(`${t('voice.recording_in')}${voiceTitle ? ` «${voiceTitle}»` : ''}`);
+    return;
+  }
   if (state.preparing || state.loadingConversation || activeConversation()?.conversation.messages_loaded === false || state.changingModel || voice.pending || voice.transcribing || voice.nativeOperation) return;
   const input = $('#composer-input'), text = composerText().trim();
   const attachments = structuredClone(state.attachments), editIndex = state.editingMessageIndex;

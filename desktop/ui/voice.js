@@ -1,4 +1,4 @@
-const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: null, capture: null, mediaOperation: null, transcribing: false, downloading: false, loading: false, loaded: false, nativeOperation: null };
+const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: null, capture: null, mediaOperation: null, transcribing: false, downloading: false, loading: false, loaded: false, nativeOperation: null, conversationId: null };
 
 async function speechRequest(command, args) {
   const operation = {};
@@ -83,7 +83,9 @@ function voiceUi(message = '') {
   voice.status = busy ? message || voice.status || '' : '';
   $('#voice-recording').hidden = !active;
   $('#voice-recording').classList.toggle('is-busy', busy);
-  $('#voice-recording-status').textContent = finishing ? t('voice.finishing') : busy ? voice.status : message;
+  const backgroundChat = voice.conversationId && voice.conversationId !== state.activeConversationId ? findConversation(voice.conversationId)?.conversation.title : null;
+  const statusText = finishing ? t('voice.finishing') : busy ? voice.status : message;
+  $('#voice-recording-status').textContent = backgroundChat ? `${statusText} · ${backgroundChat}` : statusText;
   $('#voice-recording-status').classList.toggle('sr-only', !busy);
   $('#voice-waveform').hidden = voice.pending || voice.transcribing || finishing;
   $('#voice-recording-cancel').disabled = finishing;
@@ -116,7 +118,7 @@ function releaseRecording(recording) {
 function cancelVoice() {
   voice.epoch++;
   const released = voice.recording || voice.capture ? releaseRecording(voice.recording || voice.capture) : voice.mediaOperation;
-  voice.recording = null; voice.pending = false; voice.transcribing = false;
+  voice.recording = null; voice.pending = false; voice.transcribing = false; voice.conversationId = null;
   if ($('#voice-recording')) voiceUi();
   return released;
 }
@@ -170,7 +172,8 @@ async function startVoice() {
     if (epoch !== voice.epoch) return;
     voiceUi(t('voice.preparing'));
     voice.waveform = [];
-    recording = { chunks: [], count: 0, waveEnergy: 0, waveSamples: 0, epoch };
+    voice.conversationId = state.activeConversationId;
+    recording = { chunks: [], count: 0, waveEnergy: 0, waveSamples: 0, epoch, conversationId: state.activeConversationId };
     voice.capture = recording;
     recording.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false });
     if (epoch !== voice.epoch) { releaseRecording(recording); return; }
@@ -210,6 +213,7 @@ async function startVoice() {
     voice.pending = false; voiceUi(t('voice.recording'));
   } catch (error) {
     if (recording) releaseRecording(recording);
+    voice.conversationId = null;
     if (epoch === voice.epoch) composerStatus(voiceError(error));
   } finally {
     if (epoch === voice.epoch) { voice.pending = false; if (!voice.recording) voiceUi(); }
@@ -221,6 +225,8 @@ async function stopVoice(sendAfter = false) {
   if (!recording || voice.transcribing) return;
   voice.transcribing = true; voice.recording = null; voiceUi(t('voice.transcribing'));
   const epoch = recording.epoch;
+  const conversationId = recording.conversationId ?? voice.conversationId ?? state.activeConversationId;
+  const isActive = conversationId === state.activeConversationId;
   try {
     await new Promise(resolve => {
       const timeout = setTimeout(resolve, 300);
@@ -233,15 +239,21 @@ async function stopVoice(sendAfter = false) {
     recording.chunks = [];
     const text = await speechRequest('transcribe_audio', { samples, language: lang });
     if (epoch !== voice.epoch) return;
-    if (!text?.trim()) { composerStatus(t('voice.speech_silence')); return; }
-    const input = $('#composer-input'); appendComposerText(text.trim());
-    autoGrow(input); input.focus(); composerStatus();
-    if (sendAfter) { voice.transcribing = false; voiceUi(); await send(); }
+    if (!text?.trim()) { if (isActive) composerStatus(t('voice.speech_silence')); return; }
+    if (isActive) {
+      const input = $('#composer-input'); appendComposerText(text.trim());
+      autoGrow(input); input.focus(); composerStatus();
+    } else if (conversationId) {
+      appendConversationDraft(conversationId, text.trim());
+      const title = findConversation(conversationId)?.conversation.title;
+      if (title) composerStatus(`${t('voice.added_to')} «${title}»`);
+    }
+    if (sendAfter && isActive) { voice.transcribing = false; voiceUi(); await send(); }
   } catch (error) {
     await releaseRecording(recording);
-    if (epoch === voice.epoch) composerStatus(voiceError(error));
+    if (epoch === voice.epoch && isActive) composerStatus(voiceError(error));
   } finally {
-    if (epoch === voice.epoch) { voice.transcribing = false; voiceUi();flushQueue(state.activeConversationId); }
+    if (epoch === voice.epoch) { voice.transcribing = false; voice.conversationId = null; voiceUi(); if (isActive) flushQueue(state.activeConversationId); }
   }
 }
 

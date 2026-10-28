@@ -228,6 +228,8 @@
   "voice.preparing": "Preparazione microfono…",
   "voice.recording": "Sto ascoltando…",
   "voice.transcribing": "Trascrizione sul dispositivo…",
+  "voice.recording_in": "Registrazione in corso in",
+  "voice.added_to": "Trascrizione aggiunta a",
   "voice.permission": "Accesso al microfono negato. Abilitalo nelle impostazioni di sistema.",
   "voice.error": "Operazione vocale non riuscita. Controlla il dispositivo o la connessione per il download e riprova.",
   "voice.speech_busy": "Il modello è occupato. Attendi e riprova.",
