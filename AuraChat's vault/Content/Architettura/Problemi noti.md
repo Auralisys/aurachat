@@ -89,3 +89,14 @@ Dettagli in [[Desktop gateway - Tauri]] e [[UI desktop - Refactor flat]].
   Mancano firma Authenticode, Developer ID e notarizzazione.
 - La versione resta `0.1.0`: va incrementata a mano prima di distribuire.
 Dettagli in [[Build e distribuzione]].
+
+## Allucinazione di commit/push Git da parte del modello — 27 ottobre 2026
+
+L'agente a volte dichiara di aver creato un commit o eseguito un push senza averlo
+fatto o verificato (es. cita hash inesistenti). Non è un difetto della UI Git,
+che richiede già conferme esplicite; è un comportamento del modello. Mitigato nel
+system prompt del progetto (`desktop/src-tauri/src/project_files.rs`, `context()`):
+l'agente deve rileggere `git status --short --branch` e `git log --oneline -1`
+dopo le operazioni e riportare hash e stato reali, senza inventare hash o
+dichiarare successo senza l'output del tool. La regola si propaga anche ai
+sub-agenti, che clonano lo stesso contesto.
