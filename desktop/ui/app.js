@@ -1044,7 +1044,7 @@ function stopTimer() {
 
 async function requestChat(payload) {
   const id = payload.conversation_id;
-  if (state.runs.get(id)?.pending || voice.pending || voice.recording || voice.transcribing || voice.nativeOperation) return false;
+  if (state.runs.get(id)?.pending || voiceBusy(id)) return false;
   // A queue can start a background conversation: never seed it (or the UI)
   // with the messages of the chat that happens to be open.
   const isActive = id === state.activeConversationId;
@@ -1123,7 +1123,7 @@ function composerHasContent() {
 
 function updateComposerControls() {
   const send = $('#composer-send'), stop = $('#composer-stop');
-  const dictating = voice.pending || voice.transcribing || (!!voice.nativeOperation && !voice.recording);
+  const dictating = voiceBusy(state.activeConversationId) && !voice.recording;
   const recording = !!voice.recording;
   const notReady = state.preparing || state.loadingConversation || state.changingModel || activeConversation()?.conversation.messages_loaded === false;
   const busy = state.busy, run = state.runs.get(state.activeConversationId);
@@ -1140,7 +1140,7 @@ function updateComposerControls() {
 }
 
 function canStartRequest(id) {
-  return !!id && !state.runs.get(id)?.pending && !state.preparing && !voice.pending && !voice.recording && !voice.transcribing && !voice.nativeOperation;
+  return !!id && !state.runs.get(id)?.pending && !state.preparing && !voiceBusy(id);
 }
 
 async function dispatchMessage(id, message) {
@@ -1192,7 +1192,7 @@ async function send() {
     composerStatus(`${t('voice.recording_in')}${voiceTitle ? ` «${voiceTitle}»` : ''}`);
     return;
   }
-  if (state.preparing || state.loadingConversation || activeConversation()?.conversation.messages_loaded === false || state.changingModel || voice.pending || voice.transcribing || voice.nativeOperation) return;
+  if (state.preparing || state.loadingConversation || activeConversation()?.conversation.messages_loaded === false || state.changingModel || voiceBusy(state.activeConversationId)) return;
   const input = $('#composer-input'), text = composerText().trim();
   const attachments = structuredClone(state.attachments), editIndex = state.editingMessageIndex;
   if (!text && !attachments.length) return;

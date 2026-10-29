@@ -85,7 +85,15 @@ Quando cambia un comportamento, aggiornare insieme codice e nota. Quando si
 trova un difetto, aggiungerlo a [[Problemi noti]] con il rimando alla nota dove
 è descritto.
 
-## Ultimo aggiornamento — 26 ottobre 2026
+## Ultimo aggiornamento — 29 ottobre 2026
+
+In [[Desktop gateway - Tauri]]: la dettatura mantiene chat/account di origine
+anche cambiando conversazione durante preparazione o trascrizione. Registrazioni
+su altre chat possono accodarsi: inferenza FIFO, risultati e invii nelle chat
+originali, annullamento isolato e recupero di testo/allegati in errore.
+Nessuna reinstallazione della produzione.
+
+## Aggiornamento precedente — 26 ottobre 2026
 
 In [[Desktop gateway - Tauri]]: collegamenti alle cartelle separati per computer
 e controllo delle chat in esecuzione sull'altro desktop, riusando il relay del

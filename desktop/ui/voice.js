@@ -1,7 +1,12 @@
-const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: null, capture: null, mediaOperation: null, transcribing: false, downloading: false, loading: false, loaded: false, nativeOperation: null, conversationId: null };
+const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: null, capture: null, mediaOperation: null, transcribing: false, jobs: [], worker: null, downloading: false, loading: false, loaded: false, nativeOperation: null, conversationId: null };
+
+function voiceBusy(id) {
+  return ((voice.pending || voice.recording) && voice.conversationId === id)
+    || voice.jobs.some(job => !job.cancelled && job.conversationId === id);
+}
 
 async function speechRequest(command, args) {
-  const operation = {};
+  const operation = {command};
   voice.nativeOperation = operation;
   try { return await invoke(command, args); }
   finally {
@@ -65,8 +70,10 @@ async function warmSpeechModel() {
 
 function voiceUi(message = '') {
   const mic = $('#composer-mic');
-  const finishing = !!(voice.nativeOperation || voice.mediaOperation) && !voice.pending && !voice.transcribing && !voice.recording;
-  const active = !!voice.recording || voice.pending || voice.transcribing || finishing;
+  const job = voice.jobs.find(job => !job.cancelled && job.conversationId === state.activeConversationId);
+  const transcribing = !!job && !voice.recording && !voice.pending;
+  const finishing = !!(voice.mediaOperation || (voice.nativeOperation && voice.nativeOperation.command !== 'transcribe_audio')) && !voice.pending && !transcribing && !voice.recording;
+  const active = !!voice.recording || voice.pending || transcribing || finishing;
   const loading = voice.loading;
   mic.hidden = active;
   $('.composer__toolbar .model-select').hidden = active;
@@ -78,16 +85,16 @@ function voiceUi(message = '') {
   mic.setAttribute('aria-label', label);
   mic.title = label;
   mic.replaceChildren(icon(voice.recording ? 'stop' : 'mic'));
-  const busy = voice.pending || voice.transcribing || finishing;
+  const busy = voice.pending || transcribing || finishing;
   // Intermediate refreshes (e.g. media resume) must not wipe the visible progress label.
   voice.status = busy ? message || voice.status || '' : '';
   $('#voice-recording').hidden = !active;
   $('#voice-recording').classList.toggle('is-busy', busy);
   const backgroundChat = voice.conversationId && voice.conversationId !== state.activeConversationId ? findConversation(voice.conversationId)?.conversation.title : null;
-  const statusText = finishing ? t('voice.finishing') : busy ? voice.status : message;
+  const statusText = finishing ? t('voice.finishing') : transcribing ? t(job === voice.jobs[0] ? 'voice.transcribing' : 'voice.queued') : busy ? voice.status : message;
   $('#voice-recording-status').textContent = backgroundChat ? `${statusText} · ${backgroundChat}` : statusText;
   $('#voice-recording-status').classList.toggle('sr-only', !busy);
-  $('#voice-waveform').hidden = voice.pending || voice.transcribing || finishing;
+  $('#voice-waveform').hidden = voice.pending || transcribing || finishing;
   $('#voice-recording-cancel').disabled = finishing;
   $('#voice-stop').hidden = !voice.recording;
   updateComposerControls();
@@ -115,10 +122,15 @@ function releaseRecording(recording) {
   return operation;
 }
 
-function cancelVoice() {
+function cancelVoice(all = false) {
   voice.epoch++;
+  if (all || (!voice.recording && !voice.pending)) {
+    for (const job of voice.jobs) {
+      if (all || job.conversationId === state.activeConversationId) job.cancelled = true;
+    }
+  }
   const released = voice.recording || voice.capture ? releaseRecording(voice.recording || voice.capture) : voice.mediaOperation;
-  voice.recording = null; voice.pending = false; voice.transcribing = false; voice.conversationId = null;
+  voice.recording = null; voice.pending = false; voice.conversationId = null;
   if ($('#voice-recording')) voiceUi();
   return released;
 }
@@ -154,26 +166,36 @@ function drawVoiceWave() {
 }
 
 async function startVoice() {
-  if (voice.pending || voice.transcribing || voice.loading || voice.nativeOperation || voice.mediaOperation || state.preparing || state.loadingConversation) return;
+  if (voice.pending || voice.loading || (voice.nativeOperation && voice.nativeOperation.command !== 'transcribe_audio') || voice.mediaOperation || state.preparing || state.loadingConversation) return;
   if (voice.recording) return stopVoice();
+  if (voice.jobs.length >= 8) {composerStatus(t('voice.queue_full'));return;}
   const epoch = ++voice.epoch;
+  voice.conversationId = state.activeConversationId;
   voice.pending = true; voiceUi(t('voice.preparing'));
   let recording;
   try {
+    if (!voice.conversationId) {
+      const draft = {text:composerText(), attachments:structuredClone(state.attachments), editing:state.editingMessageIndex};
+      await ensureConversation();
+      if (epoch !== voice.epoch || !state.activeConversationId) return;
+      voice.conversationId = state.activeConversationId;
+      state.drafts.set(voice.conversationId,draft);restoreChatDraft(voice.conversationId);
+    }
+    const conversationId = voice.conversationId;
+    const owner = state.config.firebase_email;
     const status = await invoke('speech_model_status');
     if (epoch !== voice.epoch) return;
-    if (status?.busy) { composerStatus(t('voice.speech_busy')); return; }
+    if (status?.busy && !voice.transcribing) { composerStatus(t('voice.speech_busy')); return; }
     if (!status?.ready) {
       openSettings(); selectSettingsTab('voice'); renderSpeechModel(status); return;
     }
     voiceUi(t('voice.loading_model'));
-    await speechRequest('prepare_speech_model');
+    if (!voice.transcribing) await speechRequest('prepare_speech_model');
     voice.loaded = true;
     if (epoch !== voice.epoch) return;
     voiceUi(t('voice.preparing'));
     voice.waveform = [];
-    voice.conversationId = state.activeConversationId;
-    recording = { chunks: [], count: 0, waveEnergy: 0, waveSamples: 0, epoch, conversationId: state.activeConversationId };
+    recording = { chunks: [], count: 0, waveEnergy: 0, waveSamples: 0, epoch, conversationId, owner, language:lang };
     voice.capture = recording;
     recording.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false });
     if (epoch !== voice.epoch) { releaseRecording(recording); return; }
@@ -222,11 +244,19 @@ async function startVoice() {
 
 async function stopVoice(sendAfter = false) {
   const recording = voice.recording;
-  if (!recording || voice.transcribing) return;
-  voice.transcribing = true; voice.recording = null; voiceUi(t('voice.transcribing'));
-  const epoch = recording.epoch;
-  const conversationId = recording.conversationId ?? voice.conversationId ?? state.activeConversationId;
-  const isActive = conversationId === state.activeConversationId;
+  if (!recording) return;
+  const conversationId = recording.conversationId;
+  if (conversationId === state.activeConversationId) saveChatDraft();
+  const draft = structuredClone(state.drafts.get(conversationId) || {text:'',attachments:[],editing:null});
+  const job = {conversationId, owner:recording.owner, language:recording.language, cancelled:false, samples:null, sendAfter, draft};
+  voice.jobs.push(job);voice.transcribing = true;
+  if (sendAfter) {
+    state.drafts.delete(conversationId);
+    if (conversationId === state.activeConversationId) {
+      setComposerText('');autoGrow();state.attachments=[];state.editingMessageIndex=null;renderDraft();
+    }
+  }
+  voice.recording = null;voiceUi(t('voice.transcribing'));
   try {
     await new Promise(resolve => {
       const timeout = setTimeout(resolve, 300);
@@ -234,27 +264,73 @@ async function stopVoice(sendAfter = false) {
       recording.node.port.postMessage('flush');
     });
     await releaseRecording(recording);
-    if (epoch !== voice.epoch) return;
-    const samples = speechSamples(recording.chunks, recording.context.sampleRate);
+    job.samples = speechSamples(recording.chunks, recording.context.sampleRate);
     recording.chunks = [];
-    const text = await speechRequest('transcribe_audio', { samples, language: lang });
-    if (epoch !== voice.epoch) return;
-    if (!text?.trim()) { if (isActive) composerStatus(t('voice.speech_silence')); return; }
-    if (isActive) {
-      const input = $('#composer-input'); appendComposerText(text.trim());
-      autoGrow(input); input.focus(); composerStatus();
-    } else if (conversationId) {
-      appendConversationDraft(conversationId, text.trim());
-      const title = findConversation(conversationId)?.conversation.title;
-      if (title) composerStatus(`${t('voice.added_to')} «${title}»`);
-    }
-    if (sendAfter && isActive) { voice.transcribing = false; voiceUi(); await send(); }
   } catch (error) {
     await releaseRecording(recording);
-    if (epoch === voice.epoch && isActive) composerStatus(voiceError(error));
+    job.error = error;
   } finally {
-    if (epoch === voice.epoch) { voice.transcribing = false; voice.conversationId = null; voiceUi(); if (isActive) flushQueue(state.activeConversationId); }
+    job.ready = true;
+    if (voice.conversationId === conversationId && !voice.recording && !voice.pending) voice.conversationId = null;
+    drainTranscriptions();
   }
+}
+
+function restoreVoiceDraft(job) {
+  if (!job.sendAfter || job.restored || job.owner !== state.config.firebase_email || !findConversation(job.conversationId)) return;
+  job.restored = true;
+  if (job.conversationId === state.activeConversationId) saveChatDraft();
+  const newer = state.drafts.get(job.conversationId);
+  state.drafts.set(job.conversationId, {
+    text:[job.draft.text,job.cancelled ? '' : job.transcript,newer?.text].filter(Boolean).join('\n'),
+    attachments:[...job.draft.attachments,...(newer?.attachments || [])],
+    editing:newer?.editing ?? job.draft.editing
+  });
+  if (job.conversationId === state.activeConversationId) restoreChatDraft(job.conversationId);
+}
+
+function drainTranscriptions() {
+  if (voice.worker) return;
+  voice.worker = (async () => {
+    while (voice.jobs[0]?.ready) {
+      const job = voice.jobs[0], id = job.conversationId;
+      try {
+        if (job.cancelled || job.owner !== state.config.firebase_email || !findConversation(id)) {
+          restoreVoiceDraft(job);continue;
+        }
+        if (job.error) throw job.error;
+        const text = await speechRequest('transcribe_audio', {samples:job.samples,language:job.language});
+        if (job.cancelled || job.owner !== state.config.firebase_email || !findConversation(id)) {
+          restoreVoiceDraft(job);continue;
+        }
+        if (!text?.trim()) throw 'speech_silence';
+        job.transcript = text.trim();
+        if (job.sendAfter) {
+          const message = {content:[job.draft.text,text.trim()].filter(Boolean).join(' '),attachments:job.draft.attachments,edit_index:job.draft.editing};
+          await discoverRemoteTarget(id);
+          if (job.cancelled || job.owner !== state.config.firebase_email || !findConversation(id)) {
+            restoreVoiceDraft(job);continue;
+          }
+          const queue = state.queues.get(id) || [];
+          queue.push(message);state.queues.set(id,queue);refreshQueue(id);
+        } else if (id === state.activeConversationId) {
+          appendComposerText(text.trim());autoGrow();composerStatus();
+        } else {
+          appendConversationDraft(id,text.trim());
+          const title = findConversation(id)?.conversation.title;
+          composerStatus(`${t('voice.added_to')} «${title}»`);
+        }
+      } catch (error) {
+        console.error('Dictation failed',error);
+        restoreVoiceDraft(job);
+        if (job.owner === state.config.firebase_email) composerStatus(`${voiceError(error)} · ${findConversation(id)?.conversation.title || ''}`);
+      } finally {
+        job.samples = null;
+        voice.jobs.shift();voice.transcribing = voice.jobs.length > 0;
+        voiceUi();flushQueue(id);
+      }
+    }
+  })().finally(() => {voice.worker = null;if (voice.jobs[0]?.ready) drainTranscriptions();});
 }
 
 function setupLocalVoice() {
@@ -266,7 +342,7 @@ function setupLocalVoice() {
   };
   $('#composer-mic').onclick = startVoice;
   $('#voice-stop').onclick = () => stopVoice(false);
-  $('#voice-recording-cancel').onclick = cancelVoice;
+  $('#voice-recording-cancel').onclick = () => cancelVoice();
   $('#voice-download').onclick = async () => {
     if (voice.downloading) return;
     voice.downloading = true; $('#voice-error').textContent = ''; await refreshSpeechModel();
@@ -283,8 +359,8 @@ function setupLocalVoice() {
     try { voice.loaded = false; renderSpeechModel(await invoke('remove_speech_model')); } catch (error) { $('#voice-error').textContent = voiceError(error); }
   };
   appWindow.listen('speech-model-progress', event => renderSpeechModel(event.payload)).catch(() => {});
-  appWindow.listen('dictation-cancel', cancelVoice).catch(error => console.error('Dictation close listener failed', error));
-  window.addEventListener('pagehide', cancelVoice);
+  appWindow.listen('dictation-cancel', () => cancelVoice(true)).catch(error => console.error('Dictation close listener failed', error));
+  window.addEventListener('pagehide', () => cancelVoice(true));
   // Installed model: warm it up right away so the microphone is never a guessing game.
   warmSpeechModel().catch(() => {});
 }

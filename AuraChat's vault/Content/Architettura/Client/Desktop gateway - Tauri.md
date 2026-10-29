@@ -168,6 +168,30 @@ Dettagli UI in [[UI desktop - Refactor flat]]. Test browser con AudioWorklet
 reale e microfono simulato; trascrizione CPU di un campione pubblico verificata.
 Il microfono fisico e il dialogo permessi del WebView restano da provare manualmente.
 
+### Origine e coda della dettatura — 29 ottobre 2026
+
+`desktop/ui/voice.js` fissa chat, account e lingua nella registrazione prima
+dell'attesa del modello/microfono. Ogni trascrizione conserva questi dati:
+la destinazione non dipende dalla chat aperta quando il risultato arriva.
+Stop aggiorna la bozza originale (o il compositore corrente se nel frattempo
+si torna alla stessa chat). Invio fotografa testo, allegati e indice di modifica,
+quindi accoda il messaggio nella chat originale anche in background.
+
+Una sola cattura del microfono alla volta; durante l'inferenza si puo registrare
+in un'altra chat. `voice.jobs` conserva al massimo 8 audio in attesa in memoria;
+il worker li trascrive in FIFO con una sola chiamata nativa alla volta.
+`voiceBusy(id)` limita i blocchi di invio alla chat interessata; la UI mostra
+trascrizione in corso/in coda per la chat aperta. X annulla la cattura corrente
+oppure le trascrizioni della chat aperta, non quelle degli altri progetti.
+Logout, chiusura nel tray e pagehide invalidano tutte le operazioni.
+Un errore di Invio ripristina testo/allegati nella bozza originale; nessun invio
+alternativo alla chat attiva. Le code non sopravvivono al riavvio.
+
+`desktop/tests/voice-flow.cjs` copre cattura AudioWorklet, cambio chat durante
+preparazione/inferenza, ritorno all'origine, seconda trascrizione FIFO con invio
+in background, annullamento isolato e recupero bozza/allegati in errore.
+Il nativo e simulato nel test browser; nessuna reinstallazione della produzione.
+
 ## Output finali e Git — 21 ottobre 2026
 
 La sidebar mostra **Cambiamenti +N −N** sopra **Output**. Solo

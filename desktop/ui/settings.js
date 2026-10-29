@@ -209,7 +209,7 @@ function setupSettings() {
     const button = $('#settings-signout'); button.disabled = true;
     clearTimeout(windowSaveTimer); windowExpanded = false;
     try {
-      await cancelVoice();
+      await cancelVoice(true);
       await windowSaveQueue;
       await invoke('logout');
       location.reload();

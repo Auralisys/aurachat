@@ -585,9 +585,17 @@ Il registratore AudioWorklet cattura mono, ricampiona a 16 kHz e conserva l'audi
 solo in memoria. Limite due minuti, inferenza in blocchi fino a 30 secondi.
 La lingua segue italiano/inglese dell'interfaccia. Registrazione con forma
  d'onda: X scarta solo l'audio; Stop trascrive senza inviare; Invio trascrive e
-invia insieme al testo già scritto e agli allegati. Cambiare chat scarta i
-risultati tardivi; tutte le tracce del microfono vengono chiuse. Annullare mentre
-il motore elabora scarta il risultato; il blocco CPU in corso può terminare.
+invia insieme al testo già scritto e agli allegati. La destinazione viene fissata
+all'avvio, prima della preparazione del modello: cambiare chat non sposta il
+risultato. Stop aggiunge il testo alla bozza della chat originale; Invio conserva
+testo/allegati e invia nella chat originale anche se nel frattempo ne apri un'altra.
+Puoi registrare in un'altra chat mentre la prima viene trascritta: le inferenze
+sono FIFO, una alla volta, con massimo 8 trascrizioni in attesa, audio in memoria
+e lingua/destinazione proprie. La chat interessata mostra il loader o
+“Trascrizione in coda”; le altre restano utilizzabili.
+Annullare una trascrizione non annulla quelle delle altre chat; logout e chiusura
+nel tray invalidano tutte le operazioni. Un errore nell'Invio ripristina la bozza
+e gli allegati senza inviare altrove; il blocco CPU già in corso può terminare.
 
 Su Windows, all'avvio effettivo della cattura vengono messe in pausa soltanto le
 sessioni multimediali già in riproduzione che espongono i controlli di sistema

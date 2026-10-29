@@ -228,6 +228,8 @@
   "voice.preparing": "Preparazione microfono…",
   "voice.recording": "Sto ascoltando…",
   "voice.transcribing": "Trascrizione sul dispositivo…",
+  "voice.queued": "Trascrizione in coda…",
+  "voice.queue_full": "Hai già 8 trascrizioni in attesa. Attendi prima di registrare ancora.",
   "voice.recording_in": "Registrazione in corso in",
   "voice.added_to": "Trascrizione aggiunta a",
   "voice.permission": "Accesso al microfono negato. Abilitalo nelle impostazioni di sistema.",
