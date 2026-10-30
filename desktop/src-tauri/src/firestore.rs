@@ -42,6 +42,7 @@ pub struct Firestore {
     http: reqwest::Client,
     token: Mutex<Option<TokenCache>>,
     trees: Mutex<HashMap<String, ChatData>>,
+    isolation: Mutex<Option<(String, bool, i64)>>,
 }
 
 struct TokenCache {
@@ -71,11 +72,21 @@ fn truncate(s: &str, max: usize) -> String {
 
 impl Firestore {
     pub async fn companion_isolated(&self, auth: &FirestoreAuth) -> Result<bool, String> {
+        // Rules change rarely; the probe used to run on every relay poll.
+        if let Some((project, isolated, checked)) = self.isolation.lock().unwrap().clone() {
+            if project == auth.project_id && now_secs() - checked < 600 { return Ok(isolated); }
+        }
         let token=self.id_token(auth).await?;
         let response=self.http.get(doc_url(&auth.project_id,"users/aurachat-isolation-probe"))
             .bearer_auth(token).send().await.map_err(|e|e.to_string())?;
         // A missing foreign document must still be forbidden, never readable.
-        Ok(response.status().as_u16()==403)
+        let status=response.status().as_u16();
+        let isolated=status==403;
+        // Transient failures are retried on the next call instead of being cached.
+        if matches!(status,200|403|404) {
+            *self.isolation.lock().unwrap()=Some((auth.project_id.clone(),isolated,now_secs()));
+        }
+        Ok(isolated)
     }
     pub async fn relay_put(&self, auth: &FirestoreAuth, path: &str, value: &Value, revision: Option<&str>) -> Result<(), String> {
         let write = if let Some(revision) = revision { update_write(auth, path, value, Some(revision))? }
@@ -133,12 +144,14 @@ impl Firestore {
     pub fn logout(&self) {
         *self.token.lock().unwrap() = None;
         self.trees.lock().unwrap().clear();
+        *self.isolation.lock().unwrap() = None;
     }
     pub fn new() -> Self {
         Self {
             http: reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build().expect("HTTP client"),
             token: Mutex::new(None),
             trees: Mutex::new(HashMap::new()),
+            isolation: Mutex::new(None),
         }
     }
 

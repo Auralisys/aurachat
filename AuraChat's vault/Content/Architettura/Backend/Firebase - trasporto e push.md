@@ -338,3 +338,20 @@ loading}`, usato dal telefono per il messaggio "scarica prima il modello vocale
 sul PC" e per evitare registrazioni mentre il modello carica o sta trascrivendo.
 Questo flusso non introduce nuove collezioni né regole Firestore: usa la stessa
 collezione `requests` già autorizzata al proprietario.
+
+## Push opt-in e costi Firestore — 30 ottobre 2026
+
+Misura Cloud Monitoring su `auralisys-chat` (30 giorni): ~237k `RunQuery`, ~146k
+`UpdateDocument`, ~134k `GetDocument` negati (probe di isolamento), ~7k `Commit`,
+673 esecuzioni di `completionPush`. Il 29 e il 30 ottobre le scritture hanno
+superato la quota gratuita (20k/giorno). Le query vuote costano comunque una
+lettura, quindi il poll a 2 s pesava più di quanto mostri `read_ops_count`. Le
+push sono sotto l'1% del costo. Cause e correzioni sono in
+[[Desktop gateway - Tauri]].
+
+Le push al telefono diventano opt-in per chat: il desktop pubblica
+`notifications/{event}` solo per chat seguite dal telefono
+(`companion.rs:112`, `companion.rs:337`). Protocollo 7 aggiunge l'azione
+`watch` nella collezione `requests` esistente: non viene presa in carico, il
+desktop la elimina dopo averla letta (`companion.rs:769`). Nessuna nuova
+collezione, regola o modifica alla Cloud Function.

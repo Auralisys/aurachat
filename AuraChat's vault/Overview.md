@@ -85,7 +85,16 @@ Quando cambia un comportamento, aggiornare insieme codice e nota. Quando si
 trova un difetto, aggiungerlo a [[Problemi noti]] con il rimando alla nota dove
 è descritto.
 
-## Ultimo aggiornamento — 29 ottobre 2026
+## Ultimo aggiornamento — 30 ottobre 2026
+
+Push al telefono opt-in per chat: arrivano solo per chat aperte o usate dal
+telefono negli ultimi 30 minuti; scrivere dal PC le ferma. Relay Firestore più
+economico: poll adattivo, probe di isolamento in cache, `live_turns` senza
+riscritture ogni secondo, albero chat pubblicato solo se cambia. Dettagli in
+[[Desktop gateway - Tauri]], [[Companion mobile - Flutter]] e
+[[Firebase - trasporto e push]]. Desktop e mobile vanno aggiornati.
+
+## Aggiornamento precedente — 29 ottobre 2026
 
 In [[Desktop gateway - Tauri]]: la dettatura mantiene chat/account di origine
 anche cambiando conversazione durante preparazione o trascrizione. Registrazioni

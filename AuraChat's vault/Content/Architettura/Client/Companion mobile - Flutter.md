@@ -142,3 +142,14 @@ qui si può fare stage, commit e commit + push, ciascuno con conferma
 (`lib/git_changes.dart:11`). Il telefono usa le azioni companion `chat_recap` e
 `project_git` (`companion.rs:546`, `companion.rs:533`). Le skill globali e gli
 strumenti MCP sono gli stessi delle chat desktop.
+
+## Push opt-in — 30 ottobre 2026
+
+Con desktop a protocollo 7 il telefono invia `watch` per la chat aperta:
+all'apertura, al ritorno in primo piano e al tick di 10 secondi, al massimo ogni
+4 minuti per PC/chat (`signalWatch`, `lib/app.dart:432`; `watchDue`,
+`lib/companion.dart:99`). Il PC abilita le push di quella chat per 30 minuti.
+Senza chat aperta il segnale porta `notify:false` e serve solo a rendere il relay
+reattivo. Gli errori di invio non vengono mostrati e il segnale verrà ritentato.
+I mobile precedenti ricevono push solo per le chat in cui inviano messaggi.
+Serve una nuova build mobile.

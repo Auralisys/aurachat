@@ -54,8 +54,83 @@ pub fn identity() -> (String, String) {
 
 // Live turn relay: transient documents the phone follows while the desktop is
 // working. Volume is bounded by truncation and by the 1 MiB document limit.
+// Writes are throttled: fast only while a phone or another computer is
+// actively following (hot), otherwise one write per LIVE_COLD_MS. Mobile treats
+// a running turn as stale after 20 s, so both cadences stay well below it.
 const LIVE_HEARTBEAT_MS: u64 = 5_000;
+const LIVE_HOT_MS: u64 = 1_000;
+const LIVE_COLD_MS: u64 = 10_000;
 const LIVE_RETENTION_MS: u64 = 60_000;
+// Relay protocol advertised to phones/computers. 7 adds the `watch` action.
+const RELAY_PROTOCOL: u64 = 7;
+// Phone pushes are opt-in per chat: opening or using the chat on the phone
+// follows it for this long; a turn started from a computer stops following.
+const PUSH_WATCH_MS: u64 = 30 * 60_000;
+// Any remote request keeps the relay responsive for this long; otherwise it idles.
+const HOT_MS: u64 = 10 * 60_000;
+const POLL_HOT_SECS: u64 = 2;
+const POLL_COLD_SECS: u64 = 8;
+// The chat index is republished only when it changes, or after this interval.
+const TREE_REFRESH_MS: u64 = 10 * 60_000;
+// A computer viewing a remote running chat re-signals interest at this cadence.
+const VIEWER_WATCH_MS: u64 = 4 * 60_000;
+
+static HOT_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static PUBLISHED_TREE: Mutex<Option<(String, u64)>> = Mutex::new(None);
+
+fn mark_hot(now: u64) { HOT_UNTIL.fetch_max(now + HOT_MS, std::sync::atomic::Ordering::Relaxed); }
+fn is_hot(now: u64) -> bool { HOT_UNTIL.load(std::sync::atomic::Ordering::Relaxed) > now }
+fn poll_interval(hot: bool) -> u64 { if hot { POLL_HOT_SECS } else { POLL_COLD_SECS } }
+
+/// Chats whose phone pushes are enabled, with the start of their current turn.
+#[derive(Default)]
+struct PushWatches { until: HashMap<String, u64>, started: HashMap<String, u64> }
+
+impl PushWatches {
+    fn follow(&mut self, conversation: &str, now: u64) {
+        self.until.retain(|_, until| *until + PUSH_WATCH_MS > now);
+        self.until.insert(conversation.into(), now + PUSH_WATCH_MS);
+    }
+    fn unfollow(&mut self, conversation: &str) { self.until.remove(conversation); }
+    fn turn_started(&mut self, conversation: &str, now: u64) { self.started.insert(conversation.into(), now); }
+    /// Allowed while followed, and until the end of a turn the phone followed
+    /// at any point since it started (a long turn still notifies on completion).
+    fn allows(&self, conversation: &str, now: u64) -> bool {
+        let Some(until) = self.until.get(conversation) else { return false };
+        *until >= self.started.get(conversation).copied().unwrap_or(now).min(now)
+    }
+}
+
+fn watches() -> &'static Mutex<PushWatches> {
+    static WATCHES: std::sync::OnceLock<Mutex<PushWatches>> = std::sync::OnceLock::new();
+    WATCHES.get_or_init(Mutex::default)
+}
+
+/// The user is at a computer: stop pushing this chat to phones.
+pub fn unfollow(conversation: &str) { watches().lock().unwrap().unfollow(conversation); }
+
+fn phone_push_allowed(kind: &str, conversation: &str, now: u64) -> bool {
+    if kind == "notification-smoke" { return true; }
+    !conversation.is_empty() && watches().lock().unwrap().allows(conversation, now)
+}
+
+fn request_from_desktop(path: &str, request: &Value) -> bool {
+    request["origin"] == "desktop" || path.rsplit('/').next().is_some_and(|id| id.starts_with("desktop-"))
+}
+
+fn desktop_request_id() -> String {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    format!("desktop-{}-{}-{}", identity().0, data::now_millis(), SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Some(heartbeat) when the live document must be written now.
+fn live_due(turn: &LiveTurn, now: u64, hot: bool) -> Option<bool> {
+    let changed = turn.revision != turn.published_revision;
+    if turn.status != "running" { return changed.then_some(false); }
+    let since = now.saturating_sub(turn.published_at);
+    if changed && (turn.published_revision == 0 || since >= if hot { LIVE_HOT_MS } else { LIVE_COLD_MS }) { return Some(false); }
+    (!changed && since >= if hot { LIVE_HEARTBEAT_MS } else { LIVE_COLD_MS }).then_some(true)
+}
 const LIVE_MAX_CONTENT: usize = 100_000;
 const LIVE_MAX_REASONING: usize = 50_000;
 const LIVE_MAX_ACTIVITY: usize = 40;
@@ -80,6 +155,7 @@ struct LiveTurn {
     updated_at: u64,
     revision: u64,
     published_revision: u64,
+    published_at: u64,
 }
 
 impl LiveTurn {
@@ -257,6 +333,8 @@ pub fn notify(app: &tauri::AppHandle, kind: &str, id: &str, conversation: &str, 
     if kind != "chat" || !chat_visible(app,&state,conversation) {
         if let Err(e)=app.notification().builder().title(title).body(body).extra("conversation_id",conversation).show() { eprintln!("Desktop notification: {e}"); }
     }
+    // Phones are notified only for chats recently opened or used there.
+    if !phone_push_allowed(kind,conversation,data::now_millis()) {return;}
     let (device_id, device_name)=identity();
     let event_id=format!("{:x}", Sha256::digest(format!("{uid}/{device_id}/{kind}/{id}").as_bytes()));
     let value=json!({"kind":kind,"title":title,"body":body,"conversation_id":conversation,
@@ -355,7 +433,10 @@ pub fn start(app: &tauri::AppHandle) {
             // is actually running, and only that turn may end its live state.
             if status=="running" {
                 let conflict=turns.get(id).is_some_and(|turn|turn.status=="running" && turn.turn_id!=turn_id);
-                if !conflict {turns.insert(id.into(),LiveTurn::running(now,uid,turn_id,value["user_content"].as_str().unwrap_or("")));}
+                if !conflict {
+                    turns.insert(id.into(),LiveTurn::running(now,uid,turn_id,value["user_content"].as_str().unwrap_or("")));
+                    watches().lock().unwrap().turn_started(id,now);
+                }
             }
             else if status=="context" {
                 if let Some(turn)=turns.get_mut(id) {
@@ -438,9 +519,10 @@ pub fn start(app: &tauri::AppHandle) {
     let app=app.clone();
     let boot_time=data::now_millis();
     tauri::async_runtime::spawn(async move {
+        let mut recovered:Option<String>=None;
         loop {
-            if let Err(e)=poll(&app,boot_time).await {eprintln!("Companion relay: {e}");}
-            pause(2).await;
+            if let Err(e)=poll(&app,boot_time,&mut recovered).await {eprintln!("Companion relay: {e}");}
+            pause(poll_interval(is_hot(data::now_millis()))).await;
         }
     });
 }
@@ -467,9 +549,35 @@ pub async fn remote_chat_snapshot(state:tauri::State<'_,AppState>,conversation_i
         turn["device_name"]=info["name"].clone();
         turn["device_id"]=json!(device);
         turn["remote_enabled"]=info["remote_enabled"].clone();
+        turn["protocol"]=info["protocol"].clone();
         latest=Some(turn);
     }
+    if let Some(turn)=&latest {
+        // Ask the running computer to stream at full rate while it is being watched here,
+        // without enabling phone pushes.
+        let device=turn["device_id"].as_str().unwrap_or_default().to_string();
+        if turn["status"]=="running" && turn["protocol"].as_u64().unwrap_or(0)>=7 && viewer_watch_due(&device,now) {
+            let request=json!({"conversation_id":conversation_id,"action":"watch","notify":false,"origin":"desktop",
+                "content":"","new_conversation":false,"created_at":now,"status":"pending"});
+            if let Err(e)=state.firestore.relay_put(&auth,&format!("users/{uid}/devices/{device}/requests/{}",desktop_request_id()),&request,None).await {
+                eprintln!("Remote watch failed: {e}");
+                viewer_watches().lock().unwrap().remove(&device);
+            }
+        }
+    }
     Ok(latest)
+}
+
+fn viewer_watches() -> &'static Mutex<HashMap<String,u64>> {
+    static SENT: std::sync::OnceLock<Mutex<HashMap<String,u64>>> = std::sync::OnceLock::new();
+    SENT.get_or_init(Mutex::default)
+}
+
+fn viewer_watch_due(device:&str,now:u64)->bool {
+    let mut sent=viewer_watches().lock().unwrap();
+    if sent.get(device).is_some_and(|at|now.saturating_sub(*at)<VIEWER_WATCH_MS) {return false;}
+    sent.insert(device.into(),now);
+    true
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -496,10 +604,10 @@ pub async fn remote_chat_request(state:tauri::State<'_,AppState>,device_id:Strin
     request.insert("created_at".into(),json!(data::now_millis()));
     request.insert("status".into(),json!("pending"));
     request.insert("new_conversation".into(),json!(false));
+    request.insert("origin".into(),json!("desktop"));
     let request=Value::Object(request);
     if serde_json::to_vec(&request).map_err(|e|e.to_string())?.len()>750_000 {return Err("invalid_message_size".into());}
-    static SEQUENCE:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
-    let id=format!("desktop-{}-{}-{}",identity().0,data::now_millis(),SEQUENCE.fetch_add(1,std::sync::atomic::Ordering::Relaxed));
+    let id=desktop_request_id();
     state.firestore.relay_put(&auth,&format!("users/{uid}/devices/{device_id}/requests/{id}"),&request,None).await?;
     Ok(id)
 }
@@ -537,12 +645,13 @@ pub async fn remote_chat_inbox(state:tauri::State<'_,AppState>,device_id:String,
 
 async fn publish_live(app:&tauri::AppHandle,turns:&Arc<Mutex<HashMap<String,LiveTurn>>>) {
     let now=data::now_millis();
+    let hot=is_hot(now);
     let (jobs,expired)={
-        let turns=turns.lock().unwrap();
-        let jobs:Vec<(String,LiveTurn,Value)>=turns.iter().filter_map(|(id,turn)| {
-            let due=turn.revision!=turn.published_revision
-                || (turn.status=="running" && now.saturating_sub(turn.updated_at)>=LIVE_HEARTBEAT_MS);
-            due.then(||(id.clone(),turn.clone(),turn.document(id)))
+        let mut turns=turns.lock().unwrap();
+        let jobs:Vec<(String,LiveTurn,Value)>=turns.iter_mut().filter_map(|(id,turn)| {
+            // A heartbeat must refresh updated_at, otherwise readers see a stale turn.
+            if live_due(turn,now,hot)? {turn.touch(now);}
+            Some((id.clone(),turn.clone(),turn.document(id)))
         }).collect();
         let expired:Vec<String>=turns.iter()
             .filter(|(_,turn)|turn.finished_at.is_some_and(|finished|now.saturating_sub(finished)>LIVE_RETENTION_MS))
@@ -559,6 +668,7 @@ async fn publish_live(app:&tauri::AppHandle,turns:&Arc<Mutex<HashMap<String,Live
         let path=format!("users/{uid}/devices/{device}/live_turns/{id}");
         if state.firestore.relay_upsert(&auth,&path,&value).await.is_ok() {
             if let Some(turn)=turns.lock().unwrap().get_mut(&id) {
+                turn.published_at=now;
                 if turn.revision==snapshot.revision {turn.published_revision=turn.revision;}
             }
         }
@@ -609,9 +719,16 @@ async fn heartbeat_once(app:&tauri::AppHandle)->Result<(),String>{
     }
     let speech=state.speech.status();
     state.firestore.relay_upsert(&auth,&format!("users/{uid}/devices/{id}"),
-        &json!({"name":name,"platform":std::env::consts::OS,"identity_version":2,"last_seen":data::now_millis(),"protocol":6,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"speech":{"ready":speech.ready,"busy":speech.busy,"loading":speech.loading},"project_permissions":project_permissions,"project_skills":skills,"global_skills":global_skills})).await?;
-    let tree=state.data.lock().unwrap().storage_tree()?;
-    state.firestore.relay_upsert(&auth,&format!("users/{uid}/companion/state"),&json!({"tree":tree})).await?;
+        &json!({"name":name,"platform":std::env::consts::OS,"identity_version":2,"last_seen":data::now_millis(),"protocol":RELAY_PROTOCOL,"remote_enabled":isolated,"models":models,"active_model":user.active_model,"speech":{"ready":speech.ready,"busy":speech.busy,"loading":speech.loading},"project_permissions":project_permissions,"project_skills":skills,"global_skills":global_skills})).await?;
+    let tree=json!({"tree":state.data.lock().unwrap().storage_tree()?});
+    let digest=format!("{uid}/{:x}",Sha256::digest(tree.to_string().as_bytes()));
+    let now=data::now_millis();
+    let unchanged=PUBLISHED_TREE.lock().unwrap().as_ref()
+        .is_some_and(|(published,at)|*published==digest && now.saturating_sub(*at)<TREE_REFRESH_MS);
+    if !unchanged {
+        state.firestore.relay_upsert(&auth,&format!("users/{uid}/companion/state"),&tree).await?;
+        *PUBLISHED_TREE.lock().unwrap()=Some((digest,now));
+    }
     let outbox=state.config_dir.join("notification-outbox").join(&uid);
     if let Ok(entries)=std::fs::read_dir(outbox) {
         for entry in entries.flatten().filter(|e|e.path().extension().is_some_and(|ext|ext=="json")).take(10) {
@@ -628,22 +745,49 @@ async fn heartbeat_once(app:&tauri::AppHandle)->Result<(),String>{
     Ok(())
 }
 
-async fn poll(app:&tauri::AppHandle,boot_time:u64)->Result<(),String>{
+async fn poll(app:&tauri::AppHandle,boot_time:u64,recovered:&mut Option<String>)->Result<(),String>{
     let account_state=app.state::<AppState>();let _account=account_state.account_lock.lock().await;
     let Some((auth,uid))=session(app).await? else{return Ok(())};
     let state=app.state::<AppState>();let (device,_)=identity();
     if !state.firestore.companion_isolated(&auth).await? {return Ok(());}
     let path=format!("users/{uid}/devices/{device}");
-    for (path,revision,mut request) in state.firestore.relay_requests(&auth,&path,"running").await? {
-        if request["started_at"].as_u64().unwrap_or(0)<boot_time {
-            request["status"]=json!("failed");request["error"]=json!("desktop_restarted");request["finished_at"]=json!(data::now_millis());
-            let _=state.firestore.relay_put(&auth,&path,&request,Some(&revision)).await;
+    // Requests interrupted by a restart can only predate this boot: recover once per account.
+    if recovered.as_deref()!=Some(uid.as_str()) {
+        for (path,revision,mut request) in state.firestore.relay_requests(&auth,&path,"running").await? {
+            if request["started_at"].as_u64().unwrap_or(0)<boot_time {
+                request["status"]=json!("failed");request["error"]=json!("desktop_restarted");request["finished_at"]=json!(data::now_millis());
+                let _=state.firestore.relay_put(&auth,&path,&request,Some(&revision)).await;
+            }
         }
+        *recovered=Some(uid.clone());
     }
     for (path,revision,mut request) in state.firestore.relay_requests(&auth,&path,"pending").await? {
         if state.firestore.uid().as_deref()!=Some(&uid){return Ok(());}
-        request["status"]=json!("running");request["started_at"]=json!(data::now_millis());
+        let now=data::now_millis();
+        let conversation=request["conversation_id"].as_str().filter(|id|data::valid_id(id).is_ok()).map(str::to_owned);
+        let from_desktop=request_from_desktop(&path,&request);
+        if request["action"]=="watch" {
+            // Interest signal only: never claimed, no receipt.
+            let fresh=request["created_at"].as_u64().is_some_and(|created|now.saturating_sub(created)<=300_000);
+            if fresh {mark_hot(now);}
+            if fresh && request["notify"]!=false && !from_desktop {
+                if let Some(id)=&conversation {watches().lock().unwrap().follow(id,now);}
+            }
+            if let Err(e)=state.firestore.relay_delete(&auth,&path).await {
+                eprintln!("Watch cleanup failed: {e}");
+                // Leave the pending queue anyway so the signal is not replayed on every poll.
+                request["status"]=json!("completed");request["finished_at"]=json!(now);
+                let _=state.firestore.relay_put(&auth,&path,&request,Some(&revision)).await;
+            }
+            continue;
+        }
+        mark_hot(now);
+        request["status"]=json!("running");request["started_at"]=json!(now);
         if state.firestore.relay_put(&auth,&path,&request,Some(&revision)).await.is_err(){continue;}
+        if let Some(id)=&conversation {
+            if !from_desktop {watches().lock().unwrap().follow(id,now);}
+            else if matches!(request["action"].as_str().unwrap_or("chat"),"chat"|"steer") {unfollow(id);}
+        }
         // A claimed request is processed once. Ambiguous outcomes require a new user action.
         let app=app.clone();let uid=uid.clone();let auth=auth.clone();
         tauri::async_runtime::spawn(async move {
@@ -1007,5 +1151,68 @@ fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,Strin
         assert_eq!(document["segments"][2]["content"],"After");
         assert_eq!(document["segments"][3]["content"],"T1\nA");
         assert_eq!(document["content"],"");
+    }
+    #[test]fn phone_pushes_follow_only_chats_opened_on_the_phone(){
+        let mut watches=PushWatches::default();
+        assert!(!watches.allows("c",1_000));
+        watches.follow("c",1_000);
+        assert!(watches.allows("c",1_000+PUSH_WATCH_MS));
+        assert!(!watches.allows("c",1_001+PUSH_WATCH_MS));
+        assert!(!watches.allows("other",1_000));
+        // A turn started while followed still notifies when it ends after expiry.
+        watches.turn_started("c",2_000);
+        assert!(watches.allows("c",2_000+3*PUSH_WATCH_MS));
+        // A turn started after expiry does not.
+        watches.turn_started("c",2_000+PUSH_WATCH_MS);
+        assert!(!watches.allows("c",3_000+PUSH_WATCH_MS));
+        // Opening the chat during that turn re-enables its completion push.
+        watches.follow("c",4_000+PUSH_WATCH_MS);
+        assert!(watches.allows("c",5_000+PUSH_WATCH_MS));
+        // Writing from a computer stops it.
+        watches.unfollow("c");
+        assert!(!watches.allows("c",5_000+PUSH_WATCH_MS));
+    }
+    #[test]fn expired_watches_are_pruned(){
+        let mut watches=PushWatches::default();
+        watches.follow("old",0);
+        watches.follow("new",3*PUSH_WATCH_MS);
+        assert!(!watches.until.contains_key("old"));
+        assert!(watches.until.contains_key("new"));
+    }
+    #[test]fn desktop_requests_are_recognized_by_origin_or_id(){
+        assert!(request_from_desktop("users/u/devices/d/requests/desktop-x-1-0",&json!({})));
+        assert!(request_from_desktop("users/u/devices/d/requests/abc",&json!({"origin":"desktop"})));
+        assert!(!request_from_desktop("users/u/devices/d/requests/abc",&json!({"origin":"phone"})));
+        assert!(!request_from_desktop("users/u/devices/d/requests/AbC123",&json!({})));
+        assert!(desktop_request_id().starts_with("desktop-"));
+        assert_ne!(desktop_request_id(),desktop_request_id());
+    }
+    #[test]fn relay_idles_unless_someone_is_following(){
+        assert_eq!(poll_interval(true),POLL_HOT_SECS);
+        assert_eq!(poll_interval(false),POLL_COLD_SECS);
+        assert!(POLL_COLD_SECS*1000*5<45_000,"mobile online threshold");
+    }
+    #[test]fn live_writes_are_throttled_and_heartbeats_stay_fresh(){
+        let mut turn=LiveTurn::running(0,Some("u".into()),"t","Q");
+        // The start is published immediately even when nobody follows.
+        assert_eq!(live_due(&turn,0,false),Some(false));
+        turn.published_revision=turn.revision;turn.published_at=0;
+        turn.apply_progress("__delta","a",100);
+        assert_eq!(live_due(&turn,500,true),None);
+        assert_eq!(live_due(&turn,LIVE_HOT_MS,true),Some(false));
+        assert_eq!(live_due(&turn,LIVE_HOT_MS,false),None);
+        assert_eq!(live_due(&turn,LIVE_COLD_MS,false),Some(false));
+        turn.published_revision=turn.revision;turn.published_at=LIVE_COLD_MS;
+        // Unchanged running turns get a heartbeat that the reader can see.
+        assert_eq!(live_due(&turn,LIVE_COLD_MS+LIVE_HEARTBEAT_MS-1,true),None);
+        assert_eq!(live_due(&turn,LIVE_COLD_MS+LIVE_HEARTBEAT_MS,true),Some(true));
+        assert_eq!(live_due(&turn,LIVE_COLD_MS+LIVE_HEARTBEAT_MS,false),None);
+        assert_eq!(live_due(&turn,2*LIVE_COLD_MS,false),Some(true));
+        assert!(LIVE_COLD_MS+2_000<20_000,"mobile staleness threshold");
+        // Completion is never delayed, and a published final state is not rewritten.
+        turn.finish("completed",LIVE_COLD_MS+1);
+        assert_eq!(live_due(&turn,LIVE_COLD_MS+1,false),Some(false));
+        turn.published_revision=turn.revision;
+        assert_eq!(live_due(&turn,10*LIVE_COLD_MS,false),None);
     }
 }

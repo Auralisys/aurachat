@@ -56,6 +56,14 @@ void main() {
     );
     expect(liveTurnRunning(null, now), isFalse);
   });
+  test('open chats are re-signalled to the desktop at a bounded cadence', () {
+    const now = 1000000;
+    expect(watchDue(null, now), isTrue);
+    expect(watchDue(now - watchIntervalMs + 1, now), isFalse);
+    expect(watchDue(now - watchIntervalMs, now), isTrue);
+    // Pushes stay enabled 30 minutes after a signal, well beyond the cadence.
+    expect(watchIntervalMs * 2, lessThan(30 * 60000));
+  });
   testWidgets(
     'login validates empty fields without attempting authentication',
     (tester) async {

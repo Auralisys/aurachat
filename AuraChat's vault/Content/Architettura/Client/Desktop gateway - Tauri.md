@@ -482,3 +482,40 @@ della chat. La notifica della nuova chat attende il tentativo di titolo AI in
 background; la risposta viene restituita alla UI senza attendere. In caso di
 errore del titolo rimane il provvisorio; Stop ed errori notificano lo stato
 esplicitamente, senza riciclare testo di ragionamento o lavoro ancora parziale.
+
+## Notifiche opt-in e relay economico — 30 ottobre 2026
+
+Le push al telefono non arrivano più per ogni fine turno. `PushWatches`
+(`companion.rs:87`) tiene in memoria le chat seguite dal telefono per 30 minuti
+(`PUSH_WATCH_MS`, `companion.rs:68`). Una chat è seguita quando il telefono la
+apre (`watch`) o vi invia una richiesta. La push è consentita anche alla fine di
+un turno se il telefono l'ha seguita in qualsiasi momento dall'inizio del turno.
+`notify` mantiene sempre il toast locale ma salta outbox ed evento Firestore
+quando `phone_push_allowed` lo nega (`companion.rs:112`, `companion.rs:337`).
+Le notifiche senza chat (download voce) non vanno al telefono.
+
+Scrivere dal PC smette di seguire la chat. Lo fanno il comando `chat` locale
+(`lib.rs:510`) e le richieste `chat`/`steer` di origine desktop arrivate dal
+controllo remoto. Il riavvio del PC azzera lo stato.
+
+Il poll (`companion.rs:748`) gestisce `watch` senza claim e la elimina; in caso
+di errore la chiude come `completed` (`companion.rs:769`). Il poll resta a 2 s
+per 10 minuti (`HOT_MS`, `companion.rs:70`) dopo una richiesta o un `watch`
+recente, poi passa a 8 s. Il recupero delle richieste `running` interrotte
+avviene una volta per account. Il probe di isolamento resta in cache 10 minuti
+(`firestore.rs:74`), con cache azzerata al logout.
+
+Bug corretto in `publish_live` (`companion.rs:646`): l'heartbeat non aggiornava
+`updated_at`. Durante pause superiori a 5 s riscriveva lo stesso documento ogni
+secondo, e il telefono lo considerava comunque scaduto dopo 20 s. Ora
+`live_due` (`companion.rs:127`) decide la cadenza: inizio e fine del turno sono
+immediati; con relay attivo 1 s e heartbeat 5 s, altrimenti una scrittura ogni
+10 s. `companion/state` viene riscritto solo quando cambia il digest dell'albero
+o dopo 10 minuti (`companion.rs:724`).
+
+Un computer che guarda una chat remota in esecuzione invia ogni 4 minuti un
+`watch` con `notify:false` (`companion.rs:559`, `companion.rs:576`): il PC remoto
+torna reattivo senza abilitare push. Stima: per desktop acceso ~10k letture e
+6–8k scritture al giorno. Verifiche: 95 test Rust della lib (inclusi i nuovi
+test su watch, throttling e origine richieste), `flutter analyze` e 53 test
+mobile. Nessuna reinstallazione, deploy o nuova versione.

@@ -506,6 +506,8 @@ async fn chat(
     retry: Option<bool>,
     edit_index: Option<usize>,
 ) -> Result<ChatResponse, String> {
+    // Writing from this computer means the user is here: stop phone pushes for the chat.
+    companion::unfollow(&conversation_id);
     run_chat(app,state,conversation_id,content,attachments,retry,edit_index,None).await
 }
 

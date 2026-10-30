@@ -89,6 +89,16 @@ bool liveTurnRunning(Map<String, dynamic>? turn, [int? now]) =>
             ((turn['updated_at'] as num?)?.toInt() ?? 0) <
         20000;
 
+/// Desktops from protocol 7 accept `watch`: phone pushes are opt-in per chat.
+const watchProtocol = 7;
+
+/// The open chat is re-signalled at most every 4 minutes; the desktop keeps
+/// its pushes enabled for 30 minutes after the last signal.
+const watchIntervalMs = 240000;
+
+bool watchDue(int? last, int now) =>
+    last == null || now - last >= watchIntervalMs;
+
 List<Map<String, dynamic>> chatIndex(Map<String, dynamic> tree) {
   final chats = Map<String, dynamic>.from(tree['conversations'] ?? {});
   final projects = Map<String, dynamic>.from(tree['projects'] ?? {});

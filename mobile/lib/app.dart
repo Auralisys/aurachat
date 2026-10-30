@@ -308,6 +308,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   NotificationTarget? waitingNotification;
   int loadVersion = 0;
   Timer? clock;
+  final watchSent = <String, int>{};
   bool get busy =>
       sending || requestStatus == 'pending' || requestStatus == 'running';
   Map<String, dynamic>? get activeLive =>
@@ -421,8 +422,37 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     clock = Timer.periodic(const Duration(seconds: 10), (_) {
       if (mounted) {
         setState(() {});
+        signalWatch();
       }
     });
+  }
+
+  /// Tells the desktop what is open on the phone. A chat signal enables its
+  /// completion pushes for 30 minutes; any signal makes the relay responsive.
+  void signalWatch() {
+    final target = deviceId;
+    final current = device;
+    if (!push.foreground || target == null || current == null) return;
+    if (!deviceOnline(current) ||
+        ((current['protocol'] as num?)?.toInt() ?? 0) < watchProtocol) {
+      return;
+    }
+    final conversation = conversationId;
+    final key = '$target/${conversation ?? ''}';
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (!watchDue(watchSent[key], now)) return;
+    watchSent[key] = now;
+    unawaited(
+      api
+          .send(
+            target,
+            conversation ?? const Uuid().v4(),
+            '',
+            action: 'watch',
+            extra: conversation == null ? const {'notify': false} : const {},
+          )
+          .then<void>((_) {}, onError: (_) => watchSent.remove(key)),
+    );
   }
 
   @override
@@ -464,7 +494,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     push.foreground = state == AppLifecycleState.resumed;
-    if (push.foreground) push.bind(widget.user.uid);
+    if (push.foreground) {
+      push.bind(widget.user.uid);
+      signalWatch();
+    }
   }
 
   void fail(Object e) {
@@ -676,6 +709,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     watchQuestions();
     watchLiveTurns();
     restoreRequest();
+    signalWatch();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('device_${widget.user.uid}', id);
   }
@@ -729,6 +763,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       loadingMessages = chat != null;
       error = null;
     });
+    signalWatch();
     if (chat == null) {
       return;
     }

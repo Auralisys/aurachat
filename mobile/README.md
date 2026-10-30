@@ -52,8 +52,14 @@ firebase functions:artifacts:setpolicy --location europe-west3 --days 1 --projec
 ```
 
 FCM viene registrato dopo l'accesso; Android chiede il permesso notifiche.
+Dal protocollo desktop 7 le push sono **opt-in per chat**: arrivano solo per le
+chat aperte o usate dal telefono negli ultimi 30 minuti (o durante il turno che
+termina). Aprire una chat, tornare in primo piano o restarci invia un `watch` al
+PC al massimo ogni 4 minuti; scrivere nella stessa chat dal PC smette di seguirla.
+Senza chat aperta il telefono invia solo un segnale di presenza (`notify:false`)
+che rende il relay più reattivo senza abilitare push.
 La funzione invia una notifica per risposta completa (compresi gli strumenti e
-sub-agenti del turno) e download del modello vocale, anche per esito fallito/interrotto.
+sub-agenti del turno), anche per esito fallito/interrotto.
 La dettatura non invia notifiche di trascrizione completata o fallita: testo ed
 errori sono già nel compositore. Il mittente scarta anche gli eventi
 `transcription` rimasti nelle code dei desktop precedenti.
@@ -166,7 +172,9 @@ di distribuzione vengono eliminate dopo un giorno quando la policy è applicata.
 - `users/{uid}/companion/state`: proiezione dell'albero senza configurazione provider.
 - `users/{uid}/devices/{id}/requests/{request}`: azione, chat, testo, timestamp,
   stato pending/running/completed/failed/cancelled. Presa in carico con precondizione
-  sulla revisione Firestore, senza esecuzioni automatiche duplicate.
+  sulla revisione Firestore, senza esecuzioni automatiche duplicate. L'azione
+  `watch` (protocollo 7) non viene presa in carico: il desktop la legge, abilita le
+  push di quella chat per 30 minuti e la elimina.
 - `users/{uid}/devices/{id}/approvals/{id}`: richieste di consenso con revisione.
 - `users/{uid}/devices/{id}/questions/{id}`: domande interattive `ask_user` in
   attesa (scelta singola/multipla, risposta libera, batch fino a dodici); il
@@ -174,15 +182,17 @@ di distribuzione vengono eliminate dopo un giorno quando la policy è applicata.
   documento finché è pendente, poi lo rimuove alla risoluzione o all'annullamento.
 - `users/{uid}/devices/{id}/live_turns/{conversation_id}`: stato transitorio del
   turno in corso (`running/completed/failed/cancelled`, testo parziale,
-  reasoning, activity). Il desktop lo aggiorna al massimo una volta al secondo,
-  con un heartbeat ogni 5 secondi; il telefono lo ignora se `updated_at` è più
+  reasoning, activity). Con relay attivo il desktop lo aggiorna al massimo una
+  volta al secondo con heartbeat ogni 5 secondi, altrimenti ogni 10 secondi; il
+  telefono lo ignora se `updated_at` è più
   vecchio di 20 secondi e lo elimina dal desktop 60 secondi dopo la fine.
 - `users/{uid}/phones/{installation}`: registrazione FID del telefono.
 - `users/{uid}/notifications/{event}`: completamento che attiva la Cloud Function.
 - Conversazioni e messaggi usano lo schema desktop esistente, inclusi i messaggi
   suddivisi in parti per il limite Firestore.
 
-Il gateway controlla la coda ogni 2 secondi e pubblica la presenza ogni 15.
+Il gateway controlla la coda ogni 2 secondi per 10 minuti dopo una richiesta o un
+`watch`, poi ogni 8; pubblica la presenza ogni 15 e l'albero chat solo quando cambia.
 Una sola istanza desktop per utente evita gateway concorrenti sullo stesso PC.
 Gli eventi di notifica non ancora pubblicati restano in una coda locale per
 account e vengono ritentati alla riconnessione, anche dopo il riavvio del desktop.

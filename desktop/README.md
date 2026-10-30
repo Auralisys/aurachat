@@ -834,8 +834,9 @@ con apertura della conversazione sul telefono.
 
 Durante il turno `run_chat` emette `live-turn` (running/terminal) e il gateway
 pubblica `users/{uid}/devices/{id}/live_turns/{conversation_id}`: testo parziale,
-reasoning e activity aggiornati al massimo una volta al secondo, con heartbeat
-ogni 5 secondi. I documenti terminati vengono eliminati dopo 60 secondi. Il
+reasoning e activity aggiornati al massimo una volta al secondo mentre qualcuno
+segue il relay (heartbeat ogni 5 secondi), altrimenti ogni 10 secondi (vedi
+«Notifiche opt-in e costi Firestore»). I documenti terminati vengono eliminati dopo 60 secondi. Il
 telefono ignora gli stati più vecchi di 20 secondi, così un arresto del desktop
 non lascia loader permanenti. La scrittura è troncata per restare sotto il limite
 Firestore e non tocca `conversations/{id}`, che conserva le precondizioni di
@@ -937,3 +938,48 @@ terminali nella cronologia. Il telefono può fermare singoli agenti o comandi.
 Il filtro di visibilità riguarda il solo toast Windows: l’evento push è
 comunque pubblicato. La precedente soppressione comune impediva le push
 mentre il desktop mostrava la chat; corretta in questa sessione.
+
+## Notifiche opt-in e costi Firestore (30 ottobre 2026)
+
+Le push al telefono non arrivano più per ogni fine turno. Sono **opt-in per chat**:
+il desktop invia la push solo se quella chat è stata aperta o usata dal telefono
+negli ultimi 30 minuti, oppure in un momento qualsiasi del turno che sta
+terminando (un turno lungo seguito dal telefono notifica comunque alla fine).
+Scrivere nella chat dal PC (UI locale o controllo remoto da un altro computer)
+smette subito di seguirla. Il toast locale del PC resta invariato; la Cloud
+Function non cambia. Le notifiche senza chat (download del modello vocale) non
+vanno più al telefono; la smoke opt-in sì.
+
+Protocollo 7 aggiunge l'azione `watch`: il telefono la scrive quando apre una chat,
+torna in primo piano o ogni 4 minuti mentre la chat resta aperta. Il desktop la
+legge senza claim, segue la chat (salvo `notify:false`, origine desktop o
+richiesta più vecchia di 5 minuti) e la elimina; se l'eliminazione fallisce la
+chiude come `completed`. Qualsiasi richiesta presa in carico dal telefono segue
+la chat anche con mobile precedenti. Lo stato è in memoria: un riavvio del PC
+azzera le chat seguite.
+
+Riduzione costi, misurata su `auralisys-chat` (30 giorni: ~237k query, ~146k
+update, ~134k probe di isolamento negati; 29–30 ottobre oltre la quota gratuita
+di 20k scritture/giorno; le push pesano meno dell'1%):
+
+- poll adattivo: 2 s per 10 minuti dopo una richiesta o un `watch`, poi 8 s;
+- recupero delle richieste `running` interrotte una sola volta per account, non a
+  ogni poll;
+- probe di isolamento in cache 10 minuti per progetto (403/200/404; gli altri
+  esiti non vengono memorizzati) e azzerata al logout;
+- `live_turns`: corretto l'heartbeat che non aggiornava `updated_at` e riscriveva
+  lo stesso documento ogni secondo durante le pause; ora 1 s/heartbeat 5 s solo
+  quando il relay è attivo, altrimenti una scrittura ogni 10 s. L'inizio e la fine
+  del turno sono sempre immediati;
+- `companion/state` riscritto solo quando l'albero cambia (digest SHA-256) o ogni
+  10 minuti; la presenza del dispositivo resta ogni 15 secondi.
+
+Un computer che guarda una chat remota in esecuzione invia un `watch` con
+`notify:false` ogni 4 minuti, così il PC remoto aggiorna il turno a 1 s.
+Stima per desktop acceso: ~10k letture e 6–8k scritture al giorno.
+
+Test Rust su Windows: l'eseguibile di test richiede il manifest Common-Controls
+v6 (altrimenti `0xC0000139`). Copiare l'exe di `cargo test --lib --no-run` in una
+cartella temporanea con una `DirectML.dll` reale, incorporare il manifest con
+`mt.exe -manifest t.exe.manifest -outputresource:t.exe;#1` ed eseguirlo da
+`desktop/src-tauri`.
