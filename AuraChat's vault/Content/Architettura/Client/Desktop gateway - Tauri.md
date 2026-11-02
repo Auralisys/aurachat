@@ -570,6 +570,10 @@ computer (`syncRemoteGuidance`).
 
 Mobile: `PendingGuides` (`message_queue.dart`) unisce la ricevuta di `steer`
 alla lista live, con le stesse azioni; il bubble nasconde Invia subito.
+Gli ID letti nei segmenti live restano memorizzati per tutto il turno e sono
+esclusi sia dalla lista in attesa sia dalle ricevute locali. Se la conferma di
+lettura precede la ricevuta di invio, la guida non ricompare come modificabile;
+lo stesso vale per un aggiornamento live arretrato.
 
 Verifica: test Rust su id/ritiro e documento live, `tests/pending-guidance.cjs`
 e test Flutter in `queued_bubble_test.dart`.

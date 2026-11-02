@@ -97,13 +97,17 @@ class PendingGuide {
 class PendingGuides {
   final items = <PendingGuide>[];
   final _withdrawn = <String>{};
+  final _read = <String>{};
   String? _turn;
   bool running = false;
 
   void sync(Map<String, dynamic>? live) {
     running = live?['status'] == 'running';
     final turn = live?['turn_id'] as String?;
-    if (turn != _turn) _withdrawn.clear();
+    if (turn != _turn) {
+      _withdrawn.clear();
+      _read.clear();
+    }
     _turn = turn;
     if (!running) {
       items.clear();
@@ -115,19 +119,20 @@ class PendingGuides {
         listed[item['id'] as String] = item['content'] as String? ?? '';
       }
     }
-    final read = {
+    // Keep read IDs for the turn: send receipts and stale snapshots can lag.
+    _read.addAll({
       for (final segment in (live?['segments'] as List?) ?? const [])
         if (segment is Map && segment['guidance_id'] is String)
           segment['guidance_id'] as String,
-    };
+    });
     items.removeWhere(
       (guide) =>
           guide.turn != turn ||
-          read.contains(guide.id) ||
+          _read.contains(guide.id) ||
           guide.seen && !listed.containsKey(guide.id),
     );
     for (final MapEntry(key: id, value: text) in listed.entries) {
-      if (_withdrawn.contains(id)) continue;
+      if (_withdrawn.contains(id) || _read.contains(id)) continue;
       final known = items.where((guide) => guide.id == id).firstOrNull;
       if (known != null) {
         known.seen = true;
@@ -138,7 +143,10 @@ class PendingGuides {
   }
 
   void accepted(String id, String text) {
-    if (!running || _withdrawn.contains(id) || items.any((g) => g.id == id)) {
+    if (!running ||
+        _withdrawn.contains(id) ||
+        _read.contains(id) ||
+        items.any((g) => g.id == id)) {
       return;
     }
     items.add(PendingGuide(id, text, _turn));

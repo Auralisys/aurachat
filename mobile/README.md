@@ -37,6 +37,8 @@ come **Guida · in attesa** finché il modello non lo legge (lista `guidance` de
 documento live, anche per le guide inviate dal desktop): **Modifica** lo ritira
 (`withdraw_guidance`) e lo riporta nel composer, e il nuovo invio torna guida;
 **Annulla invio** lo ritira. Se il modello l'ha già letto resta nella cronologia.
+Gli ID letti restano memorizzati per tutto il turno: una ricevuta di invio tardiva
+o un aggiornamento live arretrato non rendono nuovamente modificabile la guida.
 
 ## Configurazione esterna ancora necessaria
 

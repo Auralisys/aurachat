@@ -178,6 +178,64 @@ void main() {
     expect(guides.items, isEmpty);
   });
 
+  test('a late send receipt cannot restore a guide already read in live', () {
+    final guides = PendingGuides()
+      ..sync({
+        'status': 'running',
+        'turn_id': 't1',
+        'guidance': [],
+        'segments': [
+          {'role': 'user', 'content': 'Usa la cache', 'guidance_id': 'g1'},
+        ],
+      })
+      ..accepted('g1', 'Usa la cache');
+    expect(guides.items, isEmpty);
+    expect(guides.running, isTrue);
+
+    guides.accepted('g2', 'Guida non ancora letta');
+    expect(guides.items.map((g) => g.id), ['g2']);
+  });
+
+  test('read guides stay resolved across stale snapshots of the same turn', () {
+    final guides = PendingGuides()
+      ..sync({'status': 'running', 'turn_id': 't1'})
+      ..accepted('g1', 'Usa la cache');
+    expect(guides.items.single.id, 'g1');
+
+    guides.sync({
+      'status': 'running',
+      'turn_id': 't1',
+      'guidance': [
+        {'id': 'g1', 'content': 'Usa la cache'},
+      ],
+      'segments': [
+        {'role': 'user', 'content': 'Usa la cache', 'guidance_id': 'g1'},
+      ],
+    });
+    expect(guides.items, isEmpty);
+
+    guides
+      ..sync({
+        'status': 'running',
+        'turn_id': 't1',
+        'guidance': [
+          {'id': 'g1', 'content': 'Usa la cache'},
+        ],
+        'segments': [],
+      })
+      ..accepted('g1', 'Usa la cache');
+    expect(guides.items, isEmpty);
+
+    guides
+      ..sync({'status': 'completed', 'turn_id': 't1'})
+      ..accepted('g1', 'Usa la cache');
+    expect(guides.items, isEmpty);
+    guides
+      ..sync({'status': 'running', 'turn_id': 't2'})
+      ..accepted('g2', 'Nuovo turno');
+    expect(guides.items.single.turn, 't2');
+  });
+
   testWidgets('pending guide bubble offers edit and cancel-send only', (
     tester,
   ) async {
