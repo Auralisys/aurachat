@@ -14,6 +14,8 @@ class QueuedMessageBubble extends StatelessWidget {
     this.onDelete,
     this.onSendNow,
     this.onResume,
+    this.sendNowAction = true,
+    this.deleteLabel = 'Cancella',
   });
 
   final String text;
@@ -21,6 +23,8 @@ class QueuedMessageBubble extends StatelessWidget {
   final bool locked;
   final String? warning;
   final VoidCallback? onEdit, onDelete, onSendNow, onResume;
+  final bool sendNowAction;
+  final String deleteLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -66,11 +70,12 @@ class QueuedMessageBubble extends StatelessWidget {
                     }
                   },
                   itemBuilder: (context) => [
-                    PopupMenuItem(
-                      value: _QueueAction.sendNow,
-                      enabled: !locked && onSendNow != null,
-                      child: const Text('Invia subito'),
-                    ),
+                    if (sendNowAction)
+                      PopupMenuItem(
+                        value: _QueueAction.sendNow,
+                        enabled: !locked && onSendNow != null,
+                        child: const Text('Invia subito'),
+                      ),
                     PopupMenuItem(
                       value: _QueueAction.edit,
                       enabled: !locked && onEdit != null,
@@ -79,7 +84,7 @@ class QueuedMessageBubble extends StatelessWidget {
                     PopupMenuItem(
                       value: _QueueAction.delete,
                       enabled: !locked && onDelete != null,
-                      child: const Text('Cancella'),
+                      child: Text(deleteLabel),
                     ),
                   ],
                 ),

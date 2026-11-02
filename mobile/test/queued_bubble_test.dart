@@ -121,4 +121,89 @@ void main() {
       expect(lane.operation, isNull);
     },
   );
+
+  test('pending guides stay until read, withdrawn or the turn ends', () {
+    final guides = PendingGuides();
+    Map<String, dynamic> live(
+      List<Map<String, String>> guidance, {
+      String status = 'running',
+      String turn = 't1',
+      List<Map<String, String>> segments = const [],
+    }) => {
+      'status': status,
+      'turn_id': turn,
+      'guidance': guidance,
+      'segments': segments,
+    };
+    guides.sync(live([]));
+    guides.accepted('g1', 'Prima');
+    expect(guides.items.map((g) => g.id), ['g1']);
+    // Not listed yet: the local receipt bridges until the live turn catches up.
+    guides.sync(live([]));
+    expect(guides.items.single.seen, isFalse);
+    guides.sync(
+      live([
+        {'id': 'g1', 'content': 'Prima'},
+        {'id': 'g2', 'content': 'Dal PC'},
+      ]),
+    );
+    expect(guides.items.map((g) => g.text), ['Prima', 'Dal PC']);
+    expect(guides.items.every((g) => g.seen), isTrue);
+    guides.withdrawn(guides.items.last);
+    // A stale snapshot cannot resurrect a withdrawn guide.
+    guides.sync(
+      live([
+        {'id': 'g1', 'content': 'Prima'},
+        {'id': 'g2', 'content': 'Dal PC'},
+      ]),
+    );
+    expect(guides.items.map((g) => g.id), ['g1']);
+    guides.sync(live([]));
+    expect(guides.items, isEmpty);
+    guides.accepted('g3', 'Letta subito');
+    guides.sync(
+      live(
+        [],
+        segments: [
+          {'role': 'user', 'content': 'Letta subito', 'guidance_id': 'g3'},
+        ],
+      ),
+    );
+    expect(guides.items, isEmpty);
+    guides.accepted('g4', 'Fine turno');
+    guides.sync(live([], status: 'completed'));
+    expect(guides.items, isEmpty);
+    expect(guides.running, isFalse);
+    guides.accepted('g5', 'Ignorata');
+    expect(guides.items, isEmpty);
+  });
+
+  testWidgets('pending guide bubble offers edit and cancel-send only', (
+    tester,
+  ) async {
+    var cancelled = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: auraTheme(),
+        home: Scaffold(
+          body: QueuedMessageBubble(
+            text: 'Usa la cache',
+            status: 'Guida · in attesa',
+            sendNowAction: false,
+            deleteLabel: 'Annulla invio',
+            onEdit: () {},
+            onDelete: () => cancelled++,
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byTooltip('Azioni messaggio in coda'));
+    await tester.pumpAndSettle();
+    expect(find.text('Invia subito'), findsNothing);
+    expect(find.text('Modifica'), findsOneWidget);
+    await tester.tap(find.text('Annulla invio'));
+    await tester.pumpAndSettle();
+    expect(cancelled, 1);
+    expect(tester.takeException(), isNull);
+  });
 }

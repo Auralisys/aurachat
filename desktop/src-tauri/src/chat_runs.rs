@@ -10,28 +10,57 @@ struct Mailbox {
     closed: bool,
     accepted: usize,
     bytes: usize,
-    pending: Vec<crate::llm::ChatMessage>,
+    pending: Vec<PendingGuidance>,
     io: Option<Arc<Cancellation>>,
+}
+
+/// Accepted guidance the model has not read yet. Only these can be withdrawn.
+pub struct PendingGuidance { pub id: String, pub message: crate::llm::ChatMessage }
+impl PendingGuidance {
+    /// `__steering` payload: the history message plus the id clients use to match it.
+    pub fn event(&self) -> Result<String, String> {
+        let mut value = serde_json::to_value(&self.message).map_err(|e|e.to_string())?;
+        value["guidance_id"] = serde_json::json!(self.id);
+        Ok(value.to_string())
+    }
+}
+
+fn guidance_bytes(message: &crate::llm::ChatMessage) -> usize {
+    message.content.len() + message.attachments.iter().map(|a|a.content.len()).sum::<usize>()
 }
 
 /// Guidance cancels root provider IO only; never a running tool or child agent.
 #[derive(Default)]
 pub struct Guidance(Mutex<Mailbox>);
 impl Guidance {
-    fn enqueue(&self, message: crate::llm::ChatMessage) -> Result<(), String> {
+    /// `accepted` runs under the mailbox lock, so its notice always precedes the `__steering` read.
+    fn enqueue(&self, message: crate::llm::ChatMessage, accepted: impl FnOnce(&PendingGuidance)) -> Result<String, String> {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         crate::llm::validate_attachments(&message.attachments)?;
-        let bytes = message.content.len() + message.attachments.iter().map(|a|a.content.len()).sum::<usize>();
+        let bytes = guidance_bytes(&message);
         if message.content.trim().is_empty() && message.attachments.is_empty() {return Err("empty_message".into());}
         let mut state = self.0.lock().unwrap();
         if state.closed {return Err("chat_not_running".into());}
         if state.accepted >= 16 || bytes > 65536 || state.bytes + bytes > 262144 {return Err("guidance_limit".into());}
         state.accepted += 1; state.bytes += bytes;
-        state.pending.push(message);
+        let id = format!("guide-{}-{}", crate::data::now_millis(), SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        let item = PendingGuidance { id: id.clone(), message };
+        accepted(&item);
+        state.pending.push(item);
         if let Some(io) = &state.io {io.cancel();}
-        Ok(())
+        Ok(id)
+    }
+    /// Takes back guidance the model has not read yet; read guidance stays in the turn.
+    fn withdraw(&self, id: &str) -> Result<crate::llm::ChatMessage, String> {
+        let mut state = self.0.lock().unwrap();
+        let index = state.pending.iter().position(|item|item.id == id).ok_or("guidance_consumed")?;
+        let item = state.pending.remove(index);
+        state.accepted = state.accepted.saturating_sub(1);
+        state.bytes = state.bytes.saturating_sub(guidance_bytes(&item.message));
+        Ok(item.message)
     }
     pub fn pending(&self) -> bool { !self.0.lock().unwrap().pending.is_empty() }
-    pub fn take(&self) -> Vec<crate::llm::ChatMessage> {
+    pub fn take(&self) -> Vec<PendingGuidance> {
         let mut state = self.0.lock().unwrap();state.io = None;std::mem::take(&mut state.pending)
     }
     pub fn begin_io(&self) -> Arc<Cancellation> {
@@ -67,10 +96,16 @@ impl ChatRuns {
         let entry = entries.get(conversation).filter(|e| e.owner == owner).ok_or("chat_not_running")?;
         entry.guidance.close();entry.cancellation.cancel(); Ok(())
     }
-    pub fn steer(&self, owner:&str, conversation:&str, message:crate::llm::ChatMessage)->Result<(),String> {
+    pub fn steer(&self, owner:&str, conversation:&str, message:crate::llm::ChatMessage, accepted: impl FnOnce(&PendingGuidance))->Result<String,String> {
         let entries=self.0.lock().unwrap();
         let entry=entries.get(conversation).filter(|e|e.owner==owner).ok_or("chat_not_running")?;
-        entry.guidance.enqueue(message)
+        entry.guidance.enqueue(message, accepted)
+    }
+    /// A finished turn has already persisted its leftover guidance: nothing to withdraw.
+    pub fn withdraw(&self, owner:&str, conversation:&str, id:&str)->Result<crate::llm::ChatMessage,String> {
+        let entries=self.0.lock().unwrap();
+        let entry=entries.get(conversation).filter(|e|e.owner==owner).ok_or("guidance_consumed")?;
+        entry.guidance.withdraw(id)
     }
     fn finish(&self, conversation: &str) { self.0.lock().unwrap().remove(conversation); }
 }
@@ -102,5 +137,42 @@ impl Drop for Turn<'_> {
         // A fine turno lo stop non ha piu un bersaglio.
         drop(turn);
         assert!(runs.stop("u", "c").is_err());
+    }
+    fn guide(text:&str)->crate::llm::ChatMessage {
+        crate::llm::ChatMessage{role:"user".into(),content:text.into(),attachments:vec![],feedback:None,activity:vec![]}
+    }
+    #[test] fn unread_guidance_can_be_withdrawn_only_by_its_owner_and_only_once() {
+        let runs = ChatRuns::default();
+        let (turn, _) = Turn::start(&runs, "u", "c");
+        let guidance = turn.guidance();
+        let io = guidance.begin_io();
+        let mut notified = String::new();
+        let first = runs.steer("u", "c", guide("first"), |item| notified = item.id.clone()).unwrap();
+        assert_eq!(notified, first);
+        // Accepting guidance still interrupts provider IO at once.
+        assert!(io.is_cancelled());
+        let second = runs.steer("u", "c", guide("second"), |_| {}).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(runs.withdraw("other", "c", &first).unwrap_err(), "guidance_consumed");
+        assert_eq!(runs.withdraw("u", "c", &first).unwrap().content, "first");
+        assert_eq!(runs.withdraw("u", "c", &first).unwrap_err(), "guidance_consumed");
+        let taken = guidance.take();
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].id, second);
+        let event: serde_json::Value = serde_json::from_str(&taken[0].event().unwrap()).unwrap();
+        assert_eq!(event["guidance_id"], second.as_str());
+        assert_eq!(event["content"], "second");
+        // Read guidance is part of the turn: it can no longer be taken back.
+        assert_eq!(runs.withdraw("u", "c", &second).unwrap_err(), "guidance_consumed");
+        drop(turn);
+        assert_eq!(runs.withdraw("u", "c", &second).unwrap_err(), "guidance_consumed");
+    }
+    #[test] fn withdrawn_guidance_frees_its_quota() {
+        let guidance = Guidance::default();
+        let ids: Vec<_> = (0..16).map(|index| guidance.enqueue(guide(&format!("g{index}")), |_| {}).unwrap()).collect();
+        assert_eq!(guidance.enqueue(guide("over"), |_| {}).unwrap_err(), "guidance_limit");
+        guidance.withdraw(&ids[3]).unwrap();
+        guidance.enqueue(guide("replacement"), |_| {}).unwrap();
+        assert!(guidance.take().iter().all(|item| item.message.content != "g3"));
     }
 }

@@ -262,9 +262,9 @@ impl Completion<'_> {
             loop {
                 let guidance = if agent.is_none() {self.guidance.as_ref()} else {None};
                 if let Some(guidance) = guidance {
-                    for message in guidance.take() {
-                        history.extend(api_messages(std::slice::from_ref(&message)));
-                        (self.activity)("__steering", &serde_json::to_string(&message).map_err(|e|e.to_string())?);
+                    for item in guidance.take() {
+                        history.extend(api_messages(std::slice::from_ref(&item.message)));
+                        (self.activity)("__steering", &item.event()?);
                         reply.clear();
                     }
                 }

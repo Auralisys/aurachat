@@ -269,6 +269,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   final outbox = <(String, String), ConversationQueue>{};
   final queueSubscriptions = <StreamSubscription<dynamic>>[];
   ConversationQueue? get currentQueue => outbox[(deviceId, conversationId)];
+  // Guidance already accepted by the PC, editable until the model reads it.
+  final guides = <(String, String), PendingGuides>{};
+  PendingGuides? get currentGuides => guides[(deviceId, conversationId)];
+  (String, String)? guideEdit;
   final composer = TextEditingController();
   final composerFocus = FocusNode();
   final scaffoldKey = GlobalKey<ScaffoldState>();
@@ -636,6 +640,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         )) {
           lane.observeLive(liveTurns[lane.conversation]);
         }
+        syncGuides(watchedDevice);
       });
       flushQueues();
       if (follow) {
@@ -645,6 +650,18 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         });
       }
     }, onError: fail);
+  }
+
+  void syncGuides(String device) {
+    for (final MapEntry(key: conversation, value: live) in liveTurns.entries) {
+      if ((live['guidance'] as List?)?.isNotEmpty ?? false) {
+        guides.putIfAbsent((device, conversation), PendingGuides.new);
+      }
+    }
+    for (final MapEntry(key: key, value: tracker) in guides.entries) {
+      if (key.$1 == device) tracker.sync(liveTurns[key.$2]);
+    }
+    guides.removeWhere((key, tracker) => key.$1 == device && !tracker.running);
   }
 
   Future<void> restoreRequest() async {
@@ -808,8 +825,14 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     if (turnBusy || (currentQueue?.drafts.isNotEmpty ?? false)) {
       final target = conversationId;
       if (target == null) return;
+      final asGuide =
+          guideEdit == (deviceId, target) &&
+          liveTurnRunning(liveTurns[target]);
+      guideEdit = null;
+      late final ConversationQueue lane;
+      final draft = QueuedDraft(const Uuid().v4(), text);
       setState(() {
-        final lane = outbox.putIfAbsent((
+        lane = outbox.putIfAbsent((
           deviceId!,
           target,
         ), () => ConversationQueue(deviceId!, target, projectId));
@@ -824,12 +847,15 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
             lane.paused = 'Controlla la chat prima di inviare la coda.';
           }
         }
-        lane.drafts.add(QueuedDraft(const Uuid().v4(), text));
+        lane.drafts.add(draft);
         composer.clear();
       });
       flushQueues();
+      // An edited guide goes back as guidance, like on desktop.
+      if (asGuide) await sendQueuedNow(lane, draft);
       return;
     }
+    guideEdit = null;
     final isNew = conversationId == null;
     final id = conversationId ?? const Uuid().v4();
     final targetDevice = deviceId!;
@@ -950,6 +976,19 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
               setState(() {
                 if (guide) {
                   lane.finishGuide(draft, accepted: status == 'completed');
+                  final result = snapshot.data()?['result'];
+                  if (status == 'completed' &&
+                      result is Map &&
+                      result['id'] is String &&
+                      lane.device == deviceId) {
+                    guides
+                        .putIfAbsent(
+                          (lane.device, lane.conversation),
+                          PendingGuides.new,
+                        )
+                      ..sync(liveTurns[lane.conversation])
+                      ..accepted(result['id'] as String, draft.text);
+                  }
                 } else {
                   lane.observeRequest(request, status);
                   if (activeRequestId == request) {
@@ -1007,6 +1046,61 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       );
     });
     composerFocus.requestFocus();
+  }
+
+  /// Takes back guidance the model has not read yet. Editing returns the text
+  /// to the composer; the next send while the turn runs is a guide again.
+  Future<void> withdrawGuide(
+    PendingGuides tracker,
+    PendingGuide guide, {
+    bool edit = false,
+  }) async {
+    final device = deviceId, conversation = conversationId;
+    if (device == null ||
+        conversation == null ||
+        guide.withdrawing ||
+        !online) {
+      return;
+    }
+    setState(() => guide.withdrawing = true);
+    try {
+      final result = await api.control(
+        device,
+        conversation,
+        'withdraw_guidance',
+        {'guidance_id': guide.id},
+      );
+      if (!mounted) return;
+      final content = result['content'];
+      final text = content is String && content.trim().isNotEmpty
+          ? content.trim()
+          : guide.text;
+      setState(() {
+        tracker.withdrawn(guide);
+        if (edit) {
+          final base = composer.text.trimRight();
+          final merged = base.isEmpty ? text : '$base\n$text';
+          composer.value = TextEditingValue(
+            text: merged,
+            selection: TextSelection.collapsed(offset: merged.length),
+          );
+          guideEdit = (device, conversation);
+        }
+      });
+      if (edit) composerFocus.requestFocus();
+    } catch (e) {
+      if (!mounted) return;
+      final read =
+          e is StateError &&
+          ['guidance_consumed', 'chat_not_running'].contains(e.message);
+      setState(() {
+        guide.withdrawing = false;
+        if (read) tracker.items.remove(guide);
+        error = read
+            ? 'Il modello ha già letto la guida.'
+            : friendlyError(e);
+      });
+    }
   }
 
   /// Sends this draft now: as guidance while its turn is running, otherwise
@@ -2060,7 +2154,8 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                           : messages.isEmpty &&
                                 !activeRequest &&
                                 activeLiveTurn == null &&
-                                (currentQueue?.drafts.isEmpty ?? true)
+                                (currentQueue?.drafts.isEmpty ?? true) &&
+                                (currentGuides?.items.isEmpty ?? true)
                           ? const Center(
                               child: Padding(
                                 padding: EdgeInsets.all(32),
@@ -2189,6 +2284,25 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                           activeLiveTurn['truncated'] == true,
                                     },
                                   ),
+                                if (currentGuides case final tracker?)
+                                  for (final guide in tracker.items)
+                                    QueuedMessageBubble(
+                                      key: ValueKey('guide-${guide.id}'),
+                                      text: guide.text,
+                                      locked: guide.withdrawing || !online,
+                                      status: guide.withdrawing
+                                          ? 'Annullamento…'
+                                          : 'Guida · in attesa',
+                                      sendNowAction: false,
+                                      deleteLabel: 'Annulla invio',
+                                      onEdit: () => withdrawGuide(
+                                        tracker,
+                                        guide,
+                                        edit: true,
+                                      ),
+                                      onDelete: () =>
+                                          withdrawGuide(tracker, guide),
+                                    ),
                                 if (currentQueue case final lane?)
                                   for (final draft in lane.drafts)
                                     QueuedMessageBubble(

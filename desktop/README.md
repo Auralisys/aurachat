@@ -54,7 +54,12 @@ chiave sono descritti nel runbook; nessun segreto va inserito nel repository.
   compare subito come balloon con bordo tratteggiato, etichetta **In coda** e azioni
   nel menu **…** accanto all'etichetta: **Invia subito**, **Modifica**, **Cancella**,
   come su mobile. Invia subito lo passa come
-  guida al turno attivo. Durante l'apertura del menu, l'aggiornamento visivo dello
+  guida al turno attivo. La guida resta nello stesso punto, sopra il compositore,
+  con etichetta **Guida · in attesa** finche il modello non la legge: dal menu **…**
+  si puo **Modificare** (la ritira e la riporta nel compositore; il nuovo invio
+  riparte come guida) o **Annulla invio**. Il ritiro e atomico rispetto alla
+  lettura del modello: se e gia stata letta compare nella cronologia senza modifica.
+  Durante l'apertura del menu, l'aggiornamento visivo dello
   stream resta sospeso per mantenere ferme le azioni; il testo ricevuto viene
   mostrato alla chiusura senza interrompere il modello.
   Modifica lo riporta nel compositore. Anche la dettatura resta

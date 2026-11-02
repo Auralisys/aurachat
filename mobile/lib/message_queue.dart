@@ -84,3 +84,68 @@ class ConversationQueue {
 
   bool remove(QueuedDraft draft) => operation == null && drafts.remove(draft);
 }
+
+class PendingGuide {
+  PendingGuide(this.id, this.text, this.turn);
+  final String id, text;
+  final String? turn;
+  bool seen = false, withdrawing = false;
+}
+
+/// Guidance accepted by the PC and not yet read by the model. The live turn is
+/// the source of truth; local entries only bridge the gap until it lists them.
+class PendingGuides {
+  final items = <PendingGuide>[];
+  final _withdrawn = <String>{};
+  String? _turn;
+  bool running = false;
+
+  void sync(Map<String, dynamic>? live) {
+    running = live?['status'] == 'running';
+    final turn = live?['turn_id'] as String?;
+    if (turn != _turn) _withdrawn.clear();
+    _turn = turn;
+    if (!running) {
+      items.clear();
+      return;
+    }
+    final listed = <String, String>{};
+    for (final item in (live?['guidance'] as List?) ?? const []) {
+      if (item is Map && item['id'] is String) {
+        listed[item['id'] as String] = item['content'] as String? ?? '';
+      }
+    }
+    final read = {
+      for (final segment in (live?['segments'] as List?) ?? const [])
+        if (segment is Map && segment['guidance_id'] is String)
+          segment['guidance_id'] as String,
+    };
+    items.removeWhere(
+      (guide) =>
+          guide.turn != turn ||
+          read.contains(guide.id) ||
+          guide.seen && !listed.containsKey(guide.id),
+    );
+    for (final MapEntry(key: id, value: text) in listed.entries) {
+      if (_withdrawn.contains(id)) continue;
+      final known = items.where((guide) => guide.id == id).firstOrNull;
+      if (known != null) {
+        known.seen = true;
+      } else {
+        items.add(PendingGuide(id, text, turn)..seen = true);
+      }
+    }
+  }
+
+  void accepted(String id, String text) {
+    if (!running || _withdrawn.contains(id) || items.any((g) => g.id == id)) {
+      return;
+    }
+    items.add(PendingGuide(id, text, _turn));
+  }
+
+  void withdrawn(PendingGuide guide) {
+    _withdrawn.add(guide.id);
+    items.remove(guide);
+  }
+}

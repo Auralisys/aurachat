@@ -233,7 +233,7 @@ async function waitRemoteReceipt(target, requestId, control = false) {
 async function conversationCommand(command, args) {
   const target = remoteTarget(args.conversation_id);
   if (!target) return invoke(command, args);
-  const actions = {stop_chat:'stop',steer_chat:'steer',resolve_approval:'approve',
+  const actions = {stop_chat:'stop',steer_chat:'steer',withdraw_guidance:'withdraw_guidance',resolve_approval:'approve',
     answer_question:'answer_question',stop_subagent:'stop_agent',stop_shell:'stop_shell',list_shells:'chat_recap'};
   const action = actions[command];
   if (!action) throw new Error('unsupported_remote_action');
@@ -326,6 +326,7 @@ async function refreshRemoteTurn(id = state.activeConversationId) {
         const position = run.messages.findIndex((message,index) => index >= guidanceCursor && message.role === 'user' && message.content === pending.message.content);
         if (position >= 0) {pending.consumed = true;guidanceCursor = position + 1;}
       }
+      syncRemoteGuidance(run,snapshot.guidance);
       if (run.stream?.frame) cancelAnimationFrame(run.stream.frame);
       run.stream = {content:snapshot.content || '', shown:(snapshot.content || '').length, activity:snapshot.activity || [], frame:null};
       if (stillActive()) {state.messages = run.messages;renderMessages();updateComposerControls();}
@@ -400,17 +401,24 @@ async function setupChatProgress() {
       run.messages.push(message);
       stream.content='';stream.shown=0;stream.activity=[];
     }
+    else if (payload.kind === '__guidance_queued' || payload.kind === '__guidance_withdrawn') {
+      let item;
+      try {item = JSON.parse(payload.text);} catch (_) {return;}
+      if (payload.kind === '__guidance_queued') {if (!trackQueuedGuidance(run,item)) return;}
+      else dropPendingGuidance(run,item?.id);
+    }
     else if (payload.kind === '__steering') {
       let message;
       try { message = JSON.parse(payload.text); } catch (_) { return; }
       if (!consumeQueuedGuidance(payload.conversation_id, message)) return;
+      delete message.guidance_id;
       if (stream.frame) { cancelAnimationFrame(stream.frame); stream.frame = null; }
       // Keep the partial answer and show the guidance as a normal user turn in chronology.
       if (stream.content || stream.activity.length) run.messages.push({role:'assistant',content:stream.content,activity:stream.activity});
       run.messages.push({...message, guidance:true});
       stream.content = ''; stream.shown = 0; stream.activity = [];
     }
-    if (state.activeConversationId === payload.conversation_id) {renderThinkingStatus();if (['__steering','__question_summary'].includes(payload.kind)) {renderMessages();} else if (payload.kind !== '__delta') {updateLiveTurn();}}
+    if (state.activeConversationId === payload.conversation_id) {renderThinkingStatus();if (['__steering','__question_summary','__guidance_queued','__guidance_withdrawn'].includes(payload.kind)) {renderMessages();} else if (payload.kind !== '__delta') {updateLiveTurn();}}
   });
   // Retain compatibility with native project events emitted by older builds.
   await appWindow.listen('project-tool-activity', ({payload}) => {

@@ -544,3 +544,32 @@ Verifica: `desktop/tests/history-save.cjs`, con mock fedele a `rebase`
 (`data.rs:119`) e `save_tree`, fallisce sul codice precedente e passa ora. Gli
 altri test UI danno esiti identici prima e dopo la correzione. Nessuna modifica
 Rust né nuova versione.
+
+## Guida modificabile finché non viene letta — 2 novembre 2026
+
+Problema: dopo **Invia subito** durante un turno la guida spariva finché il
+modello non la leggeva, quindi non si poteva correggere né ritirare.
+
+Gateway: `Guidance` (`chat_runs.rs`) assegna a ogni guida un id
+`guide-{ms}-{seq}` (`PendingGuidance`). `steer_chat` restituisce `{id}` ed emette
+`__guidance_queued` sotto il lock della casella, quindi sempre prima del
+`__steering` di lettura, che porta `guidance_id`. Nuovo comando
+`withdraw_guidance`: toglie la guida in modo atomico rispetto a `take()` e la
+restituisce, oppure fallisce con `guidance_consumed` se è già stata letta o il
+turno è finito; emette `__guidance_withdrawn`. È anche un'azione remota.
+Il documento `live_turns` aggiunge `guidance` (`[{id, content}]`, guide non
+ancora lette) e `guidance_id` sui segmenti utente letti. Nessun cambio di
+protocollo: i client usano queste funzioni solo se l'id è presente.
+
+Desktop: la guida resta sopra il compositore come **Guida · in attesa**
+(`pendingGuidanceEl`, `queue.js`) con menu **Modifica** e **Annulla invio**.
+Modifica ritira e riporta il testo nel compositore; il nuovo invio, se il turno
+è ancora attivo, riparte come guida (`state.guidanceDraft`). Letta, passa nella
+cronologia senza modifica come prima. Funziona anche sulle chat di un altro
+computer (`syncRemoteGuidance`).
+
+Mobile: `PendingGuides` (`message_queue.dart`) unisce la ricevuta di `steer`
+alla lista live, con le stesse azioni; il bubble nasconde Invia subito.
+
+Verifica: test Rust su id/ritiro e documento live, `tests/pending-guidance.cjs`
+e test Flutter in `queued_bubble_test.dart`.

@@ -32,6 +32,11 @@ dai messaggi salvati. Le domande interattive (`ask_user`) compaiono come schede
 nella chat aperta e si rispondono dal telefono con le stesse azioni del desktop
 (risposta, scelta multipla, testo libero, discuti, salta o chiudi); generano
 anch'esse una notifica quando il turno resta in attesa.
+Un messaggio in coda mandato con **Invia subito** durante un turno resta visibile
+come **Guida · in attesa** finché il modello non lo legge (lista `guidance` del
+documento live, anche per le guide inviate dal desktop): **Modifica** lo ritira
+(`withdraw_guidance`) e lo riporta nel composer, e il nuovo invio torna guida;
+**Annulla invio** lo ritira. Se il modello l'ha già letto resta nella cronologia.
 
 ## Configurazione esterna ancora necessaria
 

@@ -680,7 +680,7 @@ async fn chat_inner(
     let outcome = stop.run(completion).await;
     guidance.close();
     // Stop/error can win before the runner consumes accepted guidance.
-    for message in guidance.take() {progress("__steering",&serde_json::to_string(&message).map_err(|e|e.to_string())?);}
+    for item in guidance.take() {progress("__steering",&item.event()?);}
     if outcome.is_err() {
         app.state::<agent_runs::AgentRuns>().cancel_conversation(&uid,&conversation_id);
         let shells=app.state::<std::sync::Arc<managed_shells::Shells>>().inner().clone();
@@ -860,11 +860,24 @@ async fn install_skill(app:tauri::AppHandle,state:tauri::State<'_,AppState>,sour
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn steer_chat(state: tauri::State<'_, AppState>, conversation_id:String, content:String, attachments:Option<Vec<Attachment>>) -> Result<(),String> {
+fn steer_chat(app:tauri::AppHandle, state: tauri::State<'_, AppState>, conversation_id:String, content:String, attachments:Option<Vec<Attachment>>) -> Result<serde_json::Value,String> {
     let owner=state.firestore.uid().ok_or("login_required")?;
-    state.chat_runs.steer(&owner,&conversation_id,ChatMessage{
-        role:"user".into(),content:clean(&content),attachments:attachments.unwrap_or_default(),feedback:None,activity:vec![],
-    })
+    let message=ChatMessage{role:"user".into(),content:clean(&content),attachments:attachments.unwrap_or_default(),feedback:None,activity:vec![]};
+    // Every client (this window, remote desktops, mobile) shows unread guidance until it is read or withdrawn.
+    let id=state.chat_runs.steer(&owner,&conversation_id,message,|item|{
+        let Ok(mut event)=serde_json::to_value(&item.message) else {return};
+        event["id"]=serde_json::json!(item.id);
+        let _=app.emit("chat-progress",serde_json::json!({"conversation_id":conversation_id,"kind":"__guidance_queued","text":event.to_string()}));
+    })?;
+    Ok(serde_json::json!({"id":id}))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+fn withdraw_guidance(app:tauri::AppHandle, state: tauri::State<'_, AppState>, conversation_id:String, guidance_id:String) -> Result<ChatMessage,String> {
+    let owner=state.firestore.uid().ok_or("login_required")?;
+    let message=state.chat_runs.withdraw(&owner,&conversation_id,&guidance_id)?;
+    let _=app.emit("chat-progress",serde_json::json!({"conversation_id":conversation_id,"kind":"__guidance_withdrawn","text":serde_json::json!({"id":guidance_id}).to_string()}));
+    Ok(message)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1289,6 +1302,7 @@ pub fn run() {
             install_skill,
             stop_chat,
             steer_chat,
+            withdraw_guidance,
             get_locale,
             restore_window,
             save_window_state,

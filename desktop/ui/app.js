@@ -1224,6 +1224,8 @@ async function send() {
     } catch (e) { composerStatus(localizeError(e)); return; }
   }
   setComposerText('');autoGrow();state.attachments=[];state.editingMessageIndex=null;renderDraft();composerStatus();
+  // A withdrawn guide that was edited goes back to the running turn as guidance.
+  const asGuide = state.guidanceDraft === id;state.guidanceDraft = null;
   nameConversationFromMessage(id, text, attachments, editIndex);
   input.focus();
   const message = {content:text, attachments, edit_index:editIndex};
@@ -1232,6 +1234,7 @@ async function send() {
     existing.push(message);state.queues.set(id, existing);
     composerStatus(t('chat.queued'));
     refreshQueue(id);
+    if (asGuide && state.runs.get(id)?.pending) {steerQueuedMessage(id,message);return;}
     // Drain older drafts first; a new message never jumps the FIFO queue.
     if (!state.runs.get(id)?.pending) flushQueue(id);
     return;
@@ -1276,7 +1279,7 @@ function setupComposerExtras() {
     ]);
   };
   $('#composer-attach').onclick=attachFiles;
-  $('#cancel-edit').onclick=()=>{state.editingMessageIndex=null;state.attachments=[];clearComposer();autoGrow();renderDraft();};
+  $('#cancel-edit').onclick=()=>{state.editingMessageIndex=null;state.guidanceDraft=null;state.attachments=[];clearComposer();autoGrow();renderDraft();};
   setupLocalVoice();
 }
 

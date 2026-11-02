@@ -150,6 +150,7 @@ struct LiveTurn {
     reasoning: String,
     activity: Vec<Value>,
     segments: Vec<Value>,
+    guidance: Vec<Value>,
     started_at: u64,
     finished_at: Option<u64>,
     updated_at: u64,
@@ -169,13 +170,27 @@ impl LiveTurn {
     fn finish(&mut self, status: &str, now: u64) {
         self.status = status.into();
         self.finished_at = Some(now);
+        self.guidance.clear();
         self.touch(now);
     }
     fn apply_progress(&mut self, kind: &str, text: &str, now: u64) {
         match kind {
+            "__guidance_queued" => {
+                let Ok(message)=serde_json::from_str::<Value>(text) else {return};
+                let Some(id)=message["id"].as_str() else {return};
+                if self.guidance.iter().any(|item|item["id"]==id) {return;}
+                self.guidance.push(json!({"id":id,"content":truncate_chars(message["content"].as_str().unwrap_or(""),LIVE_MAX_FIELD)}));
+            },
+            "__guidance_withdrawn" => {
+                let Ok(message)=serde_json::from_str::<Value>(text) else {return};
+                let before=self.guidance.len();
+                self.guidance.retain(|item|item["id"]!=message["id"]);
+                if self.guidance.len()==before {return;}
+            },
             "__steering" | "__question_summary" => {
                 let Ok(message)=serde_json::from_str::<Value>(text) else {return};
                 if message["role"]!="user" || !message["content"].is_string(){return;}
+                if let Some(id)=message["guidance_id"].as_str() {self.guidance.retain(|item|item["id"]!=id);}
                 if !self.content.is_empty() || !self.activity.is_empty() {
                     self.segments.push(json!({"role":"assistant","content":std::mem::take(&mut self.content),"reasoning":std::mem::take(&mut self.reasoning),"activity":std::mem::take(&mut self.activity)}));
                 }
@@ -225,11 +240,14 @@ impl LiveTurn {
             "activity": self.activity.iter().rev().take(LIVE_MAX_ACTIVITY).rev().map(sanitize_activity).collect::<Vec<_>>(),
             "segments": self.segments.iter().rev().take(32).rev().map(|segment| {
                 let events=segment["activity"].as_array();
-                json!({"role":segment["role"],"content":truncate_chars(segment["content"].as_str().unwrap_or(""),LIVE_MAX_CONTENT),
+                let mut value=json!({"role":segment["role"],"content":truncate_chars(segment["content"].as_str().unwrap_or(""),LIVE_MAX_CONTENT),
                     "reasoning":truncate_chars(segment["reasoning"].as_str().unwrap_or(""),LIVE_MAX_REASONING),
                     "activity":events.map(|events| events.iter().rev().take(LIVE_MAX_ACTIVITY).rev().map(sanitize_activity).collect::<Vec<_>>()).unwrap_or_default(),
-                    "truncated":segment["content"].as_str().unwrap_or("").chars().count()>LIVE_MAX_CONTENT || events.is_some_and(|events|events.len()>LIVE_MAX_ACTIVITY)})
+                    "truncated":segment["content"].as_str().unwrap_or("").chars().count()>LIVE_MAX_CONTENT || events.is_some_and(|events|events.len()>LIVE_MAX_ACTIVITY)});
+                if let Some(id)=segment["guidance_id"].as_str() {value["guidance_id"]=json!(id);}
+                value
             }).collect::<Vec<_>>(),
+            "guidance": self.guidance,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "updated_at": self.updated_at,
@@ -595,7 +613,7 @@ pub async fn remote_chat_request(state:tauri::State<'_,AppState>,device_id:Strin
     let needs_update=arguments["retry"]==true || arguments.get("edit_index").is_some_and(|index|!index.is_null())
         || arguments["attachments"].as_array().is_some_and(|files|!files.is_empty());
     if needs_update && device["protocol"].as_u64().unwrap_or(0)<6 {return Err("remote_update_required".into());}
-    if !matches!(action.as_str(),"chat"|"steer"|"stop"|"approve"|"answer_question"|"stop_agent"|"stop_shell"|"chat_recap") {
+    if !matches!(action.as_str(),"chat"|"steer"|"withdraw_guidance"|"stop"|"approve"|"answer_question"|"stop_agent"|"stop_shell"|"chat_recap") {
         return Err("unsupported_remote_action".into());
     }
     let mut request=arguments.as_object().cloned().ok_or("invalid_remote_arguments")?;
@@ -835,8 +853,10 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
             return Ok(shell_recap(app.state::<Arc<crate::managed_shells::Shells>>().list(uid,id)));
         },
         "stop"=>return state.chat_runs.stop(uid,id).map(|_|Value::Null),
-        "steer"=>return crate::steer_chat(app.state::<AppState>(),id.into(),request["content"].as_str().ok_or("empty_message")?.into(),
-            request.get("attachments").cloned().map(serde_json::from_value).transpose().map_err(|e|e.to_string())?).map(|_|Value::Null),
+        "steer"=>return crate::steer_chat(app.clone(),app.state::<AppState>(),id.into(),request["content"].as_str().ok_or("empty_message")?.into(),
+            request.get("attachments").cloned().map(serde_json::from_value).transpose().map_err(|e|e.to_string())?),
+        "withdraw_guidance"=>return crate::withdraw_guidance(app.clone(),app.state::<AppState>(),id.into(),request["guidance_id"].as_str().ok_or("invalid_guidance")?.into())
+            .and_then(|message|serde_json::to_value(message).map_err(|e|e.to_string())),
         "stop_agent"=>return crate::stop_subagent(app.state::<AppState>(),app.state::<crate::agent_runs::AgentRuns>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["agent_id"].as_str().ok_or("invalid_agent")?.into()).await.map(|_|Value::Null),
         "stop_shell"=>return crate::stop_shell(app.state::<AppState>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["shell_id"].as_str().ok_or("invalid_shell")?.into()).await
             .and_then(|snapshot|serde_json::to_value(snapshot).map_err(|e|e.to_string())),
@@ -1151,6 +1171,25 @@ fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,Strin
         assert_eq!(document["segments"][2]["content"],"After");
         assert_eq!(document["segments"][3]["content"],"T1\nA");
         assert_eq!(document["content"],"");
+    }
+    #[test]fn live_guidance_lists_unread_guides_until_read_withdrawn_or_finished(){
+        let mut turn=LiveTurn::running(1,Some("u".into()),"t","Original");
+        turn.apply_progress("__guidance_queued",r#"{"id":"g1","role":"user","content":"First","attachments":[]}"#,2);
+        turn.apply_progress("__guidance_queued",r#"{"id":"g2","role":"user","content":"Second","attachments":[]}"#,3);
+        turn.apply_progress("__guidance_queued",r#"{"id":"g2","role":"user","content":"Second","attachments":[]}"#,4);
+        assert_eq!(turn.document("c")["guidance"],json!([{"id":"g1","content":"First"},{"id":"g2","content":"Second"}]));
+        let revision=turn.revision;
+        turn.apply_progress("__guidance_withdrawn",r#"{"id":"missing"}"#,5);
+        assert_eq!(turn.revision,revision);
+        turn.apply_progress("__guidance_withdrawn",r#"{"id":"g1"}"#,6);
+        turn.apply_progress("__steering",r#"{"role":"user","content":"Second","attachments":[],"guidance_id":"g2"}"#,7);
+        let document=turn.document("c");
+        assert_eq!(document["guidance"],json!([]));
+        assert_eq!(document["segments"][0]["content"],"Second");
+        assert_eq!(document["segments"][0]["guidance_id"],"g2");
+        turn.apply_progress("__guidance_queued",r#"{"id":"g3","role":"user","content":"Late","attachments":[]}"#,8);
+        turn.finish("completed",9);
+        assert_eq!(turn.document("c")["guidance"],json!([]));
     }
     #[test]fn phone_pushes_follow_only_chats_opened_on_the_phone(){
         let mut watches=PushWatches::default();
