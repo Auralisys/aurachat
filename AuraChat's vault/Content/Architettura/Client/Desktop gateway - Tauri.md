@@ -519,3 +519,28 @@ torna reattivo senza abilitare push. Stima: per desktop acceso ~10k letture e
 6–8k scritture al giorno. Verifiche: 95 test Rust della lib (inclusi i nuovi
 test su watch, throttling e origine richieste), `flutter analyze` e 53 test
 mobile. Nessuna reinstallazione, deploy o nuova versione.
+
+## Errore `use_save_conversation` intermittente — 2 novembre 2026
+
+Sintomo: ogni tanto «Errore: use_save_conversation» creando, rinominando o
+eliminando una chat, anche appena creata. Non era stato risolto prima: serviva
+una sequenza precisa, quindi non si riproduceva a ogni avvio.
+
+Causa: dopo un turno completato nella chat aperta, `state.messages` e la
+cronologia in `state.data` erano lo stesso array. Il messaggio del turno
+successivo (`dispatchMessage`) finiva così anche nei dati da salvare. Un
+`persist()` durante quel turno inviava N+1 messaggi contro gli N in cache, e
+`save_tree` lo rifiutava (`firestore.rs:315`); con revisione cambiata l'errore
+era `conversation_conflict`. Stesso effetto dopo un turno arrivato dal telefono
+(`companion-updated`, `refreshRemoteTurn`).
+
+Correzione solo UI: copie separate in `app.js:191`, `app.js:1067`,
+`app.js:1614-1615` e `chat-progress.js:341`. La cronologia salvata non era a
+rischio, perché Rust rifiutava la scrittura. La traduzione
+`errors.use_save_conversation` (it/en) sostituisce il codice grezzo. Un invio
+fallito in background resta recuperabile con Riprova (`failedSend`).
+
+Verifica: `desktop/tests/history-save.cjs`, con mock fedele a `rebase`
+(`data.rs:119`) e `save_tree`, fallisce sul codice precedente e passa ora. Gli
+altri test UI danno esiti identici prima e dopo la correzione. Nessuna modifica
+Rust né nuova versione.

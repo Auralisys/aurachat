@@ -242,6 +242,7 @@
   "chat.reading_file": "Lettura file",
   "chat.listing_folder": "Esplorazione cartella",
   "errors.conversation_conflict": "Questa chat è cambiata su un altro dispositivo. Riaprila prima di riprovare.",
+  "errors.use_save_conversation": "Non è stato possibile salvare la modifica perché la cronologia della chat non era aggiornata. La cronologia salvata è rimasta intatta: riprova.",
   "errors.incomplete_conversation": "La cronologia non è completa. Riapri la chat per riprovare.",
   "errors.history_operation_too_large": "Questa modifica coinvolge troppi messaggi. La cronologia salvata è rimasta intatta.",
   "errors.message_too_large": "Questo messaggio è troppo grande per essere salvato: un singolo messaggio può occupare circa 0,9 MB. Accorcia il testo o rimuovi gli allegati e riprova. La cronologia salvata è rimasta intatta.",

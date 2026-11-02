@@ -338,7 +338,7 @@ async function refreshRemoteTurn(id = state.activeConversationId) {
       if (baseline) Object.assign(baseline, structuredClone(saved));
       if (run) run.pending = false;
       state.runs.delete(id);
-      let messages = saved.messages || [];
+      let messages = (saved.messages || []).slice();
       if (!snapshot && run?.stream && saved.updated_at < run.since) {
         messages = [...run.messages, {role:'assistant',content:run.stream.content,activity:run.stream.activity}];
         queuedTurns.paused.add(id);

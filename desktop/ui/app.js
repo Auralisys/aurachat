@@ -188,7 +188,7 @@ async function persist() {
     // A background answer can arrive before this older save response.
     for (const [id, run] of state.runs) {
       if (run.completedEpoch > epoch && run.saved) {
-        const target = conversationInData(data, id);if (target) Object.assign(target, run.saved);
+        const target = conversationInData(data, id);if (target) Object.assign(target, structuredClone(run.saved));
       }
     }
     state.data = data;state.persistedData = structuredClone(data);
@@ -1062,7 +1062,9 @@ async function requestChat(payload) {
     if (target?.title_state === 'manual' || (saved?.title_state === 'pending' && ['generating','generated','failed'].includes(target?.title_state))) {
       run.saved.title = target.title;run.saved.title_state = target.title_state;
     }
-    if (target) Object.assign(target, run.saved);
+    // The open chat keeps its own array: a later push for the next turn must
+    // never leak into data that sidebar saves send to save_data.
+    if (target) Object.assign(target, structuredClone(run.saved));
     const baseline = state.persistedData && conversationInData(state.persistedData, id);if (baseline) Object.assign(baseline, structuredClone(run.saved));
     if (result.cancelled && state.activeConversationId === id) composerStatus(t('chat.stopped'));
     return true;
@@ -1609,8 +1611,8 @@ async function init() {
       state.data = data;state.persistedData = structuredClone(data);
       if (state.activeConversationId && !findConversation(state.activeConversationId)) clearChat();
       const active = findConversation(state.activeConversationId)?.conversation;
-      if (active?.messages_loaded) { state.messages = active.messages;renderMessages();updateContextInfo(); }
-      if (run?.external) {run.messages=conversationInData(data,payload.conversation_id)?.messages || run.messages;stopTimer();}
+      if (active?.messages_loaded) { state.messages = active.messages.slice();renderMessages();updateContextInfo(); }
+      if (run?.external) {run.messages=(conversationInData(data,payload.conversation_id)?.messages || run.messages).slice();stopTimer();}
       if (run?.external && state.activeConversationId !== payload.conversation_id) state.unread.add(payload.conversation_id);
       renderSidebar();updateComposerControls();
       // The turn ended elsewhere: continue this chat's local FIFO queue.

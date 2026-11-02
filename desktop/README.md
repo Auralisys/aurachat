@@ -677,6 +677,13 @@ native. All'avvio si legge il tree; la singola cronologia viene letta quando si
 apre la chat. I turni aggiornano solo i messaggi cambiati, con commit atomico e
 precondizioni sulle versioni. I conflitti richiedono di riaprire la chat.
 
+I salvataggi della sidebar (`save_data`) cambiano struttura, nomi e feedback;
+i testi dei messaggi li scrive solo il turno, a fine risposta. Per questo la UI
+non condivide mai gli array dei messaggi tra chat aperta, turno in corso e dati
+da salvare (`.slice()`/`structuredClone`): un messaggio ancora in corso finito
+nel salvataggio viene rifiutato con `use_save_conversation`. Regressione:
+`tests/history-save.cjs`.
+
 La migrazione crea un backup privato completo in `migration-backups/` dentro
 la cartella configurazione, copia e rilegge i documenti preservando ID, ordine,
 allegati e feedback, quindi sostituisce il vecchio tree con la proiezione v2.

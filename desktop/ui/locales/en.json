@@ -242,6 +242,7 @@
   "chat.reading_file": "Reading file",
   "chat.listing_folder": "Listing folder",
   "errors.conversation_conflict": "This chat changed on another device. Reopen it before retrying.",
+  "errors.use_save_conversation": "The change could not be saved because the chat history was out of date. Saved history is unchanged: please retry.",
   "errors.incomplete_conversation": "History is incomplete. Reopen the chat to retry.",
   "errors.history_operation_too_large": "This change affects too many messages. Saved history is unchanged.",
   "errors.message_too_large": "This message is too large to save: a single message can use about 0.9 MB. Shorten the text or remove attachments, then retry. Saved history is unchanged.",

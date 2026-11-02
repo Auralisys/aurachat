@@ -45,6 +45,21 @@ La prova completa con microfono fisico e dialoghi permessi nel WebView Tauri
 resta manuale. Dimensioni provate, advisory del detector e screenshot in
 [[UI desktop - Refactor flat]].
 
+Aggiornamento 2 novembre 2026: molti test UI legacy non sono più verdi per mock
+superati, non per regressioni. L'avvio chiama `refresh_data`, gestito solo da
+`voice-flow.cjs`, e il compositore è un `div` contenteditable, quindi
+`inputValue()` fallisce. Anche correggendo i mock in copie temporanee restano
+rossi, identici prima e dopo l'ultima correzione: `background-chats`,
+`lazy-history`, `sidebar-selection`, `ui-smoke` e `skills`.
+
+## Titolo AI perso in corsa con il salvataggio — 2 novembre 2026
+
+Possibile, non riprodotto né corretto. Al primo messaggio la UI salva il titolo
+provvisorio senza attendere, mentre `chat_inner` imposta senza lock
+`title_state: pending` e `model` (`lib.rs:609-617`). Se il salvataggio termina
+dopo, `save_data` sostituisce la cache (`lib.rs:435-437`) e perde quei campi: la
+chat resta senza titolo AI. Dettagli del salvataggio in [[Desktop gateway - Tauri]].
+
 
 ## Lettura estesa dei vault
 
