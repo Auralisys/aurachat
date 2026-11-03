@@ -13,7 +13,11 @@ function respond(request) {
     const second = request.params?.cursor === 'next';
     result = {tools:[{name:second ? 'fixture_other' : 'lookup_record',description:'Offline fixture',inputSchema:{type:'object',properties:{id:{type:'string'}}}}],...(second ? {} : {nextCursor:'next'})};
   } else if (request.method === 'tools/call') {
-    result = {content:[{type:'text',text:`Fixture record: ${request.params.arguments.id}`}],isError:request.params.arguments.id === 'error'};
+    const id = request.params.arguments.id;
+    const content = [{type:'text',text:`Fixture record: ${id}`}];
+    // 1x1 PNG, like a browser screenshot tool result.
+    if (id === 'screenshot') content.push({type:'image',mimeType:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='});
+    result = {content,isError:id === 'error'};
   } else {
     return {jsonrpc:'2.0',id:request.id,error:{code:-32601,message:'Unsupported method'}};
   }

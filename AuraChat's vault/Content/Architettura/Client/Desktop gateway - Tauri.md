@@ -442,7 +442,8 @@ e abilitazione remota. Le richieste hanno ID univoci e vengono create una volta
 sola, senza retry automatico in caso di esito ambiguo. Le letture delle ricevute
 escludono contenuto e allegati; quelle dei dispositivi escludono i cataloghi skill.
 Permessi ed esecuzione degli strumenti restano sul computer di destinazione.
-Il protocollo 6 aggiunge allegati testuali, modifica e rigenerazione al relay chat;
+Il protocollo 6 aggiunge allegati testuali, modifica e rigenerazione al relay chat,
+il protocollo 8 le immagini;
 se il gateway e precedente viene richiesto l'aggiornamento invece di perdere
 silenziosamente i campi. Il companion mobile resta compatibile.
 
@@ -608,3 +609,50 @@ desktop, italiano sul mobile).
 Verifica: test Rust su riconoscimento degli errori dei vari provider, taglio
 della cronologia e ripetizione con server locale (400, poi richiesta compattata,
 poi richiesta successiva già adattata). Suite nativa: 101 superati.
+
+## Immagini in input e output — 3 novembre 2026
+
+Richiesta: implementare input e output di immagini secondo la guida vision di
+DeepSeek (https://api-docs.deepseek.com/guides/vision/), sia con il pulsante
+allegati sia con Ctrl+V, con anteprima nel riquadro di scrittura come in
+ChatGPT. "Output" è stato interpretato come visualizzazione delle immagini nei
+messaggi e di quelle restituite dagli strumenti MCP: nessuna generazione.
+
+Desktop (`desktop/ui/images.js`, `app.js`): + (`choose_chat_files`, filtri
+testo/immagini, massimo 20 MiB per file) e Ctrl+V (se negli appunti c'è anche
+testo vince il testo). Formato riconosciuto dai byte, lato massimo 2048 px e
+1,7 MP; JPEG, file oltre 512 KiB e immagini fuori limite vengono ricodificati.
+Fino a 8 immagini e 6 MiB per messaggio, oltre a 4 file di testo. Le miniature
+del riquadro sono quadrati da 120 px (96 sotto i 600 px) con X sull'angolo e
+uno scheletro durante la preparazione, che avviene in coda una alla volta e
+torna sempre nella bozza della chat d'origine; Invia resta disabilitato finché
+la preparazione non termina. Nei messaggi le miniature stanno sopra il fumetto;
+il visualizzatore (`<dialog>`) ha frecce, ←/→, Esc, didascalia e restituisce il
+focus. I messaggi di sola immagine non mostrano un fumetto vuoto né "Copia".
+
+Gateway (`llm.rs`): `Attachment` ha `mime_type` e `data` (base64).
+`validate_attachments` controlla tipo reale, lato massimo 4096 px, 3 MiB per
+immagine e 6 MiB per messaggio; `chat_runs.rs` applica lo stesso totale al turno,
+guida inclusa. `api_messages` produce parti `image_url` con data URL nei soli
+messaggi utente, precedute da `[Attached image: nome]`. `cap_images` limita ogni
+richiesta a 20 immagini e 12 MiB (prima il messaggio corrente, poi le più
+recenti); nel contesto ogni immagine vale 6000 byte. Se il provider risponde che
+il modello non legge immagini (`images_unsupported`), l'endpoint/modello viene
+ricordato: con immagini nel messaggio corrente l'errore arriva all'utente,
+altrimenti le immagini della cronologia diventano note e la richiesta riparte.
+
+Strumenti (`mcp.rs`): le parti `image` dei risultati MCP escono dal testo; oltre
+3 MB o 4096 px diventano una nota che chiede uno screenshot più piccolo. Il
+modello le riceve in un messaggio utente successivo marcato come output non
+attendibile; la UI riceve `__tool_images` e le mostra nello step espanso,
+in una cache LRU da 64 MiB solo in memoria (si perdono al riavvio).
+
+Persistenza e remoto: le immagini dei messaggi sono salvate nella cronologia
+Firestore, divisa in parti da ~700 KB, con il relativo costo di spazio e
+traffico. `RELAY_PROTOCOL` sale a 8: il controllo remoto da desktop invia
+immagini solo a gateway aggiornati (`remote_update_required` altrimenti). I
+messaggi del turno live verso il telefono non includono le immagini, che
+arrivano con la cronologia. Il telefono le visualizza ma non può allegarle.
+
+Verifica: `desktop/tests/image-attachments.cjs` e test Rust su tipi, limiti,
+conversione delle richieste, immagini degli strumenti e modelli senza visione.

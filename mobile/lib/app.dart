@@ -23,6 +23,7 @@ import 'skills_page.dart';
 import 'chat_actions.dart';
 import 'chat_recap.dart';
 import 'question_card.dart';
+import 'message_images.dart';
 
 final push = PushNotifications();
 void startAuraChat() {
@@ -2541,6 +2542,14 @@ String remoteError(String? error) => switch (error) {
     'Configura un modello sul desktop prima di inviare messaggi.',
   'context_too_large' =>
     'La conversazione supera il contesto del modello. Avvia una nuova chat o scegli un modello con un contesto più ampio.',
+  'images_unsupported' =>
+    'Il modello selezionato sul PC non legge le immagini. Scegline uno con supporto visivo.',
+  'image_too_large' =>
+    'Immagini troppo grandi: il limite è circa 6 MB in totale per messaggio.',
+  'image_unreadable' =>
+    'Il PC non riesce a leggere l’immagine. Usa un file PNG, JPEG, GIF o WebP.',
+  'invalid_message_size' =>
+    'Messaggio troppo grande per il controllo remoto. Accorcialo o invia meno allegati.',
   _ => 'Il desktop non ha completato la richiesta. Controlla AuraChat sul PC.',
 };
 
@@ -2618,52 +2627,67 @@ class MessageView extends StatelessWidget {
         ),
       );
     }
+    final content = message['content'] as String? ?? '';
+    final images = messageImages(message['attachments']);
     return Padding(
       padding: const EdgeInsets.only(bottom: 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          LayoutBuilder(
-            builder: (context, constraints) => Align(
-              alignment: user ? Alignment.centerRight : Alignment.centerLeft,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: constraints.maxWidth * (user ? .88 : 1),
-                ),
-                child: Container(
-                  padding: user
-                      ? const EdgeInsets.symmetric(horizontal: 18, vertical: 13)
-                      : EdgeInsets.zero,
-                  decoration: user
-                      ? BoxDecoration(
-                          color: bubble,
-                          borderRadius: BorderRadius.circular(24),
-                        )
-                      : null,
-                  child: MarkdownBody(
-                    data: message['content'] as String? ?? '',
-                    selectable: true,
-                    styleSheet: MarkdownStyleSheet(
-                      p: const TextStyle(
-                        fontSize: 16,
-                        height: 1.6,
-                        color: textColor,
-                      ),
-                      code: const TextStyle(color: orchid, fontSize: 14),
-                      blockquoteDecoration: BoxDecoration(
-                        color: panel,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      codeblockDecoration: BoxDecoration(
-                        color: sidebar,
-                        borderRadius: BorderRadius.circular(12),
+          if (images.isNotEmpty)
+            LayoutBuilder(
+              builder: (context, constraints) => ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: constraints.maxWidth * .88),
+                child: MessageImages(images: images),
+              ),
+            ),
+          if (images.isNotEmpty && content.trim().isNotEmpty)
+            const SizedBox(height: 8),
+          if (images.isEmpty || content.trim().isNotEmpty)
+            LayoutBuilder(
+              builder: (context, constraints) => Align(
+                alignment: user ? Alignment.centerRight : Alignment.centerLeft,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: constraints.maxWidth * (user ? .88 : 1),
+                  ),
+                  child: Container(
+                    padding: user
+                        ? const EdgeInsets.symmetric(
+                            horizontal: 18,
+                            vertical: 13,
+                          )
+                        : EdgeInsets.zero,
+                    decoration: user
+                        ? BoxDecoration(
+                            color: bubble,
+                            borderRadius: BorderRadius.circular(24),
+                          )
+                        : null,
+                    child: MarkdownBody(
+                      data: content,
+                      selectable: true,
+                      styleSheet: MarkdownStyleSheet(
+                        p: const TextStyle(
+                          fontSize: 16,
+                          height: 1.6,
+                          color: textColor,
+                        ),
+                        code: const TextStyle(color: orchid, fontSize: 14),
+                        blockquoteDecoration: BoxDecoration(
+                          color: panel,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        codeblockDecoration: BoxDecoration(
+                          color: sidebar,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );

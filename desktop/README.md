@@ -95,8 +95,9 @@ Messaggi, coda, **Invia subito**, **Stop**, domande interattive e approvazioni
 usano le richieste `devices/{device}/requests` del companion: l'esecuzione e i
 permessi restano sul computer di origine. La destinazione resta associata alla
 chat anche dopo la fine del turno, per poter continuare la conversazione da remoto.
-Allegati testuali, modifica e rigenerazione richiedono protocollo 6 sul gateway;
-i vecchi gateway vengono segnalati prima di inviare operazioni non supportate.
+Allegati testuali, modifica e rigenerazione richiedono protocollo 6 sul gateway,
+le immagini protocollo 8; i vecchi gateway vengono segnalati prima di inviare
+operazioni non supportate.
 Nessun errore remoto fa ripartire il messaggio in locale e gli esiti incerti non
 sono reinviati automaticamente.
 Il controllo avviene all'apertura, poi ogni 3 secondi durante il turno (15 quando
@@ -306,9 +307,9 @@ I due eventi usano `{conversation_id, id, title, kind, summary?, content?, url?,
 contenuti sono testo inerte. Le immagini accettano URL HTTP(S) o data URL raster
 PNG/JPEG/WebP/GIF. I percorsi locali sono mostrati come riferimento; non sono eseguiti.
 Gli artefatti e le fonti ricevuti tramite eventi durano per la sessione. Allegati e
-link nei messaggi si ricostruiscono dalla cronologia salvata. Il selettore allegati
-attuale accetta ancora solo file testuali: questa UI non abilita l'upload multimodale
-né una pipeline di generazione immagini/file.
+link nei messaggi si ricostruiscono dalla cronologia salvata. Le immagini allegate
+compaiono tra le fonti con anteprima (vedi «Immagini in input e output»); non
+esiste una pipeline di generazione immagini/file.
 
 La sezione **Shell** è la console di debug della sessione: elenca tutti i comandi
 della conversazione, non solo quelli attivi. Ogni riga mostra il comando leggibile
@@ -580,7 +581,8 @@ Markdown sanificato, blocchi di codice copiabili e azioni sui messaggi:
 copia, modifica, rigenera, feedback e lettura tramite le voci del sistema.
 Il titolo apre le azioni della conversazione e i token stanno nel dettaglio
 contesto. Il pulsante + sceglie fino a quattro file di testo (128 KiB ciascuno,
-256 KiB complessivi); i contenuti partono solo insieme al messaggio inviato.
+256 KiB complessivi) e fino a otto immagini, che si possono anche incollare con
+Ctrl+V; i contenuti partono solo insieme al messaggio inviato.
 
 Impostazioni → Voce gestisce Cohere Transcribe INT4 (~2 GB): download da una
 revisione immutabile, controllo SHA-256, interruzione/ripresa e rimozione locale.
@@ -1009,3 +1011,47 @@ degli strumenti più vecchi, elimina i turni più vecchi e, se serve, i giri di
 strumenti del turno corrente tranne l'ultimo, mantenendo valide le coppie
 `tool_calls`/risultati. La conversazione salvata non viene modificata. Se non si
 rientra nel limite l'errore è `context_too_large`.
+
+## Immagini in input e output (3 novembre 2026)
+
+Le immagini PNG, JPEG, GIF e WebP si allegano con il pulsante + oppure con
+Ctrl+V nel campo di scrittura; se gli appunti contengono anche testo viene
+incollato solo il testo. Nel riquadro compaiono come miniature quadrate sopra il
+testo, con una X per rimuoverle e uno scheletro durante la preparazione; Invia
+resta disabilitato finché la preparazione non termina. Cambiare chat nel
+frattempo non sposta l'immagine: finisce nella bozza della chat d'origine (una
+chat nuova non ancora salvata la perde).
+
+`images.js` riconosce il formato dai byte, rifiuta file oltre 20 MiB e riduce
+le immagini a 2048 px per lato e 1,7 MP; JPEG, file oltre 512 KiB e immagini
+fuori limite vengono ricodificati. Massimo 8 immagini e 6 MiB complessivi per
+messaggio. Il gateway ricontrolla tipo reale, lato massimo 4096 px, 3 MiB per
+immagine e 6 MiB per messaggio o turno, guida inclusa. Errori:
+`image_unreadable`, `image_too_large`, `invalid_attachments`.
+
+Verso il modello (`llm.rs`) ogni immagine è una parte `image_url` con data URL
+base64, preceduta dal nome del file, nel messaggio utente (guida vision di
+DeepSeek). Ogni richiesta porta al massimo 20 immagini e 12 MiB: prima quelle
+del messaggio corrente, poi le più recenti; le altre diventano una nota. Nel
+calcolo del contesto un'immagine vale 6000 byte. Se il modello rifiuta le
+immagini, la coppia endpoint/modello viene ricordata in memoria: con immagini
+nel messaggio corrente l'errore è `images_unsupported`, altrimenti la richiesta
+riparte con le immagini della cronologia sostituite da note.
+
+Output: i messaggi mostrano le immagini sopra il testo (miniature da 128 px;
+un'immagine singola mantiene le proporzioni fino a 260 px) e il clic apre il
+visualizzatore con frecce, tasti ←/→, Esc e didascalia. Le immagini restituite
+dagli strumenti MCP (`content` di tipo `image`) escono dal risultato testuale:
+lo step mostra l'anteprima e il modello le riceve in un messaggio utente
+successivo, marcato come output non attendibile dello strumento. Immagini MCP
+oltre 3 MB o 4096 px diventano una nota che suggerisce uno screenshot più
+piccolo. Le anteprime degli strumenti restano in memoria (cache LRU da 64 MiB)
+e non sopravvivono al riavvio; le immagini dei messaggi vengono salvate nella
+cronologia Firestore (divisa in parti da ~700 KB), con il relativo costo di
+spazio e traffico. Il controllo remoto invia immagini solo a gateway con
+protocollo 8. Non sono previsti generazione di immagini né trascinamento dei file.
+
+Verifica: `desktop/tests/image-attachments.cjs` (incolla, +, rimozione, nomi
+duplicati, argomenti `chat`, visualizzatore da tastiera, immagini degli
+strumenti, chat d'origine, limiti, file illeggibili) e test Rust su tipi,
+limiti, conversione delle richieste e modelli senza visione.

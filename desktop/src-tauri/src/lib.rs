@@ -582,7 +582,7 @@ async fn chat_inner(
     drop(account);
     let user = load_user_cached(&state, &auth, &uid).await?;
     // Registra il turno prima della richiesta, per poterlo fermare dallo stop.
-    let (turn, stop) = chat_runs::Turn::start(&state.chat_runs, &uid, &conversation_id);
+    let (turn, stop) = chat_runs::Turn::start(&state.chat_runs, &uid, &conversation_id, if retry {0} else {llm::image_data_len(&attachments)});
     let guidance = turn.guidance();
     let effective_model = state.data.lock().unwrap().find_conversation(&conversation_id).and_then(|c| c.model.clone()).unwrap_or_else(|| user.active_model.clone());
     let mc = user.models.get(&effective_model).ok_or("model_not_found")?;
@@ -783,7 +783,7 @@ async fn generate_chat_title(app:&tauri::AppHandle,owner:&str,conversation:&data
     let key=user.model_key(config);
     if !change_auto_title(app,owner,conversation,"pending",&conversation.title,"generating").await? {return Ok(());}
     let prompt=conversation.messages.iter().find(|message|message.role=="user").map(|message| {
-        if message.content.trim().is_empty() {message.attachments.iter().map(|file|file.name.as_str()).collect::<Vec<_>>().join(", ")}
+        if message.content.trim().is_empty() {message.attachments.iter().map(|file|if file.is_image() {format!("image: {}",file.name)} else {file.name.clone()}).collect::<Vec<_>>().join(", ")}
         else {message.content.clone()}
     }).unwrap_or_default();
     let reply=conversation.messages.iter().find(|message|message.role=="assistant").map(|message|message.content.as_str()).unwrap_or("");
@@ -893,24 +893,41 @@ fn open_external_url(app:tauri::AppHandle, url:String) -> Result<(),String> {
     app.opener().open_url(parsed.as_str(), None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Picked images are returned as-is; the UI scales and re-encodes them before sending.
 #[tauri::command]
 async fn choose_chat_files(window:tauri::WebviewWindow) -> Result<Vec<Attachment>,String> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    const MAX_PICKED_IMAGE: usize = 20 << 20;
+    const IMAGES: [&str; 5] = ["png","jpg","jpeg","gif","webp"];
+    const TEXTS: [&str; 14] = ["txt","md","json","csv","log","js","ts","rs","py","html","css","toml","yaml","yml"];
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::Read;
+        let all = TEXTS.iter().chain(IMAGES.iter()).copied().collect::<Vec<_>>();
         let paths = window.dialog().file().set_parent(&window)
-            .add_filter("Text files", &["txt","md","json","csv","log","js","ts","rs","py","html","css","toml","yaml","yml"])
+            .add_filter("Text and images", &all)
+            .add_filter("Images", &IMAGES)
+            .add_filter("Text files", &TEXTS)
             .blocking_pick_files().unwrap_or_default();
-        if paths.len() > 4 { return Err("invalid_attachments".into()); }
         let mut files = Vec::new();
         for path in paths {
             let path = path.into_path().map_err(|e| e.to_string())?;
             let name = path.file_name().and_then(|n| n.to_str()).ok_or("invalid_attachments")?.to_string();
+            let image_name = path.extension().and_then(|e| e.to_str()).is_some_and(|e| IMAGES.contains(&e.to_ascii_lowercase().as_str()));
             let mut bytes = Vec::new();
-            std::fs::File::open(&path).map_err(|e| e.to_string())?.take(131073).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-            let content = String::from_utf8(bytes).map_err(|_| "invalid_attachments")?;
-            files.push(Attachment {name,content});
+            std::fs::File::open(&path).map_err(|e| e.to_string())?.take(MAX_PICKED_IMAGE as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+            if let Some(mime) = llm::image_mime(&bytes) {
+                if bytes.len() > MAX_PICKED_IMAGE { return Err("image_too_large".into()); }
+                files.push(Attachment::image(name, mime, BASE64.encode(&bytes)));
+            } else if image_name {
+                return Err("image_unreadable".into());
+            } else {
+                if bytes.len() > 131072 { return Err("invalid_attachments".into()); }
+                files.push(Attachment::text(name, String::from_utf8(bytes).map_err(|_| "invalid_attachments")?));
+            }
         }
-        llm::validate_attachments(&files)?;
+        let images = files.iter().filter(|file| file.is_image()).count();
+        if images > llm::MAX_IMAGES || files.len() - images > 4 { return Err("invalid_attachments".into()); }
+        llm::validate_attachments(&files.iter().filter(|file| !file.is_image()).cloned().collect::<Vec<_>>())?;
         Ok(files)
     }).await.map_err(|e| e.to_string())?
 }

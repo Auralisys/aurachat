@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'companion.dart';
 import 'git_changes.dart';
+import 'message_images.dart';
 import 'turn_history.dart';
 import 'ui.dart';
 
@@ -245,7 +246,10 @@ class _ChatRecapPageState extends State<ChatRecapPage> {
 
   Future<void> openSource(Map<String, dynamic> source) async {
     final url = source['url'];
-    if (url is String) {
+    final image = messageImage(source);
+    if (image != null) {
+      await openImageViewer(context, [image], 0);
+    } else if (url is String) {
       try {
         if (!await launchUrl(
           Uri.parse(url),
@@ -387,9 +391,11 @@ class _ChatRecapPageState extends State<ChatRecapPage> {
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(
-                      source['url'] == null
-                          ? Icons.attach_file_rounded
-                          : Icons.language_rounded,
+                      source['url'] is String
+                          ? Icons.language_rounded
+                          : source['data'] is String
+                          ? Icons.image_outlined
+                          : Icons.attach_file_rounded,
                     ),
                     title: Text(source['name']?.toString() ?? 'Allegato'),
                     subtitle: source['url'] is String

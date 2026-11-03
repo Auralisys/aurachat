@@ -77,6 +77,10 @@
 .activity-panel__content .markdown table { display:block; overflow:auto; }
 .activity-source-content { white-space:pre-wrap; font-family:var(--font-mono, monospace); font-size:12px; line-height:1.7; }
 .activity-image { display:block; max-width:100%; height:auto; margin:16px 0; border-radius:8px; }
+.activity-image-open { display:block; max-width:100%; margin:16px 0; padding:0; border-radius:8px; cursor:zoom-in; }
+.activity-image-open .activity-image { margin:0; }
+.activity-image-open:hover { background:transparent; }
+.activity-image-open:focus-visible { outline-offset:-2px; }
 .activity-open-link,.activity-stop { min-height:36px; padding:8px 12px; border-radius:8px; background:var(--c-hover); color:var(--c-text); }
 .activity-terminal,.activity-shell-command { white-space:pre-wrap; overflow-wrap:anywhere; font-family:Consolas,monospace; font-size:12px; line-height:1.7; padding:12px; border-radius:8px; background:var(--c-sidebar); }
 .activity-terminal { min-height:160px; }

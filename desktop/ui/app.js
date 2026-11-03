@@ -956,14 +956,16 @@ function messageEl(m, index) {
     });
     text.querySelectorAll('table').forEach(table => {const scroll = document.createElement('div');scroll.className='markdown-table';table.replaceWith(scroll);scroll.appendChild(table);});
   } else text.textContent = m.content;
+  const images = (m.attachments || []).filter(isImageAttachment), files = (m.attachments || []).filter(file => !isImageAttachment(file));
+  if (images.length) el.appendChild(messageImagesEl(images));
   if (m.content || m.activity?.length) el.appendChild(text);
-  if (m.attachments?.length) {
+  if (files.length) {
     const attachments = document.createElement('div');attachments.className = 'message-attachments';
-    for (const file of m.attachments) {const chip = document.createElement('span');chip.className = 'attachment-chip';chip.append(icon('file'),document.createTextNode(file.name));attachments.appendChild(chip);}
+    for (const file of files) {const chip = document.createElement('span');chip.className = 'attachment-chip';chip.append(icon('file'),document.createTextNode(file.name));attachments.appendChild(chip);}
     el.appendChild(attachments);
   }
   const actions = document.createElement('div');actions.className = 'msg-actions';
-  actions.appendChild(messageAction('copy','chat.copy',button => copyText(m.content,button)));
+  if (m.content) actions.appendChild(messageAction('copy','chat.copy',button => copyText(m.content,button)));
   if (role === 'assistant') {
     if ('speechSynthesis' in window && typeof SpeechSynthesisUtterance === 'function') actions.appendChild(messageAction('speaker','chat.read_aloud',button => readMessage(m.content,button)));
     for (const [glyph,key,value] of [['thumbUp','chat.helpful',true],['thumbDown','chat.not_helpful',false]]) {
@@ -1129,12 +1131,13 @@ function updateComposerControls() {
   const recording = !!voice.recording;
   const notReady = state.preparing || state.loadingConversation || state.changingModel || activeConversation()?.conversation.messages_loaded === false;
   const busy = state.busy, run = state.runs.get(state.activeConversationId);
+  const preparingImages = !!imageJobs.get(state.activeConversationId);
   // Composer vuoto durante un turno: solo Stop. Con un messaggio scritto: Stop e Invia (accodato).
   // Durante la registrazione vocale lo stop del modello non ha senso: resta solo Invia (trascrivi e invia).
   stop.hidden = !busy || recording;
   stop.disabled = !busy || notReady || dictating || recording || !!run?.stopping;
-  send.hidden = busy && !composerHasContent() && !recording;
-  send.disabled = notReady || dictating;
+  send.hidden = busy && !composerHasContent() && !recording && !preparingImages;
+  send.disabled = notReady || dictating || preparingImages;
   const label = t(busy ? 'chat.queue_send' : 'titlebar.send');
   send.setAttribute('aria-label', label);
   send.title = label;
@@ -1195,6 +1198,7 @@ async function send() {
     return;
   }
   if (state.preparing || state.loadingConversation || activeConversation()?.conversation.messages_loaded === false || state.changingModel || voiceBusy(state.activeConversationId)) return;
+  if (imageJobs.get(state.activeConversationId)) {composerStatus(t('chat.preparing_image'));return;}
   const input = $('#composer-input'), text = composerText().trim();
   const attachments = structuredClone(state.attachments), editIndex = state.editingMessageIndex;
   if (!text && !attachments.length) return;
@@ -1247,25 +1251,83 @@ function composerStatus(message = '') {$('#composer-status').textContent=message
 function renderDraft() {
   renderActivity();
   const list = $('#composer-attachments');list.replaceChildren();
-  for (const [index,file] of state.attachments.entries()) {
+  const pending = imageJobs.get(state.activeConversationId) || 0;
+  const images = state.attachments.filter(isImageAttachment);
+  const remove = file => () => {
+    const index = state.attachments.indexOf(file);if (index >= 0) state.attachments.splice(index,1);
+    renderDraft();
+    const input = $('#composer-input');input.focus();placeCaretAtEnd(input);
+  };
+  if (images.length || pending) {
+    const group = document.createElement('div');group.className = 'attachment-images';
+    images.forEach((file,index) => group.append(imageTile(images,index,remove(file))));
+    for (let i = 0; i < pending; i++) group.append(imageSkeleton());
+    list.append(group);
+  }
+  for (const file of state.attachments) {
+    if (isImageAttachment(file)) continue;
     const chip=document.createElement('span');chip.className='attachment-chip';
     const name=document.createElement('span');name.textContent=file.name;
-    chip.append(icon('file'),name,messageAction('close','chat.remove_attachment',()=>{state.attachments.splice(index,1);renderDraft();}));list.appendChild(chip);
+    chip.append(icon('file'),name,messageAction('close','chat.remove_attachment',remove(file)));list.appendChild(chip);
   }
-  list.hidden=!state.attachments.length;$('#attachment-note').hidden=!state.attachments.length;
+  list.hidden=!state.attachments.length && !pending;$('#attachment-note').hidden=!state.attachments.length;
   $('#editing-message').hidden=state.editingMessageIndex===null;updateComposerControls();
 }
 
 async function attachFiles() {
   if (state.preparing || state.loadingConversation) return;
   $('#composer-attach').disabled=true;composerStatus();
+  let images = [];
   try {
     const files=await invoke('choose_chat_files');
-    const next=[...state.attachments,...files];
-    if(next.length>4 || next.reduce((sum,file)=>sum+new TextEncoder().encode(file.content).length,0)>262144) throw new Error('invalid_attachments');
+    images = files.filter(isImageAttachment);
+    const next=[...state.attachments,...files.filter(file=>!isImageAttachment(file))];
+    const texts=next.filter(file=>!isImageAttachment(file));
+    if(texts.length>4 || texts.reduce((sum,file)=>sum+new TextEncoder().encode(file.content).length,0)>262144) throw new Error('invalid_attachments');
     state.attachments=next;renderDraft();
   } catch(e){composerStatus(localizeError(e));}
   finally{$('#composer-attach').disabled=false;}
+  if (images.length) addImageAttachments(images);
+}
+
+// Images are prepared one at a time in the background and always land in the
+// draft of the chat where they were added, even if the user switches chat meanwhile.
+async function addImageAttachments(sources) {
+  const origin = state.activeConversationId;
+  const draft = () => {
+    if (origin === state.activeConversationId) return state.attachments;
+    if (!state.drafts.has(origin)) state.drafts.set(origin, {text:'', attachments:[], editing:null});
+    return state.drafts.get(origin).attachments;
+  };
+  const room = IMAGE_LIMIT.count - draft().filter(isImageAttachment).length - (imageJobs.get(origin) || 0);
+  const accepted = sources.slice(0, Math.max(0, room));
+  let error = accepted.length < sources.length ? 'invalid_attachments' : null;
+  if (accepted.length) {
+    imageJobs.set(origin, (imageJobs.get(origin) || 0) + accepted.length);
+    if (origin === state.activeConversationId) renderDraft();
+  }
+  for (const source of accepted) {
+    let file = null;
+    try {file = await prepareImage(source);}
+    catch (e) {error ||= errText(e);}
+    const files = draft();
+    if (file) {
+      const total = files.filter(isImageAttachment).reduce((sum,item) => sum + item.data.length, 0);
+      if (total + file.data.length > IMAGE_LIMIT.total) error ||= 'image_too_large';
+      else {file.name = uniqueImageName(file.name, new Set(files.map(item => item.name)));files.push(file);}
+    }
+    const left = imageJobs.get(origin) - 1;
+    if (left > 0) imageJobs.set(origin, left);else imageJobs.delete(origin);
+    if (origin === state.activeConversationId) renderDraft();
+  }
+  if (origin !== state.activeConversationId) return;
+  if (error) composerStatus(localizeError(error));
+  else if (!imageJobs.has(origin) && $('#composer-status').textContent === t('chat.preparing_image')) composerStatus();
+}
+
+function clipboardImages(clipboard) {
+  const items = [...(clipboard?.items || [])].filter(item => item.kind === 'file' && item.type.startsWith('image/')).map(item => item.getAsFile()).filter(Boolean);
+  return items.length ? items : [...(clipboard?.files || [])].filter(file => file.type.startsWith('image/'));
 }
 
 function setupComposerExtras() {
@@ -1666,7 +1728,11 @@ async function init() {
   });
   input.addEventListener('paste', (e) => {
     e.preventDefault();
-    const text = (e.clipboardData || window.clipboardData)?.getData('text/plain') || '';
+    const clipboard = e.clipboardData || window.clipboardData;
+    const text = clipboard?.getData('text/plain') || '';
+    // Spreadsheets and documents also offer a picture of the copied text: prefer the text.
+    const images = text.trim() ? [] : clipboardImages(clipboard);
+    if (images.length) {addImageAttachments(images);return;}
     insertComposerText(text);
     notifyComposerInput();
   });

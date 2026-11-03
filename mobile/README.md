@@ -345,3 +345,15 @@ provenienza in `assets/icons/provenance.json`; nessun bundle JS ChatGPT incluso.
 Test reali: push Android foreground/background via Cloud Function, turno con
 sotto-agente (437) e caricamento skill temporanea (SKILL_RUNTIME_OK). App
 aggiornata in-place, senza logout/disinstallazione.
+
+## Immagini nei messaggi — 3 novembre 2026
+
+Le immagini allegate dal desktop arrivano con la cronologia: sopra il fumetto
+compaiono miniature arrotondate (200 dp se singola, 104 dp in griglia) e il
+tocco apre un visualizzatore a schermo intero con scorrimento tra le immagini,
+zoom fino a 5× e contatore. Nel riepilogo le immagini tra le fonti hanno
+un'icona dedicata e aprono lo stesso visualizzatore (`lib/message_images.dart`).
+Il turno live non le include: compaiono quando il turno viene salvato. Dal
+telefono non si allegano immagini; gli errori remoti `images_unsupported`,
+`image_too_large`, `image_unreadable` e `invalid_message_size` hanno messaggi
+in italiano. Serve una nuova build mobile.

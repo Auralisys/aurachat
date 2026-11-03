@@ -44,6 +44,38 @@ function updateProgressRow(row, original, live, last) {
     row.querySelector('.turn-step__label').classList.toggle('is-working-text',live && ['running','reviewing'].includes(status));
     const text = item.kind === 'reasoning' ? item.text || '' : item.kind === 'approval' ? [item.reason && (item.reason === 'review_unavailable' ? t('permissions.review_unavailable') : item.reason),JSON.stringify(item.action,null,2)].filter(Boolean).join('\n\n') : [item.arguments && JSON.stringify(item.arguments,null,2),item.output].filter(Boolean).join('\n\n');
     if (row.lastElementChild.textContent !== text) row.lastElementChild.textContent = text;
+    updateToolImages(row, item);
+}
+
+// Images returned by tools (e.g. browser screenshots) are kept in memory for this
+// session only: the model already received them, the saved history keeps the text.
+const toolImages = new Map();
+let toolImagesSize = 0;
+
+function rememberToolImages(conversationId, item) {
+  if (typeof item?.id !== 'string' || !Array.isArray(item.images)) return false;
+  const files = item.images.filter(image => IMAGE_TYPES.includes(image?.mime_type) && typeof image.data === 'string' && image.data)
+    .map((image, index) => ({name:`${t('chat.tool_image')} ${index + 1}`, mime_type:image.mime_type, data:image.data, content:''}));
+  if (!files.length) return false;
+  const key = `${conversationId}|${item.id}|${item.at}`, size = files.reduce((sum, file) => sum + file.data.length, 0);
+  if (toolImages.has(key)) toolImagesSize -= toolImages.get(key).size;
+  toolImages.delete(key);toolImages.set(key, {files, size});toolImagesSize += size;
+  for (const [old, entry] of toolImages) {
+    if (toolImagesSize <= 64 << 20) break;
+    if (old !== key) {toolImages.delete(old);toolImagesSize -= entry.size;}
+  }
+  return true;
+}
+
+function updateToolImages(row, item) {
+  const files = item.kind === 'tool' ? toolImages.get(`${state.activeConversationId}|${item.id}|${item.at}`)?.files : null;
+  let strip = row.querySelector(':scope > .turn-step__images');
+  if (strip && strip._files === files) return;
+  strip?.remove();
+  if (!files) return;
+  strip = document.createElement('div');strip.className = 'turn-step__images';strip._files = files;
+  files.forEach((_, index) => strip.append(imageThumb(files, index, 'turn-step__image')));
+  row.insertBefore(strip, row.lastElementChild);
 }
 
 function refreshShellProgress(conversationId) {
@@ -389,6 +421,10 @@ async function setupChatProgress() {
         const previous = stream.activity.find(entry => entry.kind === 'tool' && entry.id === item.id);
         if (previous) Object.assign(previous, item);else stream.activity.push({...item, offset:stream.content.length});
       } catch (_) {return;}
+    } else if (payload.kind === '__tool_images') {
+      let item;
+      try {item = JSON.parse(payload.text);} catch (_) {return;}
+      if (!rememberToolImages(payload.conversation_id, item)) return;
     }
     else if (payload.kind === '__question_summary') {
       let message;

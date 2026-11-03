@@ -389,13 +389,49 @@ impl Clients {
         let connection=self.validate_connection(context,id)?;
         let result=tokio::time::timeout(Duration::from_secs(90),connection.client.call_tool(rmcp::model::CallToolRequestParams::new(name.to_string()).with_arguments(args.clone()))).await
             .map_err(|_|"MCP tool timed out; its external action may have partially completed. Inspect before retrying.".to_string())?.map_err(|_|"MCP tools/call failed; check connection and authentication before retrying.".to_string())?;
-        let value=serde_json::to_value(result).map_err(|e|e.to_string())?;
-        if value["isError"]==true {return Ok(json!({"error":value}));}
+        let mut value=serde_json::to_value(result).map_err(|e|e.to_string())?;
+        let failed=value["isError"]==true;
+        extract_images(&mut value,!failed);
+        if failed {return Ok(json!({"error":value}));}
         Ok(value)
     }
 }
-fn bounded_result(value: Value) -> Result<Value,String> {
-    if value.to_string().len()>262144 {return Err("MCP result exceeds 256 KiB; narrow the query.".into());}Ok(value)
+
+/// Result key for images moved out of a tool result; the model receives them in a separate image message.
+pub const IMAGES_KEY: &str = "_aurachat_images";
+
+/// Replaces image data in MCP content with a note, keeping valid images for the model.
+fn extract_images(value: &mut Value, keep: bool) {
+    let mut images = Vec::new();
+    for item in value.get_mut("content").and_then(Value::as_array_mut).into_iter().flatten() {
+        let data = match item["type"].as_str() {
+            Some("image") => item.as_object_mut().and_then(|item| item.remove("data")),
+            Some("resource") if item["resource"]["mimeType"].as_str().is_some_and(|mime| mime.starts_with("image/")) =>
+                item["resource"].as_object_mut().and_then(|resource| resource.remove("blob")),
+            _ => None,
+        };
+        let Some(Value::String(data)) = data else { continue; };
+        let note = if !keep { "Image omitted because the tool reported an error." }
+            else if images.len() >= 4 { "Image omitted: at most 4 images per tool result are shown to the model." }
+            else if data.len() > crate::llm::MAX_IMAGE_DATA { "Image omitted: larger than 3 MB. Request a smaller image, such as a viewport screenshot instead of a full page." }
+            else {
+                match crate::llm::image_type(&data) {
+                    Ok(mime) => { images.push(json!({"mime_type":mime,"data":data})); "Image shown to the model after the tool results." }
+                    Err("image_too_large") => "Image omitted: wider or taller than 4096 pixels. Request a smaller image, such as a viewport screenshot instead of a full page.",
+                    Err(_) => "Image omitted: unsupported or unreadable format. PNG, JPEG, GIF and WebP are supported.",
+                }
+            };
+        item["bytes"] = json!(data.len() / 4 * 3);
+        item["note"] = note.into();
+    }
+    if !images.is_empty() { value[IMAGES_KEY] = images.into(); }
+}
+
+fn bounded_result(mut value: Value) -> Result<Value,String> {
+    let images = value.as_object_mut().and_then(|object| object.remove(IMAGES_KEY));
+    if value.to_string().len()>262144 {return Err("MCP result exceeds 256 KiB; narrow the query.".into());}
+    if let Some(images) = images { value[IMAGES_KEY] = images; }
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -516,6 +552,11 @@ mod tests {
             let tools=client.list_all_tools().await.unwrap();assert_eq!(tools.len(),2);assert_eq!(tools[0].name,"lookup_record");
             let result=client.call_tool(rmcp::model::CallToolRequestParams::new("lookup_record").with_arguments(serde_json::from_value(json!({"id":"fixture-record"})).unwrap())).await.unwrap();
             assert_eq!(serde_json::to_value(result).unwrap()["content"][0]["text"],"Fixture record: fixture-record");
+            let result=client.call_tool(rmcp::model::CallToolRequestParams::new("lookup_record").with_arguments(serde_json::from_value(json!({"id":"screenshot"})).unwrap())).await.unwrap();
+            let mut result=serde_json::to_value(result).unwrap();extract_images(&mut result,true);
+            let result=bounded_result(result).unwrap();
+            assert_eq!(result[IMAGES_KEY][0]["mime_type"],"image/png");
+            assert!(result["content"][1].get("data").is_none() && result["content"][1]["note"].is_string());
             let config=root.join(".mcp.json");std::fs::write(&config,serde_json::to_vec(&json!({"mcpServers":{"fixture":server}})).unwrap()).unwrap();
             let mut clients=Clients::default();clients.connections.insert("0:fixture".into(),Connection{client,tools,config:config.canonicalize().unwrap(),server});
             let result=clients.execute(&context,"call_mcp_tool",&json!({"server":"0:fixture","tool":"not-advertised","arguments":{}})).await;
@@ -561,5 +602,27 @@ mod tests {
             }
             client.cancel().await.unwrap();
         });
+    }
+    #[test]
+    fn tool_images_are_moved_out_of_results_and_bounded() {
+        let pixel="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+        let image=json!({"type":"image","data":pixel,"mimeType":"image/png"});
+        let mut value=json!({"content":[{"type":"text","text":"shot"},image,
+            {"type":"resource","resource":{"uri":"file:///a.png","mimeType":"image/png","blob":pixel}},
+            {"type":"image","data":"bm90IGFuIGltYWdl","mimeType":"image/png"},image,image,image]});
+        extract_images(&mut value,true);
+        let content=value["content"].as_array().unwrap();
+        assert!(content.iter().all(|item|item.get("data").is_none() && item["resource"].get("blob").is_none()));
+        assert_eq!(value[IMAGES_KEY].as_array().unwrap().len(),4);
+        assert!(content[3]["note"].as_str().unwrap().contains("unreadable"));
+        assert!(content[6]["note"].as_str().unwrap().contains("at most 4"));
+        assert!(bounded_result(value).unwrap()[IMAGES_KEY].is_array());
+        let mut failed=json!({"content":[image],"isError":true});
+        extract_images(&mut failed,false);
+        assert!(failed.get(IMAGES_KEY).is_none() && failed["content"][0].get("data").is_none());
+        let mut large=json!({"content":[{"type":"image","data":"A".repeat(crate::llm::MAX_IMAGE_DATA+4),"mimeType":"image/png"}]});
+        extract_images(&mut large,true);
+        assert!(large.get(IMAGES_KEY).is_none() && large["content"][0]["note"].as_str().unwrap().contains("smaller"));
+        assert!(bounded_result(json!({"text":"x".repeat(300000)})).is_err());
     }
 }

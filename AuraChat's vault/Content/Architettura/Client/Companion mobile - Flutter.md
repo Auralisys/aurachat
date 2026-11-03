@@ -153,3 +153,16 @@ Senza chat aperta il segnale porta `notify:false` e serve solo a rendere il rela
 reattivo. Gli errori di invio non vengono mostrati e il segnale verrà ritentato.
 I mobile precedenti ricevono push solo per le chat in cui inviano messaggi.
 Serve una nuova build mobile.
+
+## Immagini nei messaggi — 3 novembre 2026
+
+`lib/message_images.dart` decodifica una sola volta le immagini base64 degli
+allegati (PNG, JPEG, GIF, WebP) e le mostra sopra il fumetto: 200 dp se
+singola, 104 dp in griglia, bordi da 14. Il tocco apre `ImageViewerPage` a
+schermo intero (scorrimento, zoom fino a 5× che blocca lo scorrimento,
+contatore "n di m"). Il riepilogo usa lo stesso visualizzatore per le fonti
+immagine (`lib/chat_recap.dart`). Le immagini arrivano dalla cronologia
+Firestore, non dal turno live; dal telefono non si possono allegare. Nuovi
+messaggi per gli errori remoti `images_unsupported`, `image_too_large`,
+`image_unreadable` e `invalid_message_size` (`lib/app.dart`). Test:
+`test/message_images_test.dart`.

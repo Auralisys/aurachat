@@ -61,8 +61,9 @@ const LIVE_HEARTBEAT_MS: u64 = 5_000;
 const LIVE_HOT_MS: u64 = 1_000;
 const LIVE_COLD_MS: u64 = 10_000;
 const LIVE_RETENTION_MS: u64 = 60_000;
-// Relay protocol advertised to phones/computers. 7 adds the `watch` action.
-const RELAY_PROTOCOL: u64 = 7;
+// Relay protocol advertised to phones/computers. 7 adds the `watch` action,
+// 8 adds image attachments.
+const RELAY_PROTOCOL: u64 = 8;
 // Phone pushes are opt-in per chat: opening or using the chat on the phone
 // follows it for this long; a turn started from a computer stops following.
 const PUSH_WATCH_MS: u64 = 30 * 60_000;
@@ -613,6 +614,8 @@ pub async fn remote_chat_request(state:tauri::State<'_,AppState>,device_id:Strin
     let needs_update=arguments["retry"]==true || arguments.get("edit_index").is_some_and(|index|!index.is_null())
         || arguments["attachments"].as_array().is_some_and(|files|!files.is_empty());
     if needs_update && device["protocol"].as_u64().unwrap_or(0)<6 {return Err("remote_update_required".into());}
+    let images=arguments["attachments"].as_array().is_some_and(|files|files.iter().any(|file|!file["data"].is_null()));
+    if images && device["protocol"].as_u64().unwrap_or(0)<8 {return Err("remote_update_required".into());}
     if !matches!(action.as_str(),"chat"|"steer"|"withdraw_guidance"|"stop"|"approve"|"answer_question"|"stop_agent"|"stop_shell"|"chat_recap") {
         return Err("unsupported_remote_action".into());
     }

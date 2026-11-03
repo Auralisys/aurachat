@@ -32,16 +32,19 @@ function activityRecord(id) {
 function activityItems() {
   const record = activity.conversations.get(state.activeConversationId);
   const sources = [], links = new Set();
+  const fileSource = (id, file, summary) => isImageAttachment(file)
+    ? {id, title: file.name, summary, kind: 'image', image: file}
+    : {id, title: file.name, summary, content: file.content, plain: true};
   state.messages.forEach((message, index) => {
     if (message.role !== 'user') return;
     for (const [fileIndex, file] of (message.attachments || []).entries()) {
-      sources.push({ id: `attachment-${index}-${fileIndex}`, title: file.name, summary: t('activity.attachment'), content: file.content, plain: true });
+      sources.push(fileSource(`attachment-${index}-${fileIndex}`, file, t('activity.attachment')));
     }
     const text = document.createElement('div');text.innerHTML = markdownHTML(message.content || '');
     text.querySelectorAll('a[href]').forEach(link => {if (/^https?:$/.test(link.protocol)) links.add(link.href);});
   });
   for (const url of links) sources.push({id:`link:${url}`, title:url, summary:t('activity.user_link'), url});
-  state.attachments.forEach((file, index) => sources.push({ id: `draft-${index}`, title: file.name, summary: t('activity.draft'), content: file.content, plain: true }));
+  state.attachments.forEach((file, index) => sources.push(fileSource(`draft-${index}`, file, t('activity.draft'))));
   sources.push(...(record?.sources.values() || []));
   return { outputs: activityArtifacts(record), agents: [...activityAgentMap().values()], sources, shells: activityShells(record) };
 }
@@ -488,6 +491,10 @@ function renderArtifactDetail(content, item) {
 
 function renderReferenceDetail(content, item) {
   if (item.path) content.append(activityText('p', item.path, 'activity-detail-meta'));
+  if (item.image) {
+    const open = imageThumb([item.image], 0, 'activity-image-open');
+    open.querySelector('img').className = 'activity-image';content.append(open);
+  }
   if (item.url) {
     const url = safeActivityURL(item.url);
     if (url) {

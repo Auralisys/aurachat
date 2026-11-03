@@ -10,6 +10,8 @@ struct Mailbox {
     closed: bool,
     accepted: usize,
     bytes: usize,
+    /// Base64 image bytes of the turn: the request plus accepted guidance.
+    images: usize,
     pending: Vec<PendingGuidance>,
     io: Option<Arc<Cancellation>>,
 }
@@ -38,11 +40,13 @@ impl Guidance {
         static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         crate::llm::validate_attachments(&message.attachments)?;
         let bytes = guidance_bytes(&message);
+        let images = crate::llm::image_data_len(&message.attachments);
         if message.content.trim().is_empty() && message.attachments.is_empty() {return Err("empty_message".into());}
         let mut state = self.0.lock().unwrap();
         if state.closed {return Err("chat_not_running".into());}
         if state.accepted >= 16 || bytes > 65536 || state.bytes + bytes > 262144 {return Err("guidance_limit".into());}
-        state.accepted += 1; state.bytes += bytes;
+        if state.images + images > crate::llm::MAX_IMAGES_DATA {return Err("image_too_large".into());}
+        state.accepted += 1; state.bytes += bytes; state.images += images;
         let id = format!("guide-{}-{}", crate::data::now_millis(), SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         let item = PendingGuidance { id: id.clone(), message };
         accepted(&item);
@@ -57,6 +61,7 @@ impl Guidance {
         let item = state.pending.remove(index);
         state.accepted = state.accepted.saturating_sub(1);
         state.bytes = state.bytes.saturating_sub(guidance_bytes(&item.message));
+        state.images = state.images.saturating_sub(crate::llm::image_data_len(&item.message.attachments));
         Ok(item.message)
     }
     pub fn pending(&self) -> bool { !self.0.lock().unwrap().pending.is_empty() }
@@ -86,9 +91,10 @@ impl Guidance {
 pub struct ChatRuns(Mutex<HashMap<String, Entry>>);
 
 impl ChatRuns {
-    fn begin(&self, owner: &str, conversation: &str) -> Arc<Cancellation> {
+    fn begin(&self, owner: &str, conversation: &str, images: usize) -> Arc<Cancellation> {
         let cancellation = Arc::new(Cancellation::default());
-        self.0.lock().unwrap().insert(conversation.into(), Entry { owner: owner.into(), cancellation: cancellation.clone(), guidance: Arc::new(Guidance::default()) });
+        let guidance = Arc::new(Guidance(Mutex::new(Mailbox { images, ..Default::default() })));
+        self.0.lock().unwrap().insert(conversation.into(), Entry { owner: owner.into(), cancellation: cancellation.clone(), guidance });
         cancellation
     }
     pub fn stop(&self, owner: &str, conversation: &str) -> Result<(), String> {
@@ -115,8 +121,9 @@ pub struct Turn<'a> { runs: &'a ChatRuns, conversation: String }
 
 impl<'a> Turn<'a> {
     pub fn guidance(&self)->Arc<Guidance> {self.runs.0.lock().unwrap().get(&self.conversation).unwrap().guidance.clone()}
-    pub fn start(runs: &'a ChatRuns, owner: &str, conversation: &str) -> (Self, Arc<Cancellation>) {
-        (Self { runs, conversation: conversation.into() }, runs.begin(owner, conversation))
+    /// `images`: base64 image bytes already in the request, so guidance cannot exceed the turn budget.
+    pub fn start(runs: &'a ChatRuns, owner: &str, conversation: &str, images: usize) -> (Self, Arc<Cancellation>) {
+        (Self { runs, conversation: conversation.into() }, runs.begin(owner, conversation, images))
     }
 }
 
@@ -128,7 +135,7 @@ impl Drop for Turn<'_> {
     use super::*;
     #[test] fn only_the_owner_can_stop_the_streaming_turn() {
         let runs = ChatRuns::default();
-        let (turn, cancellation) = Turn::start(&runs, "u", "c");
+        let (turn, cancellation) = Turn::start(&runs, "u", "c", 0);
         // Un altro account non puo fermare il turno e il token resta pulito.
         assert!(runs.stop("other", "c").is_err());
         assert!(!cancellation.is_cancelled());
@@ -143,7 +150,7 @@ impl Drop for Turn<'_> {
     }
     #[test] fn unread_guidance_can_be_withdrawn_only_by_its_owner_and_only_once() {
         let runs = ChatRuns::default();
-        let (turn, _) = Turn::start(&runs, "u", "c");
+        let (turn, _) = Turn::start(&runs, "u", "c", 0);
         let guidance = turn.guidance();
         let io = guidance.begin_io();
         let mut notified = String::new();
@@ -174,5 +181,17 @@ impl Drop for Turn<'_> {
         guidance.withdraw(&ids[3]).unwrap();
         guidance.enqueue(guide("replacement"), |_| {}).unwrap();
         assert!(guidance.take().iter().all(|item| item.message.content != "g3"));
+    }
+    #[test] fn guidance_images_share_the_turn_image_budget() {
+        use base64::Engine as _;
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x02\0\0\0\x02".to_vec();png.extend_from_slice(&[8,6,0,0,0,0,0,0,0]);
+        let data = base64::engine::general_purpose::STANDARD.encode(png);
+        let image = || crate::llm::ChatMessage{role:"user".into(),content:String::new(),attachments:vec![crate::llm::Attachment::image("a.png","image/png",data.clone())],feedback:None,activity:vec![]};
+        let runs = ChatRuns::default();
+        let (_turn, _) = Turn::start(&runs, "u", "c", crate::llm::MAX_IMAGES_DATA - data.len() - 4);
+        let first = runs.steer("u", "c", image(), |_| {}).unwrap();
+        assert_eq!(runs.steer("u", "c", image(), |_| {}).unwrap_err(), "image_too_large");
+        runs.withdraw("u", "c", &first).unwrap();
+        runs.steer("u", "c", image(), |_| {}).unwrap();
     }
 }
