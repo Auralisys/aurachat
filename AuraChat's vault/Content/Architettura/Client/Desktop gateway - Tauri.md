@@ -641,6 +641,18 @@ il modello non legge immagini (`images_unsupported`), l'endpoint/modello viene
 ricordato: con immagini nel messaggio corrente l'errore arriva all'utente,
 altrimenti le immagini della cronologia diventano note e la richiesta riparte.
 
+Modelli DeepSeek senza visione (`vision_bridge`): DeepSeek legge le immagini solo
+con `deepseek-flash`; gli altri modelli, come `deepseek-v4-pro`, rispondono 200
+ma vedono `[Unsupported Image]`, quindi l'errore sopra non scatta mai. Per loro
+`read_images` chiede a `deepseek-flash`, sullo stesso endpoint e con la stessa
+chiave, una descrizione con il testo trascritto alla lettera (non in streaming,
+ragionamento disattivato, immagini in parallelo) e la mette al posto
+dell'immagine. Il turno mostra lo step `read_image` («Lettura immagine») con la
+descrizione. Cache in memoria per hash del contenuto, massimo 256 voci, persa al
+riavvio. Se fallisce un'immagine del messaggio corrente l'errore è
+`image_description_failed`; per le altre resta una nota. Con altri provider un
+modello che ignora le immagini senza errore resta non riconoscibile.
+
 Strumenti (`mcp.rs`): le parti `image` dei risultati MCP escono dal testo; oltre
 3 MB o 4096 px diventano una nota che chiede uno screenshot più piccolo. Il
 modello le riceve in un messaggio utente successivo marcato come output non
@@ -655,4 +667,5 @@ messaggi del turno live verso il telefono non includono le immagini, che
 arrivano con la cronologia. Il telefono le visualizza ma non può allegarle.
 
 Verifica: `desktop/tests/image-attachments.cjs` e test Rust su tipi, limiti,
-conversione delle richieste, immagini degli strumenti e modelli senza visione.
+conversione delle richieste, immagini degli strumenti, modelli senza visione e
+lettura tramite `deepseek-flash`.

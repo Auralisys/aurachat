@@ -1038,6 +1038,20 @@ immagini, la coppia endpoint/modello viene ricordata in memoria: con immagini
 nel messaggio corrente l'errore è `images_unsupported`, altrimenti la richiesta
 riparte con le immagini della cronologia sostituite da note.
 
+DeepSeek legge le immagini solo con `deepseek-flash`: gli altri modelli DeepSeek
+(per esempio `deepseek-v4-pro`) rispondono senza errore ma vedono
+`[Unsupported Image]`. Per questi modelli `llm.rs` fa leggere ogni immagine a
+`deepseek-flash` sullo stesso endpoint e con la stessa chiave (richiesta non in
+streaming, ragionamento disattivato, immagini in parallelo). La descrizione, con
+il testo trascritto alla lettera, sostituisce l'immagine nella richiesta al
+modello scelto; il turno mostra lo step «Lettura immagine» con la descrizione.
+Le descrizioni restano in memoria per contenuto (fino a 256, perse al riavvio),
+quindi ogni immagine costa una chiamata Flash per sessione. Se non si riesce a
+leggere un'immagine del messaggio corrente l'errore è
+`image_description_failed`; immagini precedenti o degli strumenti illeggibili
+diventano una nota. Con altri provider, un modello senza visione che ignora le
+immagini senza restituire errori non è riconoscibile.
+
 Output: i messaggi mostrano le immagini sopra il testo (miniature da 128 px;
 un'immagine singola mantiene le proporzioni fino a 260 px) e il clic apre il
 visualizzatore con frecce, tasti ←/→, Esc e didascalia. Le immagini restituite
@@ -1054,4 +1068,7 @@ protocollo 8. Non sono previsti generazione di immagini né trascinamento dei fi
 Verifica: `desktop/tests/image-attachments.cjs` (incolla, +, rimozione, nomi
 duplicati, argomenti `chat`, visualizzatore da tastiera, immagini degli
 strumenti, chat d'origine, limiti, file illeggibili) e test Rust su tipi,
-limiti, conversione delle richieste e modelli senza visione.
+limiti, conversione delle richieste, modelli senza visione e lettura tramite
+`deepseek-flash`. Il test reale `real_provider_reads_image` (ignorato, richiede
+`AURACHAT_LLM_SMOKE=1`, `AURACHAT_IMAGE` e `AURACHAT_IMAGE_TEXT`) usa il modello
+attivo dell'account.

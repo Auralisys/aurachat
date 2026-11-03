@@ -21,7 +21,8 @@ Firebase. Dettagli della sessione in [[Account - Login e ripristino sessione]].
 
 Preset DeepSeek, OpenAI e OpenRouter, oppure servizio personalizzato compatibile
 con OpenAI Chat Completions in streaming. DeepSeek precompila deepseek-flash e
-deepseek-v4-pro. Gli altri preset precompilano l’URL, lasciando gli ID dei modelli
+deepseek-v4-pro (solo Flash vede le immagini: per gli altri modelli DeepSeek le
+legge Flash, vedi [[Desktop gateway - Tauri]]). Gli altri preset precompilano l’URL, lasciando gli ID dei modelli
 all’utente. Ogni provider ha nome e API key condivisa; ogni modello ha ID e URL
 base indipendenti. Sono disponibili aggiunta/rimozione di righe e modifica o
 rimozione del provider, con conferma delle modifiche da scartare.

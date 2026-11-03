@@ -2,7 +2,7 @@
 const progressMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 function progressIcon(item) {
-  const name = item?.action === 'ask_user' ? 'MessageCircle' : item?.kind === 'approval' ? 'ShieldCheck' : item?.kind === 'agent' ? 'Bot' : item?.kind === 'reasoning' ? 'Brain' : /search/.test(item?.action) ? 'Search' : /write|edit/.test(item?.action) ? 'FilePenLine' : /read/.test(item?.action) ? 'FileText' : /list/.test(item?.action) ? 'FolderSearch' : 'Terminal';
+  const name = item?.action === 'ask_user' ? 'MessageCircle' : item?.action === 'read_image' ? 'ScanEye' : item?.kind === 'approval' ? 'ShieldCheck' : item?.kind === 'agent' ? 'Bot' : item?.kind === 'reasoning' ? 'Brain' : /search/.test(item?.action) ? 'Search' : /write|edit/.test(item?.action) ? 'FilePenLine' : /read/.test(item?.action) ? 'FileText' : /list/.test(item?.action) ? 'FolderSearch' : 'Terminal';
   return lucide.createElement(lucide.icons[name], {class:'ui-icon', 'aria-hidden':'true'});
 }
 
