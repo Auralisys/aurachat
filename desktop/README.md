@@ -995,3 +995,17 @@ v6 (altrimenti `0xC0000139`). Copiare l'exe di `cargo test --lib --no-run` in un
 cartella temporanea con una `DirectML.dll` reale, incorporare il manifest con
 `mt.exe -manifest t.exe.manifest -outputresource:t.exe;#1` ed eseguirlo da
 `desktop/src-tauri`.
+
+## Contesto oltre il limite del modello (3 novembre 2026)
+
+Se il provider rifiuta la richiesta perché supera la finestra di contesto
+(OpenAI, Gemini, Anthropic, xAI, Mistral, llama.cpp e formati simili, anche come
+errore di stream), `llm.rs` non mostra l'errore: compatta la cronologia
+**inviata** e ripete la richiesta (massimo 4 tentativi). Quando l'errore riporta
+limite e token richiesti, il limite e il rapporto byte/token vengono ricordati in
+memoria per `url + modello` e le richieste successive vengono adattate prima
+dell'invio. La compattazione aggiunge una nota di sistema, accorcia gli output
+degli strumenti più vecchi, elimina i turni più vecchi e, se serve, i giri di
+strumenti del turno corrente tranne l'ultimo, mantenendo valide le coppie
+`tool_calls`/risultati. La conversazione salvata non viene modificata. Se non si
+rientra nel limite l'errore è `context_too_large`.

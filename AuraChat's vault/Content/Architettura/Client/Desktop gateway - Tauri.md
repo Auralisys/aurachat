@@ -577,3 +577,34 @@ lo stesso vale per un aggiornamento live arretrato.
 
 Verifica: test Rust su id/ritiro e documento live, `tests/pending-guidance.cjs`
 e test Flutter in `queued_bubble_test.dart`.
+
+## Contesto oltre il limite del modello — 3 novembre 2026
+
+Problema: dopo conversazioni lunghe il provider rispondeva `API 400 … maximum
+context length is 1048576 tokens. However, you requested 1050906 tokens`. Il
+gateway inviava l'intera cronologia salvata più tutti i risultati degli
+strumenti del turno, senza alcun taglio.
+
+Gateway (`llm.rs`): `context_overflow` riconosce l'errore di contesto di OpenAI,
+Gemini, Anthropic, xAI, Mistral, llama.cpp e simili (anche come evento di
+stream) ed estrae, se presenti, limite e token richiesti. In `Completion::run`
+l'errore non viene mostrato: la cronologia **inviata** viene compattata e la
+richiesta riparte (al massimo 4 tentativi). Con limite e richiesta noti si
+impara il rapporto byte/token per `url + modello` (in memoria) e dalle richieste
+successive la cronologia viene adattata prima dell'invio, con un margine per la
+risposta. `fit_history` procede per gradi: nota di sistema che segnala il
+taglio, accorcia gli output degli strumenti vecchi (16k, poi 2k, poi 1k
+caratteri, tenendo inizio e fine), elimina i turni più vecchi, poi i giri di
+strumenti del turno corrente tranne l'ultimo, infine accorcia i contenuti più
+lunghi. Le coppie `tool_calls`/risultati restano sempre valide; il messaggio di
+sistema e l'ultima richiesta dell'utente restano.
+
+La conversazione salvata non cambia: si riduce solo ciò che arriva al modello.
+Vale anche per sub-agenti e richieste dal telefono (stesso percorso). Dopo un
+riavvio il primo invio di una chat lunga viene rifiutato una volta e ripetuto
+compattato. Se non si riesce a rientrare: `context_too_large` (it/en sul
+desktop, italiano sul mobile).
+
+Verifica: test Rust su riconoscimento degli errori dei vari provider, taglio
+della cronologia e ripetizione con server locale (400, poi richiesta compattata,
+poi richiesta successiva già adattata). Suite nativa: 101 superati.

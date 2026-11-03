@@ -319,6 +319,7 @@
   "progress.working": "Working",
   "chat.unread": "New result to read",
   "errors.chat_in_progress": "This chat already has a request in progress.",
+  "errors.context_too_large": "This conversation exceeds the model context even after compacting it. Start a new chat or choose a model with a larger context.",
   "permissions.title": "Change permissions",
   "permissions.ask": "Ask for approval",
   "permissions.auto": "Approve for me",

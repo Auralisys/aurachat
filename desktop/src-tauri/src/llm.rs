@@ -68,6 +68,138 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Overflow { limit: Option<u64>, requested: Option<u64> }
+
+#[derive(Debug)]
+enum ProviderError { Overflow(Overflow), Failed(String) }
+impl From<String> for ProviderError { fn from(error: String) -> Self { Self::Failed(error) } }
+impl From<&str> for ProviderError { fn from(error: &str) -> Self { Self::Failed(error.into()) } }
+
+fn number_after(text: &str, phrase: &str) -> Option<u64> {
+    let rest = &text[text.find(phrase)? + phrase.len()..];
+    let start = rest.char_indices().take(24).find(|(_, c)| c.is_ascii_digit())?.0;
+    rest[start..].chars().take_while(|c| c.is_ascii_digit() || *c == ',').filter(char::is_ascii_digit)
+        .collect::<String>().parse().ok().filter(|n| *n > 0)
+}
+
+/// Recognizes provider errors caused by a prompt larger than the model context window.
+fn context_overflow(text: &str) -> Option<Overflow> {
+    let text = text.to_lowercase();
+    let detected = ["context_length_exceeded", "context length", "context window", "maximum prompt length", "prompt is too long",
+        "input token count", "exceeds the maximum number of tokens", "exceed_context_size", "available context size",
+        "too many tokens", "reduce the length of the messages"].iter().any(|k| text.contains(k));
+    if !detected { return None; }
+    let limit = ["maximum context length is", "maximum prompt length is", "maximum number of tokens allowed",
+        "too large for model with", "tokens >", "context length of", "context window of", "context size of", "\"n_ctx\":"]
+        .iter().find_map(|p| number_after(&text, p));
+    let requested = ["you requested", "resulted in", "input token count", "prompt is too long:", "prompt contains",
+        "request contains", "\"n_prompt_tokens\":"].iter().find_map(|p| number_after(&text, p));
+    let requested = requested.filter(|r| limit.is_none_or(|l| *r > l));
+    Some(Overflow { limit, requested })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ContextLimit { tokens: u64, bytes_per_token: f64 }
+
+// Learned per endpoint/model from provider errors, so later requests are compacted before sending.
+fn context_limits() -> &'static std::sync::Mutex<std::collections::HashMap<String, ContextLimit>> {
+    static LIMITS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, ContextLimit>>> = std::sync::OnceLock::new();
+    LIMITS.get_or_init(Default::default)
+}
+
+fn context_budget(limit: ContextLimit, overhead: usize) -> usize {
+    let reserve = (limit.tokens / 8).clamp(1024, 32768);
+    let tokens = limit.tokens.saturating_sub(reserve) as f64 * 0.9;
+    ((tokens * limit.bytes_per_token) as usize).saturating_sub(overhead)
+}
+
+const CONTEXT_NOTE: &str = "Some earlier messages or tool outputs were shortened or omitted from this request to fit the model context window. They remain saved in the chat. If a missing detail matters, ask the user or read it again with tools.";
+
+fn message_bytes(message: &serde_json::Value) -> usize { message.to_string().len() }
+fn history_bytes(history: &[serde_json::Value]) -> usize { history.iter().map(message_bytes).sum() }
+
+fn clip_middle(text: &str, max: usize) -> String {
+    let mut head = max * 2 / 3;
+    while !text.is_char_boundary(head) { head -= 1; }
+    let mut tail = text.len() - (max - max * 2 / 3);
+    while !text.is_char_boundary(tail) { tail += 1; }
+    format!("{}\n[… {} bytes omitted to fit the model context window …]\n{}", &text[..head], tail - head, &text[tail..])
+}
+
+fn clip_content(message: &mut serde_json::Value, max: usize) -> bool {
+    let Some(text) = message["content"].as_str() else { return false; };
+    if text.len() <= max + 256 { return false; }
+    message["content"] = clip_middle(text, max).into();
+    true
+}
+
+fn latest_tool_round(history: &[serde_json::Value]) -> Option<usize> {
+    history.iter().rposition(|m| m["role"] == "assistant" && m["tool_calls"].is_array())
+}
+
+// An assistant tool call and its results are removed together to keep the provider protocol valid.
+fn group_end(history: &[serde_json::Value], start: usize) -> usize {
+    let mut end = start + 1;
+    if history[start]["role"] == "tool" || history[start]["tool_calls"].is_array() {
+        while end < history.len() && history[end]["role"] == "tool" { end += 1; }
+    }
+    end
+}
+
+fn shorten_tools(history: &mut [serde_json::Value], total: &mut usize, budget: usize, max: usize, keep_latest: bool) {
+    let latest = if keep_latest { latest_tool_round(history) } else { None };
+    for index in 0..history.len() {
+        if *total <= budget { return; }
+        if history[index]["role"] != "tool" || latest.is_some_and(|l| index > l) { continue; }
+        let before = message_bytes(&history[index]);
+        if clip_content(&mut history[index], max) { *total = *total - before + message_bytes(&history[index]); }
+    }
+}
+
+/// Compacts the provider history in place, preserving system instructions and the current request.
+fn fit_history(history: &mut Vec<serde_json::Value>, turn_start: &mut usize, budget: usize) -> bool {
+    let mut total = history_bytes(history);
+    if total <= budget { return true; }
+    let note = serde_json::json!({"role":"system","content":CONTEXT_NOTE});
+    if !history.contains(&note) {
+        let at = history.iter().position(|m| m["role"] != "system").unwrap_or(history.len());
+        total += message_bytes(&note);
+        history.insert(at, note);
+        if *turn_start >= at { *turn_start += 1; }
+    }
+    shorten_tools(history, &mut total, budget, 16000, true);
+    while total > budget {
+        let Some(start) = (0..*turn_start).find(|&i| history[i]["role"] != "system") else { break; };
+        let end = group_end(history, start);
+        if end > *turn_start { break; }
+        total -= history[start..end].iter().map(message_bytes).sum::<usize>();
+        history.drain(start..end);
+        *turn_start -= end - start;
+    }
+    shorten_tools(history, &mut total, budget, 2000, true);
+    shorten_tools(history, &mut total, budget, 16000, false);
+    while total > budget {
+        let latest = latest_tool_round(history).unwrap_or(history.len());
+        let Some(start) = (*turn_start + 1..latest).find(|&i| matches!(history[i]["role"].as_str(), Some("assistant" | "tool"))) else { break; };
+        let end = group_end(history, start);
+        if end > latest { break; }
+        total -= history[start..end].iter().map(message_bytes).sum::<usize>();
+        history.drain(start..end);
+    }
+    shorten_tools(history, &mut total, budget, 1000, false);
+    while total > budget {
+        let Some(index) = (0..history.len())
+            .filter(|&i| history[i]["role"] != "system" && history[i]["content"].as_str().is_some_and(|t| t.len() > 2256))
+            .max_by_key(|&i| message_bytes(&history[i])) else { break; };
+        let length = history[index]["content"].as_str().map_or(0, str::len);
+        let before = message_bytes(&history[index]);
+        clip_content(&mut history[index], length.saturating_sub(total - budget + 512).max(2000));
+        total = total - before + message_bytes(&history[index]);
+    }
+    total <= budget
+}
+
 // Buffer complete SSE lines as bytes so UTF-8 codepoints may span HTTP chunks.
 #[derive(Default)]
 struct StreamResponse {
@@ -79,12 +211,15 @@ struct StreamResponse {
 }
 
 impl StreamResponse {
-    fn line(&mut self, bytes: &[u8], activity: &impl Fn(&str, &str)) -> Result<(), String> {
+    fn line(&mut self, bytes: &[u8], activity: &impl Fn(&str, &str)) -> Result<(), ProviderError> {
         let line = std::str::from_utf8(bytes).map_err(|e| e.to_string())?.trim();
         let Some(data) = line.strip_prefix("data:").map(str::trim) else { return Ok(()); };
         if data == "[DONE]" { self.finished = true; return Ok(()); }
         let value: serde_json::Value = serde_json::from_str(data).map_err(|e| format!("invalid stream event: {e}"))?;
-        if !value["error"].is_null() { return Err(format!("API: {}", truncate(&value["error"].to_string(), 300))); }
+        if !value["error"].is_null() {
+            let error = value["error"].to_string();
+            return Err(context_overflow(&error).map_or_else(|| format!("API: {}", truncate(&error, 300)).into(), ProviderError::Overflow));
+        }
         if value["usage"].is_object() { self.usage = value["usage"].clone(); }
         let choice = &value["choices"][0];
         if !choice["finish_reason"].is_null() { self.finished = true; }
@@ -259,6 +394,10 @@ impl Completion<'_> {
             let mcp_context = crate::mcp::Context::new(self.project.as_ref(),self.runtime.as_ref(),agent);
             let mut usage = Usage {prompt_tokens:0, completion_tokens:0, total_tokens:0};
     let mut reply = String::new();
+            let limit_key = format!("{}\n{}", self.url, self.model);
+            let mut turn_start = history.iter().rposition(|m| m["role"] == "user").unwrap_or(history.len());
+            while turn_start > 0 && history[turn_start - 1]["role"] == "user" { turn_start -= 1; }
+            let mut overflow_retries = 0;
             loop {
                 let guidance = if agent.is_none() {self.guidance.as_ref()} else {None};
                 if let Some(guidance) = guidance {
@@ -268,7 +407,7 @@ impl Completion<'_> {
                         reply.clear();
                     }
                 }
-                let mut body = serde_json::json!({"model":self.model,"messages":history,"stream":true,"stream_options":{"include_usage":true}});
+                let mut body = serde_json::json!({"model":self.model,"messages":[],"stream":true,"stream_options":{"include_usage":true}});
                 let mut tools = if self.project.as_ref().is_some_and(|p| !p.roots.is_empty()) {crate::project_files::definitions().as_array().unwrap().clone()} else {vec![]};
                 if self.runtime.is_some() || self.project.as_ref().is_some_and(|p|!p.roots.is_empty()) {tools.extend(crate::skills::definitions());}
                 if self.runtime.is_some() || self.project.as_ref().is_some_and(|p|!p.roots.is_empty()) {tools.extend(crate::mcp::definitions());}
@@ -278,6 +417,10 @@ impl Completion<'_> {
                     "parameters":{"type":"object","properties":{"title":{"type":"string","description":"Short task title"},"task":{"type":"string","description":"Concrete task and any additional context needed"}},"required":["title","task"],"additionalProperties":false}
                 }})); }
                 if !tools.is_empty() { body["tools"] = serde_json::json!(tools); }
+                let overhead = body.to_string().len();
+                let learned = context_limits().lock().unwrap().get(&limit_key).copied();
+                if let Some(limit) = learned { fit_history(&mut history, &mut turn_start, context_budget(limit, overhead)); }
+                body["messages"] = serde_json::Value::Array(history.clone());
                 let partial = std::sync::Mutex::new(StreamResponse::default());
                 let progress = |kind: &str, text: &str| {
                     {let mut partial=partial.lock().unwrap();match kind {"__delta"=>partial.content.push_str(text),"__reasoning"=>partial.reasoning.push_str(text),_=>{}}}
@@ -294,7 +437,7 @@ impl Completion<'_> {
                 let status = response.status();
                 if !status.is_success() {
                     let text = response.text().await.map_err(|e|e.to_string())?;
-                    return Err(format!("API {}: {}",status.as_u16(),truncate(&text,300)));
+                    return Err(context_overflow(&text).map_or_else(||format!("API {}: {}",status.as_u16(),truncate(&text,300)).into(),ProviderError::Overflow));
                 }
                 let streamed = response.headers().get("content-type").and_then(|h|h.to_str().ok()).is_some_and(|h|h.contains("text/event-stream"));
                 let value:serde_json::Value = if streamed {
@@ -318,14 +461,14 @@ impl Completion<'_> {
                     if let Some(content) = message["content"].as_str() {progress("__delta",content);}
                     value
                 };
-                Ok::<_,String>(value)
+                Ok::<_,ProviderError>(value)
                 };
-                let value = if let Some(guidance) = guidance {
+                let result = if let Some(guidance) = guidance {
                     let io=guidance.begin_io();
                     let result=io.run(provider).await;
                     guidance.end_io();
                     match result {
-                        Ok(value)=>value?,
+                        Ok(result)=>result,
                         Err(_)=>{
                             // Discard all partial tool calls; retain only observed assistant text.
                             let partial=std::mem::take(&mut *partial.lock().unwrap());
@@ -335,7 +478,23 @@ impl Completion<'_> {
                             continue;
                         }
                     }
-                } else {provider.await?};
+                } else {provider.await};
+                let value = match result {
+                    Ok(value) => {overflow_retries = 0; value}
+                    Err(ProviderError::Failed(error)) => return Err(error),
+                    Err(ProviderError::Overflow(overflow)) => {
+                        overflow_retries += 1;
+                        if let (Some(tokens), Some(requested)) = (overflow.limit, overflow.requested) {
+                            let bytes_per_token = (body.to_string().len() as f64 / requested as f64).clamp(0.5, 16.0);
+                            context_limits().lock().unwrap().insert(limit_key.clone(), ContextLimit {tokens, bytes_per_token});
+                        }
+                        let current = history_bytes(&history);
+                        let learned = context_limits().lock().unwrap().get(&limit_key).copied();
+                        let budget = learned.map_or(current * 6 / 10, |limit| context_budget(limit, overhead).min(current * 9 / 10));
+                        if overflow_retries > 4 || !fit_history(&mut history, &mut turn_start, budget) {return Err("context_too_large".into());}
+                        continue;
+                    }
+                };
                 usage.prompt_tokens += value["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
                 usage.completion_tokens += value["usage"]["completion_tokens"].as_u64().unwrap_or(0);
                 usage.total_tokens += value["usage"]["total_tokens"].as_u64().unwrap_or(0);
@@ -832,6 +991,102 @@ mod tests {
         assert!(prepare_turn(&saved,"x".into(),vec![],false,Some(1)).is_err());
         assert!(prepare_turn(&saved,"x".into(),vec![],false,Some(40)).is_err());
         assert!(prepare_turn(&[],String::new(),vec![],true,None).is_err());
+    }
+
+    #[test]
+    fn context_overflow_errors_are_parsed_across_providers() {
+        let openai=r#"{"error":{"message":"This model's maximum context length is 1048576 tokens. However, you requested 1050906 tokens (1050906 in the messages, 0 in the completion). Please reduce the length of the messages or completion. (request_id: 8626daae-5273-4894-81ce-2ca27319bd70)","type":"invalid_request_error"}}"#;
+        assert_eq!(context_overflow(openai),Some(Overflow{limit:Some(1048576),requested:Some(1050906)}));
+        assert_eq!(context_overflow(r#"[{"error":{"code":400,"message":"The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).","status":"INVALID_ARGUMENT"}}]"#),Some(Overflow{limit:Some(1048576),requested:Some(1200000)}));
+        assert_eq!(context_overflow("prompt is too long: 208310 tokens > 200000 maximum"),Some(Overflow{limit:Some(200000),requested:Some(208310)}));
+        assert_eq!(context_overflow("This model's maximum prompt length is 131072 but the request contains 145123 tokens."),Some(Overflow{limit:Some(131072),requested:Some(145123)}));
+        assert_eq!(context_overflow("Prompt contains 140000 tokens and 0 draft tokens, too large for model with 131072 maximum context length"),Some(Overflow{limit:Some(131072),requested:Some(140000)}));
+        assert_eq!(context_overflow(r#"{"error":{"message":"the request exceeds the available context size","type":"exceed_context_size_error","n_prompt_tokens":5000,"n_ctx":4096}}"#),Some(Overflow{limit:Some(4096),requested:Some(5000)}));
+        assert_eq!(context_overflow(r#"{"error":{"code":"context_length_exceeded","message":"Input too long"}}"#),Some(Overflow{limit:None,requested:None}));
+        for unrelated in ["Invalid API key","max_tokens > 8192 is not supported","Rate limit exceeded: too many requests"] {assert_eq!(context_overflow(unrelated),None);}
+        let mut stream=StreamResponse::default();
+        assert!(matches!(stream.line(br#"data: {"error":{"message":"prompt is too long: 208310 tokens > 200000 maximum"}}"#,&|_:&str,_:&str|{}),
+            Err(ProviderError::Overflow(Overflow{limit:Some(200000),requested:Some(208310)}))));
+    }
+
+    #[test]
+    fn fitting_history_drops_oldest_turns_and_keeps_tool_rounds_valid() {
+        use serde_json::json;
+        let mut history=vec![json!({"role":"system","content":"rules"})];
+        for index in 0..20 {history.push(json!({"role":if index%2==0 {"user"} else {"assistant"},"content":format!("old-{index} {}","x".repeat(2000))}));}
+        let mut turn_start=history.len();
+        history.push(json!({"role":"user","content":"current question"}));
+        for round in 0..3 {
+            history.push(json!({"role":"assistant","content":null,"tool_calls":[{"id":format!("call-{round}"),"type":"function","function":{"name":"read_project_file","arguments":"{}"}}]}));
+            history.push(json!({"role":"tool","tool_call_id":format!("call-{round}"),"content":format!("result-{round} {}","y".repeat(30000))}));
+        }
+        let budget=80000;
+        assert!(fit_history(&mut history,&mut turn_start,budget));
+        assert!(history_bytes(&history)<=budget);
+        assert_eq!(history[0]["content"],"rules");
+        assert_eq!(history.iter().filter(|m|m["content"]==CONTEXT_NOTE).count(),1);
+        assert_eq!(history[turn_start]["content"],"current question");
+        assert!(history.last().unwrap()["content"].as_str().unwrap().len()>30000);
+        assert!(history.iter().any(|m|m["content"].as_str().is_some_and(|c|c.starts_with("result-0 ")&&c.contains("omitted"))));
+        let kept:Vec<usize>=history.iter().filter_map(|m|m["content"].as_str()?.strip_prefix("old-")?.split(' ').next()?.parse().ok()).collect();
+        assert!(!kept.is_empty() && kept[0]>0 && *kept.last().unwrap()==19 && kept.windows(2).all(|w|w[1]==w[0]+1));
+        for (index,message) in history.iter().enumerate().filter(|(_,m)|m["role"]=="tool") {
+            let call=history[..index].iter().rev().find(|m|m["role"]!="tool").unwrap();
+            assert!(call["tool_calls"].as_array().unwrap().iter().any(|c|c["id"]==message["tool_call_id"]));
+        }
+        let fitted=history.clone();
+        assert!(fit_history(&mut history,&mut turn_start,budget));assert_eq!(history,fitted);
+        let mut tiny=vec![json!({"role":"system","content":"s"}),json!({"role":"user","content":"z".repeat(10000)})];
+        let mut start=1;
+        assert!(!fit_history(&mut tiny,&mut start,100));
+        assert!(tiny[start]["content"].as_str().unwrap().len()<3000);
+    }
+
+    #[test]
+    fn context_overflow_compacts_history_retries_and_is_learned() {
+        use std::io::{Read,Write};
+        fn request(listener:&std::net::TcpListener)->(std::net::TcpStream,usize,serde_json::Value) {
+            let (mut socket,_)=listener.accept().unwrap();socket.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+            let mut bytes=Vec::new();let mut buffer=[0;65536];
+            loop {
+                let n=socket.read(&mut buffer).unwrap();assert!(n>0);bytes.extend_from_slice(&buffer[..n]);
+                if let Some(end)=bytes.windows(4).position(|w|w==b"\r\n\r\n") {
+                    let headers=String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+                    let length:usize=headers.lines().find_map(|line|line.strip_prefix("content-length:")).unwrap().trim().parse().unwrap();
+                    if bytes.len()>=end+4+length {return (socket,length,serde_json::from_slice(&bytes[end+4..end+4+length]).unwrap());}
+                }
+            }
+        }
+        fn respond(mut socket:std::net::TcpStream,status:&str,body:&str) {
+            write!(socket,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",body.len()).unwrap();
+        }
+        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let address=listener.local_addr().unwrap();
+        let server=std::thread::spawn(move||{
+            let ok=serde_json::json!({"choices":[{"message":{"role":"assistant","content":"fitted"}}]}).to_string();
+            let (socket,first,body)=request(&listener);
+            assert!(body["messages"].as_array().unwrap().iter().any(|m|m["content"].as_str().is_some_and(|c|c.starts_with("old-0 "))));
+            respond(socket,"400 Bad Request",r#"{"error":{"message":"This model's maximum context length is 20000 tokens. However, you requested 60000 tokens (60000 in the messages, 0 in the completion).","type":"invalid_request_error"}}"#);
+            let (socket,second,body)=request(&listener);
+            let messages=body["messages"].as_array().unwrap();
+            assert!(second*3<first);
+            assert!(messages.iter().any(|m|m["content"]==CONTEXT_NOTE));
+            assert_eq!(messages.last().unwrap()["content"],"latest question");
+            assert!(!messages.iter().any(|m|m["content"].as_str().is_some_and(|c|c.starts_with("old-0 "))));
+            assert!(messages.iter().any(|m|m["content"].as_str().is_some_and(|c|c.starts_with("old-39 "))));
+            respond(socket,"200 OK",&ok);
+            let (socket,third,_)=request(&listener);
+            assert!(third*3<first);
+            respond(socket,"200 OK",&ok);
+        });
+        let mut messages:Vec<ChatMessage>=(0..40).map(|index|ChatMessage{role:(if index%2==0 {"user"} else {"assistant"}).into(),
+            content:format!("old-{index} {}","x".repeat(5000)),attachments:vec![],feedback:None,activity:vec![]}).collect();
+        messages.push(ChatMessage{role:"user".into(),content:"latest question".into(),attachments:vec![],feedback:None,activity:vec![]});
+        let url=format!("http://{address}");
+        for _ in 0..2 {
+            let (reply,_)=tauri::async_runtime::block_on(chat_completion(&reqwest::Client::new(),&url,"overflow-test","test",&messages,None,None,|_,_|{},|_|{})).unwrap();
+            assert_eq!(reply,"fitted");
+        }
+        server.join().unwrap();
     }
 
     #[test]

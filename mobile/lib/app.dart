@@ -2539,6 +2539,8 @@ String remoteError(String? error) => switch (error) {
     'La risposta non è valida. Ricontrolla le opzioni.',
   'no_api_key' || 'model_not_found' =>
     'Configura un modello sul desktop prima di inviare messaggi.',
+  'context_too_large' =>
+    'La conversazione supera il contesto del modello. Avvia una nuova chat o scegli un modello con un contesto più ampio.',
   _ => 'Il desktop non ha completato la richiesta. Controlla AuraChat sul PC.',
 };
 

@@ -319,6 +319,7 @@
   "progress.working": "Attività in corso",
   "chat.unread": "Nuovo risultato da leggere",
   "errors.chat_in_progress": "Questa chat ha già una richiesta in corso.",
+  "errors.context_too_large": "La conversazione supera il contesto del modello anche dopo averla compattata. Avvia una nuova chat o scegli un modello con un contesto più ampio.",
   "permissions.title": "Modifica autorizzazioni",
   "permissions.ask": "Richiedi approvazione",
   "permissions.auto": "Approva per me",
