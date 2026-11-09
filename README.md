@@ -38,7 +38,9 @@ present, but building and testing it requires macOS and Xcode.
 - **Local project tools.** Files, commands, Git and MCP integrations operate on
   the gateway computer, within the permissions you grant.
 - **A desktop app that stays out of the way.** System tray operation, local
-  dictation, Markdown responses and an activity panel.
+  dictation, live Markdown with code copy, compact reasoning previews and an
+  activity panel. Streaming respects your reading position, with a jump-to-latest
+  control and per-conversation reading memory for the current session.
 - **Signed desktop updates.** Startup checks, automatic installation when a new
   version is available and automatic restart. Windows updates do not recreate
   desktop shortcuts.

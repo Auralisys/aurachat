@@ -26,7 +26,7 @@ const assert = require('node:assert/strict');
       }
       if(cmd==='get_locale')return JSON.stringify(locales);
       if(['get_local_config','get_config'].includes(cmd))return config;
-      if(cmd==='get_data')return structuredClone(data);
+      if(['get_data','refresh_data'].includes(cmd))return structuredClone(data);
       if(cmd==='save_data')return args.data;
       if(cmd==='choose_chat_files')return [{name:'bozza.txt',content:'Da inviare'}];
       if(cmd==='speech_model_status')return {ready:false,busy:false,downloaded:0,total:1};

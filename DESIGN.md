@@ -46,3 +46,18 @@ Cronologia assistant: testo intercalato a gruppi di ragionamento/operazioni,
 dettagli espandibili per comando e agente, nessun reasoning inventato. Il
 loader descrive il passo corrente; gli stati terminali non continuano a girare.
 Slash picker nel composer con skill reali del progetto, stato vuoto esplicito.
+
+## Desktop — lettura e streaming
+
+Adattamento dei comportamenti di DeepSeek Harness, senza sostituire identita
+Auralisys o funzioni esistenti. Testo della chat a 15 px, anteprima discreta
+dell'ultima riga completa del ragionamento e dettagli Markdown su richiesta.
+Nessuno shimmer sul testo; indicatore e timer restano nel gruppo delle attivita.
+Codice copiabile, tabelle e collegamenti funzionano anche durante lo streaming.
+
+Seguire il fondo e una scelta del lettore: risalire sospende lo scroll automatico,
+**Vai in fondo** o un nuovo invio lo riattivano. I dettagli hanno uno scroll
+indipendente. Posizione e aperture si conservano tra conversazioni nella sessione,
+non fra riavvii. Gli aggiornamenti non ricreano i blocchi Markdown invariati.
+Sotto 850 px la sidebar parte chiusa e si apre in overlay; la card attivita
+parte chiusa sotto 1000 px. Nessun redesign del companion Flutter in questa fase.

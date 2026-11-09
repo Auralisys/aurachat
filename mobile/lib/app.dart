@@ -2542,6 +2542,10 @@ String remoteError(String? error) => switch (error) {
     'Configura un modello sul desktop prima di inviare messaggi.',
   'context_too_large' =>
     'La conversazione supera il contesto del modello. Avvia una nuova chat o scegli un modello con un contesto più ampio.',
+  'response_truncated' =>
+    'Il modello ha raggiunto il limite di output. La risposta è incompleta: chiedi di continuare o rigenera dal desktop.',
+  'response_filtered' =>
+    'Il provider ha interrotto la risposta con il filtro dei contenuti. Controlla AuraChat sul PC.',
   'images_unsupported' =>
     'Il modello selezionato sul PC non legge le immagini. Scegline uno con supporto visivo.',
   'image_too_large' =>

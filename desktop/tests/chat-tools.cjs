@@ -18,7 +18,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
    if(cmd==='speech_model_status')return {ready:false,busy:false,downloaded:0,total:1994857346};
    if(cmd==='get_locale')return JSON.stringify(locales);
    if(['get_local_config','get_config'].includes(cmd))return config;
-   if(cmd==='get_data')return structuredClone(window.__store);
+   if(['get_data','refresh_data'].includes(cmd))return structuredClone(window.__store);
    if(cmd==='save_data'){window.__store=structuredClone(args.data);return structuredClone(args.data);}
    if(cmd==='choose_chat_files')return window.__nextFiles||[{name:'notes.md',content:'Private text selected by the user.'}];
    if(cmd==='chat'){
@@ -32,6 +32,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   }}};
  },{locales});
  await page.goto(pathToFileURL(resolve(__dirname,'../ui/index.html')).href);await page.locator('#boot-splash').waitFor({state:'hidden'});
+ await page.evaluate(()=>openConversation('c',false));
  const shots=resolve(__dirname,'../../.artifact/chat-alignment');mkdirSync(shots,{recursive:true});
  await page.click('#sidebar-collapse');
  await page.screenshot({path:resolve(shots,'conversation-desktop.png')});
@@ -72,7 +73,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  assert.equal(request.attachments[0].name,'notes.md');assert.equal(request.attachments[0].content,'Private text selected by the user.');
  assert.equal(await page.locator('.message-attachments .attachment-chip').innerText(),'notes.md');
  assert.equal(await page.getByText('Private text selected by the user.',{exact:true}).count(),0);
- await page.click('#nav-home');await page.click('#composer-mic');await page.locator('#settings-voice').waitFor({state:'visible'});assert.equal(await page.locator('#composer-input').inputValue(),'');await page.click('#modal-close');
+ await page.click('#nav-home');await page.click('#composer-mic');await page.locator('#settings-voice').waitFor({state:'visible'});assert.equal(await page.locator('#composer-input').textContent(),'');await page.click('#modal-close');
  await page.evaluate(()=>window.__nextFiles=Array.from({length:5},()=>({name:'x.txt',content:'x'})));await page.click('#composer-attach');await page.locator('#composer-status').waitFor({state:'visible'});
  assert.equal(await page.locator('#composer-attachments').isVisible(),false);
  await page.click('#nav-home');await page.evaluate(()=>delete window.__nextFiles);await page.click('#composer-attach');await page.fill('#composer-input','Riassumi queste note e proponi i prossimi passi.');

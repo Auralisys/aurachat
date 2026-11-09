@@ -109,3 +109,25 @@ Login separato dalla configurazione iniziale, ripristino sessione tramite refres
 token, password non più salvata, configurazione LLM recuperata dal documento
 utente. Gli errori di rete non riaprono il primo avvio. Stato e verifiche in
 [[Account - Login e ripristino sessione]].
+
+## Lettura desktop e confronto con DeepSeek Harness
+
+Il riferimento per scroll, reasoning e streaming e il progetto ufficiale
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
+Adattamento alla UI statica Tauri: nessuna migrazione a React, nessuna
+sostituzione della palette Auralisys, dei permessi o delle funzioni di AuraChat.
+
+- Chat a 15 px, gruppi attivita compatti con anteprima dell'ultima riga completa
+  del ragionamento. Markdown dei dettagli solo all'apertura; indicatore del
+  lavoro e timer senza shimmer sul testo.
+- Follow del fondo come intenzione: risalire ferma l'autoscroll; **Vai in fondo**
+  o un nuovo invio lo riattivano. Dettagli con scorrimento indipendente.
+  Posizioni e aperture conservate in memoria per 40 chat, non fra riavvii.
+- Markdown live e finale con le stesse azioni: copia codice, linguaggio,
+  tabelle scrollabili e link HTTP(S). I blocchi invariati mantengono il DOM;
+  il parsing del segmento rimane completo, non incrementale come nel riferimento.
+- Sidebar inizialmente chiusa in overlay sotto 850 px; attivita inizialmente
+  chiuse sotto 1000 px. Escape e selezione chat chiudono la navigazione compatta.
+- Risposta troncata o filtrata segnalata esplicitamente, conservando il testo
+  parziale senza eseguire tool incompleti. Il mobile riceve i messaggi di errore,
+  non questo restyling desktop.

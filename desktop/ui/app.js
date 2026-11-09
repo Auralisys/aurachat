@@ -763,6 +763,26 @@ function clearChat() {
   voiceUi();
 }
 
+function restoreConversationHistory(id, conversation) {
+  const run = state.runs.get(id);
+  let retained = !!run?.pending;
+  if (run?.queueOutcome === 'failed') {
+    const unchanged = run.baseRevision != null && conversation?.revision != null
+      ? run.baseRevision === conversation.revision
+      : run.baseUpdatedAt === conversation?.updated_at;
+    const attempted = run.messages.filter(message => message.role !== 'error');
+    const savedAttempt = conversation?.messages?.length === attempted.length
+      && conversation.messages.every((message,index) => message.role === attempted[index].role && sameGuidance(message,attempted[index]));
+    // Keep an unsaved failure (or the same partial turn saved by the gateway),
+    // but never hide a newer conversation from another device.
+    retained = unchanged || savedAttempt || conversation?.messages_loaded === false;
+    if (!retained) {run.failedSend = null;run.queueOutcome = null;}
+  }
+  state.messages = (retained ? run.messages : conversation?.messages || []).slice();
+  state.lastUsage = run?.usage || null;
+  state.failedSend = run?.failedSend || null;
+}
+
 async function openConversation(id, refresh = true, section = null) {
   saveChatDraft();
   if (id !== state.activeConversationId) releaseRemoteTurn(state.activeConversationId);
@@ -778,8 +798,7 @@ async function openConversation(id, refresh = true, section = null) {
   const freshPreload = state.preloaded.get(id) != null && Date.now() - state.preloaded.get(id) < 60000;
   const needsLoad=found && !run?.pending && (found.conversation.messages_loaded===false || (refresh && found.conversation.revision != null && !freshPreload));
   state.loadingConversation=!!needsLoad;
-  state.messages = run?.pending ? run.messages.slice() : found ? (found.conversation.messages || []).slice() : [];
-  state.lastUsage = run?.usage || null;state.failedSend = run?.failedSend || null;
+  restoreConversationHistory(id,found?.conversation);
   restoreChatDraft(id);
   renderSidebar();
   renderMessages();
@@ -795,7 +814,7 @@ async function openConversation(id, refresh = true, section = null) {
       const target=findConversation(id);if(!target)return;
       Object.assign(target.conversation,conversation);
       const baseline = state.persistedData && conversationInData(state.persistedData, id);if (baseline) Object.assign(baseline, structuredClone(conversation));
-      state.messages=(conversation.messages || []).slice();renderMessages();updateContextInfo();
+      restoreConversationHistory(id,conversation);renderMessages();updateContextInfo();
     } catch(e) {
       if(epoch===state.conversationLoadEpoch) composerStatus(localizeError(e));
     } finally {
@@ -895,6 +914,59 @@ function markdownHTML(content) {
   });
 }
 
+// Keep unchanged Markdown blocks mounted: selection, disclosures and horizontal
+// reading positions must survive streaming updates. Parsing stays authoritative
+// so late reference definitions and unfinished fences resolve correctly.
+function renderMarkdown(target, content) {
+  if (target._raw === content) return;
+  target._raw = content;
+  const parsed = document.createElement('template');parsed.innerHTML = markdownHTML(content);
+  const old = [...target.children];
+  const blocks = [...parsed.content.childNodes].filter(node => node.nodeType === Node.ELEMENT_NODE || node.textContent.trim()).map(node => {
+    if (node.nodeType === Node.ELEMENT_NODE) return node;
+    const span = document.createElement('span');span.textContent = node.textContent;return span;
+  });
+  const nodes = blocks.map((node,index) => {
+    const source = node.outerHTML;
+    if (old[index]?._source === source) return old[index];
+    let rendered = node;
+    (node.matches('a') ? [node] : [...node.querySelectorAll('a')]).forEach(link => {
+      link.rel = 'noopener noreferrer';
+      link.onclick = async event => {
+        event.preventDefault();
+        if (!/^https?:$/.test(link.protocol)) return;
+        try {await invoke('open_external_url',{url:link.href});} catch (_) {composerStatus(t('chat.link_failed'));}
+      };
+    });
+    const decorateCode = pre => {
+      const code = pre.querySelector('code');if (!code) return;
+      const language = document.createElement('span');language.className = 'code-language';
+      language.textContent = code.className.match(/(?:^|\s)language-([\w#+.-]+)/)?.[1] || t('chat.code');
+      pre.prepend(language);pre.append(messageAction('copy','chat.copy_code',button => copyText(code.textContent,button)));
+    };
+    if (node.matches('pre')) decorateCode(node);
+    node.querySelectorAll('pre').forEach(decorateCode);
+    const wrapTable = table => {
+      const wrapper = document.createElement('div');wrapper.className = 'markdown-table';wrapper.tabIndex = 0;
+      wrapper.setAttribute('role','region');wrapper.setAttribute('aria-label',t('chat.table'));
+      table.replaceWith(wrapper);wrapper.append(table);return wrapper;
+    };
+    if (node.matches('table')) rendered = wrapTable(node);
+    else node.querySelectorAll('table').forEach(wrapTable);
+    rendered._source = source;
+    // Even the growing block may have a reader scrolling sideways.
+    if (old[index]?.tagName === rendered.tagName) {
+      rendered._scrollLeft = old[index].scrollLeft;
+      rendered._scrollTop = old[index].scrollTop;
+    }
+    return rendered;
+  });
+  reconcileChildren(target,nodes);
+  nodes.forEach(node => {
+    if (node._scrollLeft != null) {node.scrollLeft = node._scrollLeft;node.scrollTop = node._scrollTop;delete node._scrollLeft;delete node._scrollTop;}
+  });
+}
+
 async function copyText(text, button) {
   try {
     if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
@@ -946,15 +1018,6 @@ function messageEl(m, index) {
   const text = document.createElement('div');text.className = 'msg__text';
   if (role === 'assistant') {
     text.classList.add('markdown');renderTurnBody(text, m);
-    text.querySelectorAll('a').forEach(link => {
-      link.rel = 'noopener noreferrer';
-      link.onclick = async e => {e.preventDefault();try {await invoke('open_external_url',{url:link.href});}catch (_) {composerStatus(t('chat.link_failed'));}};
-    });
-    text.querySelectorAll('pre').forEach(pre => {
-      const code = pre.querySelector('code');
-      if (code) pre.appendChild(messageAction('copy','chat.copy_code',button => copyText(code.textContent,button)));
-    });
-    text.querySelectorAll('table').forEach(table => {const scroll = document.createElement('div');scroll.className='markdown-table';table.replaceWith(scroll);scroll.appendChild(table);});
   } else text.textContent = m.content;
   const images = (m.attachments || []).filter(isImageAttachment), files = (m.attachments || []).filter(file => !isImageAttachment(file));
   if (images.length) el.appendChild(messageImagesEl(images));
@@ -987,13 +1050,13 @@ function messageEl(m, index) {
 }
 
 function renderMessages() {
+  const reading = chatScroll.beforeRender();
   renderQuestions();
   $('#model-select').disabled = state.busy || state.changingModel;
   $('#composer-attach').disabled = state.preparing || state.loadingConversation;
   voiceUi();
   renderActivity();
   const box = $('#messages');
-  const follow = box.dataset.conversation !== String(state.activeConversationId) || box.scrollHeight - box.scrollTop - box.clientHeight < 90;
   box.dataset.conversation = String(state.activeConversationId);
   $('.composer__project').hidden = state.activeConversationId !== null;
   $('#view-chat').classList.toggle('is-empty', state.messages.length === 0 && !state.loadingConversation && !state.busy);
@@ -1006,18 +1069,22 @@ function renderMessages() {
   renderThinkingStatus();
   if (state.messages.length === 0 && !state.busy && !state.loadingConversation) {
     box.innerHTML = emptyHTML();
+    chatScroll.afterRender(reading);
     return;
   }
-  state.messages.forEach((message,index) => box.appendChild(messageEl(message,index)));
+  state.messages.forEach((message,index) => {
+    const node = messageEl(message,index);node.dataset.messageIndex = String(index);box.appendChild(node);
+  });
   if (state.busy) {
     const pending = document.createElement('article');pending.className = 'msg msg--assistant msg--stream';
+    pending.dataset.messageIndex = String(state.messages.length);
     pending.setAttribute('aria-label', t('chat.assistant'));
     const body = document.createElement('div');body.className = 'msg__text markdown';pending.append(body);box.append(pending);
     updateLiveTurn();
   }
   renderQueuedMessages(box, state.activeConversationId);
   renderThinkingStatus();
-  if (follow) box.scrollTop = box.scrollHeight;
+  chatScroll.afterRender(reading);
   updateThinkingTimer();
 }
 
@@ -1050,9 +1117,17 @@ async function requestChat(payload) {
   // A queue can start a background conversation: never seed it (or the UI)
   // with the messages of the chat that happens to be open.
   const isActive = id === state.activeConversationId;
-  const seed = isActive ? state.messages : (findConversation(id)?.conversation?.messages || []);
-  const run = {pending:true, since:Date.now(), messages:structuredClone(seed), usage:null, failedSend:null, stopping:false, initialMessageCount:seed.length, pendingGuidance:[], guidanceEvents:[]};
+  const saved = findConversation(id)?.conversation;
+  const seed = isActive ? state.messages : (saved?.messages || []);
+  const run = {pending:true, since:Date.now(), messages:structuredClone(seed), usage:null, failedSend:null, stopping:false, initialMessageCount:seed.length, pendingGuidance:[], guidanceEvents:[],
+    baseRevision:saved?.revision, baseUpdatedAt:saved?.updated_at};
+  if (!isActive && !payload.retry) {
+    if (Number.isInteger(payload.edit_index)) run.messages = run.messages.slice(0,payload.edit_index);
+    run.messages.push({role:'user',content:payload.content,attachments:payload.attachments || []});
+    run.initialMessageCount = run.messages.length;
+  }
   state.runs.set(id, run);if (isActive) {state.messages = run.messages;state.failedSend = null;}state.unread.delete(id);
+  if (isActive) chatScroll.follow();
   closeChoiceMenus();startTimer();if (isActive) renderMessages();renderSidebar();
   try {
     const result = remoteTarget(id) ? await requestRemoteChat(payload,run) : await invoke('chat',payload);
@@ -1233,6 +1308,7 @@ async function send() {
   nameConversationFromMessage(id, text, attachments, editIndex);
   input.focus();
   const message = {content:text, attachments, edit_index:editIndex};
+  chatScroll.follow();
   const existing = state.queues.get(id) || [];
   if (existing.length || state.runs.get(id)?.pending) {
     existing.push(message);state.queues.set(id, existing);
@@ -1640,6 +1716,7 @@ async function init() {
   document.querySelectorAll('[data-icon]').forEach(el => {
     el.replaceWith(icon(el.dataset.icon));
   });
+  setupChatScroll();
   setupTreeOverlays();
   setupProjectEditor();
   setupComposerExtras();
@@ -1676,7 +1753,7 @@ async function init() {
       state.data = data;state.persistedData = structuredClone(data);
       if (state.activeConversationId && !findConversation(state.activeConversationId)) clearChat();
       const active = findConversation(state.activeConversationId)?.conversation;
-      if (active?.messages_loaded) { state.messages = active.messages.slice();renderMessages();updateContextInfo(); }
+      if (active?.messages_loaded) { restoreConversationHistory(state.activeConversationId,active);renderMessages();updateContextInfo(); }
       if (run?.external) {run.messages=(conversationInData(data,payload.conversation_id)?.messages || run.messages).slice();stopTimer();}
       if (run?.external && state.activeConversationId !== payload.conversation_id) state.unread.add(payload.conversation_id);
       renderSidebar();updateComposerControls();
@@ -1968,15 +2045,32 @@ function setupAppMenus() {
 
 function setupShell() {
   window.addEventListener('resize',closeChoiceMenus);
-  $('#sidebar-collapse').onclick = () => {
+  const compact = matchMedia('(max-width:850px)');
+  const shade = document.createElement('button');shade.className = 'sidebar-shade';shade.type = 'button';
+  shade.tabIndex = -1;shade.setAttribute('aria-label',t('ui.collapse'));$('.sidebar').after(shade);
+  const setSidebar = collapsed => {
     closeTreeMenu();
     hideProjectPreview();
-    const collapsed = $('.content').classList.toggle('sidebar-collapsed');
+    $('.content').classList.toggle('sidebar-collapsed',collapsed);
+    $('.main').inert = compact.matches && !collapsed;
+    renderActivity();
     const button = $('#sidebar-collapse');
     button.setAttribute('aria-expanded', String(!collapsed));
     button.setAttribute('aria-label', t(collapsed ? 'ui.sidebar' : 'ui.collapse'));
     button.title = button.getAttribute('aria-label');
   };
+  $('#sidebar-collapse').onclick = () => setSidebar(!$('.content').classList.contains('sidebar-collapsed'));
+  shade.onclick = () => {setSidebar(true);$('#sidebar-collapse').focus();};
+  compact.addEventListener('change', () => setSidebar(compact.matches));
+  setSidebar(compact.matches);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && compact.matches && !$('.content').classList.contains('sidebar-collapsed')) {
+      setSidebar(true);$('#sidebar-collapse').focus();
+    }
+  });
+  $('.sidebar').addEventListener('click', event => {
+    if (compact.matches && event.target.closest('.tree-conv__title,.sidebar__btn')) setSidebar(true);
+  });
   $('#nav-back').onclick = () => navigateHistory(-1);
   $('#nav-forward').onclick = () => navigateHistory(1);
   $('#nav-home').onclick = () => $('#btn-new-chat').click();

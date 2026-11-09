@@ -84,12 +84,13 @@
           </section>
 
           <section id="view-chat" class="view view--chat" hidden>
-            <div class="chat-header"><span id="conversation-title" class="conversation-title">AuraChat</span>
+            <div class="chat-header"><h1 id="conversation-title" class="conversation-title">AuraChat</h1>
               <details id="context-info" class="context-info" hidden><summary><svg data-icon="usage" aria-hidden="true"></svg><span id="context-summary"></span></summary><div id="context-details"></div></details><button id="conversation-options" class="icon-button" data-i18n-aria-label="chat.conversation_options" data-i18n-title="chat.conversation_options" disabled><svg data-icon="more" aria-hidden="true"></svg></button>
               <button id="activity-toggle" class="icon-button" aria-expanded="true" aria-controls="activity-dock" data-i18n-aria-label="activity.toggle" data-i18n-title="activity.toggle"><svg data-icon="settings" aria-hidden="true"></svg></button>
             </div>
-            <div id="messages" class="messages"></div>
+            <div id="messages" class="messages" tabindex="-1" data-i18n-aria-label="chat.conversation"></div>
             <div class="composer">
+              <button id="chat-latest" type="button" class="chat-latest" data-i18n-title="chat.latest" hidden><svg data-icon="chevron" aria-hidden="true"></svg><span data-i18n="chat.latest"></span></button>
               <div id="editing-message" class="editing-message" hidden><span data-i18n="chat.editing"></span><button id="cancel-edit" class="icon-button" data-i18n-aria-label="project.cancel"><svg data-icon="close" aria-hidden="true"></svg></button></div>
               <div class="composer__box">
                 <div id="skill-chooser" class="skill-chooser" hidden>
@@ -207,6 +208,7 @@
     <script src="voice.js"></script>
     <script src="activity.js"></script>
     <script src="git.js"></script>
+    <script src="chat-scroll.js"></script>
     <script src="chat-progress.js"></script>
     <script src="icons.js"></script>
     <script src="settings.js"></script>

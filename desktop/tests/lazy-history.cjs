@@ -10,7 +10,7 @@ const {chromium}=require('playwright');const {readFileSync}=require('node:fs');c
   const summaries=['a','b'].map((id,i)=>({id,title:'Chat '+id,created_at:1,updated_at:2-i,context_tokens:50,messages:[],messages_loaded:false,revision:null}));
   window.__TAURI__={window:{getCurrentWindow:()=>({minimize(){},close(){},async listen(){return()=>{};}})},core:{invoke:async(cmd,args)=>{
    window.__calls.push({cmd,args});if(cmd==='get_locale')return JSON.stringify(locales);if(['get_config','get_local_config'].includes(cmd))return config;
-   if(cmd==='get_data')return {projects:[],conversations:structuredClone(summaries)};
+   if(['get_data','refresh_data'].includes(cmd))return {projects:[],conversations:structuredClone(summaries)};
    if(cmd==='get_conversation')return new Promise((resolve,reject)=>window.__loads[args.conversation_id]={resolve:()=>resolve({...summaries.find(c=>c.id===args.conversation_id),messages_loaded:true,revision:'r1',messages:[{role:'user',content:'Domanda '+args.conversation_id},{role:'assistant',content:'Risposta '+args.conversation_id}]}),reject});
    if(cmd==='save_data')return args.data;
   }}};
@@ -18,7 +18,7 @@ const {chromium}=require('playwright');const {readFileSync}=require('node:fs');c
  await page.goto(pathToFileURL(resolve(__dirname,'../ui/index.html')).href);await page.locator('#boot-splash').waitFor({state:'hidden'});
  assert.equal(await page.locator('#composer-send').isDisabled(),true);
  assert.equal(await page.locator('.empty').count(),0);
- assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='get_conversation').length),1);
+ assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='get_conversation').length),2,'Load the active chat and preload the recent chat');
  // Switching before a response cannot put one chat's messages in another chat.
  await page.getByRole('button',{name:'Chat b',exact:true}).click();await page.waitForFunction(()=>window.__loads.b);
  await page.evaluate(()=>window.__loads.a.resolve());assert.equal(await page.locator('#conversation-title').textContent(),'Chat b');

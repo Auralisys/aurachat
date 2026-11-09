@@ -1,6 +1,6 @@
 // Conversation-scoped activity. Sources come only from user-supplied material;
 // native activity events are retained for the current app session.
-const activity = { conversations: new Map(), visible: true, section: null, selected: null, conversationId: null, filter: 'all' };
+const activity = { conversations: new Map(), visible: !matchMedia('(max-width:1000px)').matches, section: null, selected: null, conversationId: null, filter: 'all' };
 
 // Artifacts are what the model produced. Model prose and raw tool output are not.
 const ARTIFACT_TYPES = [
@@ -397,7 +397,7 @@ function renderActivity() {
   const hasActivity = state.messages.some(m => ['user','assistant'].includes(m.role)) || state.busy || Object.values(items).some(list => list.length);
   const visible = activity.visible && hasActivity && !$('#view-chat').hidden;
   dock.hidden = $('#view-chat').hidden;
-  dock.classList.toggle('is-visible', visible);dock.inert = !visible;
+  dock.classList.toggle('is-visible', visible);dock.inert = !visible || $('.main').inert;
   dock.setAttribute('aria-hidden', String(!visible));
   $('#activity-toggle').hidden = !hasActivity;
   $('#activity-toggle').setAttribute('aria-expanded', String(visible));

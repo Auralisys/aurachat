@@ -14,7 +14,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
       if(cmd==='get_locale')return JSON.stringify(locales);
       if(['get_config','get_local_config'].includes(cmd))return config;
       if(cmd==='speech_model_status')return {ready:true,busy:false,loading:false,loaded:true,downloaded:1,total:1};
-      if(cmd==='get_data')return structuredClone(window.__data);
+      if(['get_data','refresh_data'].includes(cmd))return structuredClone(window.__data);
       if(cmd==='save_data'){window.__data=structuredClone(args.data);return structuredClone(window.__data);}
       if(cmd==='chat'){
         const id=args.conversation_id;
@@ -50,7 +50,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   assert.equal(await page.locator('#composer-send').isVisible(),true);
   assert.equal(await page.locator('#composer-stop').isVisible(),true);
   await page.click('#composer-send');
-  assert.equal(await page.locator('#composer-input').inputValue(),'');
+  assert.equal(await page.locator('#composer-input').textContent(),'');
   assert.equal(await page.locator('#composer-status').textContent(),locales['chat.queued']);
   assert.equal(await chatCalls(),1);
   assert.equal(await page.locator('#composer-send').isVisible(),false);
@@ -85,7 +85,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await queueAction('Modifica');
   assert.equal(await queued.count(),0);
-  assert.equal(await page.locator('#composer-input').inputValue(),'Seconda domanda');
+  assert.equal(await page.locator('#composer-input').textContent(),'Seconda domanda');
   await page.click('#composer-send');
   await queueAction('Cancella');
   assert.equal(await queued.count(),0);
@@ -121,10 +121,12 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   await queueAction('Invia subito');
   await page.waitForFunction(()=>window.__calls.some(c=>c.cmd==='steer_chat'));
   assert.equal(await chatCalls(),4);
-  assert.equal(await queued.count(),0);
+  assert.equal(await queued.count(),1);
+  assert.equal(await queued.locator('.msg__state--guide').textContent(),locales['queue.guide_pending']);
   assert.equal(await page.evaluate(()=>window.__calls.find(c=>c.cmd==='steer_chat').args.content),'Indicazione immediata');
   await page.evaluate(()=>window.__events['chat-progress']({payload:{conversation_id:state.activeConversationId,kind:'__steering',text:JSON.stringify({role:'user',content:'Indicazione immediata',attachments:[]})}}));
   await page.locator('#messages .msg--user:not(.msg--queued)').getByText('Indicazione immediata',{exact:true}).waitFor();
+  assert.equal(await queued.count(),0);
   assert.notEqual(await page.locator('#composer-status').textContent(),locales['chat.queued']);
   await page.evaluate(()=>window.__runs[Object.keys(window.__runs)[0]].finish('Fine'));
   await page.waitForFunction(()=>!state.busy);

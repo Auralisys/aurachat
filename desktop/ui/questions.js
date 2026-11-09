@@ -79,9 +79,8 @@ function questionCard(item) {
   const submit = document.createElement('button');submit.type = 'submit';submit.className = 'approval-allow';submit.textContent = t(index<questions.length-1 ? 'questions.next' : 'questions.submit');
   submit.disabled = !draft.selected.length && !draft.custom.trim();
   const replaceCard = () => {
-    const messages = $('#messages'), follow = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 90;
     form.replaceWith(questionCard(item));$('#question-requests legend')?.focus({preventScroll:true});
-    if (follow) messages.scrollTop = messages.scrollHeight;
+    chatScroll.sync();
   };
   back.onclick = () => {item.draft.index--;replaceCard();};
   const respond = async action => {
@@ -119,7 +118,6 @@ function questionCard(item) {
 }
 
 function renderQuestions() {
-  const messages = $('#messages'), follow = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 90;
   let tray = $('#question-requests');
   if (!tray) {
     tray = document.createElement('section');tray.id = 'question-requests';tray.setAttribute('aria-label', t('questions.waiting'));tray.setAttribute('aria-live','polite');$('.composer').prepend(tray);
@@ -133,7 +131,7 @@ function renderQuestions() {
   }
   for (const card of existing.values()) card.remove();
   tray.hidden = !items.length;
-  if (follow) messages.scrollTop = messages.scrollHeight;
+  chatScroll.sync();
   if (focused && !tray.contains(document.activeElement)) $('#composer-input').focus({preventScroll:true});
 }
 

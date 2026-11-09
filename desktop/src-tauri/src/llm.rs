@@ -465,6 +465,7 @@ struct StreamResponse {
     calls: std::collections::BTreeMap<u64, serde_json::Value>,
     usage: serde_json::Value,
     finished: bool,
+    finish_reason: Option<String>,
 }
 
 impl StreamResponse {
@@ -479,12 +480,12 @@ impl StreamResponse {
         }
         if value["usage"].is_object() { self.usage = value["usage"].clone(); }
         let choice = &value["choices"][0];
-        if !choice["finish_reason"].is_null() { self.finished = true; }
+        if let Some(reason) = choice["finish_reason"].as_str() { self.finished = true; self.finish_reason = Some(reason.into()); }
         let delta = &choice["delta"];
-        if let Some(text) = delta["content"].as_str() { self.content.push_str(text); activity("__delta", text); }
         if let Some(text) = delta["reasoning_content"].as_str().or_else(|| delta["reasoning"].as_str()) {
             self.reasoning.push_str(text); activity("__reasoning", text);
         }
+        if let Some(text) = delta["content"].as_str() { self.content.push_str(text); activity("__delta", text); }
         if let Some(calls) = delta["tool_calls"].as_array() {
             for call in calls {
                 let index = call["index"].as_u64().ok_or("tool call missing index")?;
@@ -506,7 +507,7 @@ impl StreamResponse {
         let mut message = serde_json::json!({"role":"assistant","content":self.content});
         if !self.calls.is_empty() { message["tool_calls"] = self.calls.into_values().collect::<Vec<_>>().into(); }
         if !self.reasoning.is_empty() { message["reasoning_content"] = self.reasoning.into(); }
-        serde_json::json!({"choices":[{"message":message}],"usage":self.usage})
+        serde_json::json!({"choices":[{"message":message,"finish_reason":self.finish_reason}],"usage":self.usage})
     }
 }
 
@@ -826,6 +827,12 @@ impl Completion<'_> {
                         continue;
                     }
                 };
+                // Never execute partial tool arguments or present a token-limited reply as complete.
+                match value["choices"][0]["finish_reason"].as_str() {
+                    Some("length") => return Err("response_truncated".into()),
+                    Some("content_filter") => return Err("response_filtered".into()),
+                    _ => {}
+                }
                 usage.prompt_tokens += value["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
                 usage.completion_tokens += value["usage"]["completion_tokens"].as_u64().unwrap_or(0);
                 usage.total_tokens += value["usage"]["total_tokens"].as_u64().unwrap_or(0);
@@ -1196,7 +1203,10 @@ mod tests {
                         let length:usize = headers.lines().find_map(|line|line.strip_prefix("content-length:")).unwrap().trim().parse().unwrap();
                         if request.len() >= end+4+length {
                             let body:serde_json::Value = serde_json::from_slice(&request[end+4..]).unwrap();assert_eq!(body["stream"],true);
-                            if turn == 1 {assert!(body["messages"].as_array().unwrap().iter().any(|m|m["role"] == "tool" && m["content"].as_str().unwrap().contains("Verified")));}
+                            if turn == 1 {
+                                assert!(body["messages"].as_array().unwrap().iter().any(|m|m["role"] == "tool" && m["content"].as_str().unwrap().contains("Verified")));
+                                assert!(body["messages"].as_array().unwrap().iter().any(|m|m["role"] == "assistant" && m["reasoning_content"] == "Verifico il file."));
+                            }
                             break;
                         }
                     }
@@ -1245,6 +1255,7 @@ mod tests {
         let message = &value["choices"][0]["message"];
         assert_eq!(message["content"], "Leggo 🦀. ");
         assert_eq!(message["reasoning_content"], "Controllo il file…");
+        assert_eq!(value["choices"][0]["finish_reason"], "tool_calls");
         assert_eq!(message["tool_calls"][0]["function"]["arguments"], r#"{"root":0,"path":"notes.md"}"#);
         assert_eq!(value["usage"]["total_tokens"], 42);
         assert_eq!(events.lock().unwrap().len(), 2);
@@ -1252,6 +1263,50 @@ mod tests {
         assert!(bad.line(b"data: {\"error\":{\"message\":\"failed\"}}\n", &callback).is_err());
         assert!(bad.line(b"data: invalid\n", &callback).is_err());
         assert!(!bad.finished);
+        let mut combined = StreamResponse::default();
+        events.lock().unwrap().clear();
+        combined.line(b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Think first.\",\"content\":\"Answer.\"},\"finish_reason\":\"length\"}]}", &callback).unwrap();
+        assert_eq!(events.lock().unwrap()[0].0, "__reasoning");
+        assert_eq!(events.lock().unwrap()[1].0, "__delta");
+        assert_eq!(combined.value()["choices"][0]["finish_reason"], "length");
+    }
+
+    #[test]
+    fn incomplete_provider_responses_preserve_text_without_executing_tools() {
+        use std::io::{Read,Write};
+        for streamed in [false,true] {
+            for (reason,expected) in [("length","response_truncated"),("content_filter","response_filtered")] {
+                let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let address=listener.local_addr().unwrap();
+                let server=std::thread::spawn(move || {
+                    let (mut socket,_)=listener.accept().unwrap();
+                    socket.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+                    let mut request=Vec::new();let mut buffer=[0;4096];
+                    loop {
+                        let count=socket.read(&mut buffer).unwrap();assert!(count>0);request.extend_from_slice(&buffer[..count]);
+                        if let Some(end)=request.windows(4).position(|part|part==b"\r\n\r\n") {
+                            let headers=String::from_utf8_lossy(&request[..end]).to_lowercase();
+                            let length:usize=headers.lines().find_map(|line|line.strip_prefix("content-length:")).unwrap().trim().parse().unwrap();
+                            if request.len()>=end+4+length {break;}
+                        }
+                    }
+                    let message=serde_json::json!({"role":"assistant","content":"Partial answer","reasoning_content":"Thinking",
+                        "tool_calls":[{"index":0,"id":"partial","type":"function","function":{"name":"create_subagent","arguments":"{\"title\":"}}]});
+                    let (kind,payload)=if streamed {
+                        ("text/event-stream",format!("data: {}\n\ndata: [DONE]\n\n",serde_json::json!({"choices":[{"delta":message,"finish_reason":reason}]})))
+                    } else {("application/json",serde_json::json!({"choices":[{"message":message,"finish_reason":reason}]}).to_string())};
+                    write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{payload}",payload.len()).unwrap();
+                });
+                let messages:Vec<ChatMessage>=serde_json::from_str(r#"[{"role":"user","content":"Check"}]"#).unwrap();
+                let events=std::sync::Mutex::new(Vec::new());
+                let result=tauri::async_runtime::block_on(chat_completion(&reqwest::Client::new(),&format!("http://{address}"),"test","test",&messages,None,None,
+                    |kind,text|events.lock().unwrap().push((kind.to_string(),text.to_string())), |_|panic!("truncated tool executed")));
+                server.join().unwrap();
+                assert_eq!(result.unwrap_err(),expected);
+                let events=events.into_inner().unwrap();
+                assert!(events.iter().any(|(kind,text)|kind=="__delta"&&text=="Partial answer"));
+                assert!(!events.iter().any(|(kind,_)|kind=="__activity"||kind=="__final_response"));
+            }
+        }
     }
 
     #[test]

@@ -669,3 +669,37 @@ arrivano con la cronologia. Il telefono le visualizza ma non può allegarle.
 Verifica: `desktop/tests/image-attachments.cjs` e test Rust su tipi, limiti,
 conversione delle richieste, immagini degli strumenti, modelli senza visione e
 lettura tramite `deepseek-flash`.
+
+## Streaming e lettura ispirati a DeepSeek Harness
+
+Il gateway conserva Chat Completions OpenAI-compatible, non adotta la Messages
+API del riferimento. `StreamResponse` mantiene `finish_reason` anche nello SSE
+e notifica il reasoning prima del testo quando entrambi arrivano nello stesso
+delta. Il reasoning del turno continua a essere reinviato nei round degli
+strumenti; le attivita storiche non diventano messaggi reasoning di nuovi turni.
+
+`length` e `content_filter`, sia JSON sia SSE, interrompono il turno con
+`response_truncated` o `response_filtered` prima di eseguire eventuali tool.
+Il testo parziale viene conservato, non trasformato in una risposta riuscita.
+Desktop IT/EN e companion localizzano entrambi gli errori.
+
+La UI raggruppa gli aggiornamenti per frame e conserva i blocchi DOM Markdown
+invariati; Marked continua a fare parsing completo del segmento e DOMPurify
+resta il confine di sanitizzazione. Il Markdown del thinking chiuso e differito.
+`chat-scroll.js` gestisce follow, anchor di lettura, dettagli annidati e memoria
+limitata a 40 chat nella sessione. Nessuna nuova persistenza o migrazione,
+nessuna modifica al protocollo relay o al bridge immagini.
+
+Copertura mirata: `desktop/tests/chat-reading.cjs` e test Rust LLM con provider
+HTTP simulato per ordine SSE, replay reasoning e risposte incomplete senza
+esecuzione degli strumenti.
+
+`restoreConversationHistory` mantiene errori e testo parziale dei turni falliti
+nello stato locale anche dopo navigazione, refresh e aggiornamenti companion
+di altre chat. La revisione iniziale e il contenuto del tentativo distinguono
+un vecchio snapshot da una nuova cronologia remota: quest'ultima resta
+autorevole e rimuove il vecchio Riprova. Nessun errore viene scritto nel tree
+Firestore dai salvataggi della sidebar. I turni accodati in background includono
+la domanda nello stato ottimistico; il rendering animato si arresta non appena
+la conversazione non e piu attiva. Regressioni in `background-chats.cjs`,
+`history-save.cjs` e `chat-reading.cjs`.

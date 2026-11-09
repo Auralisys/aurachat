@@ -18,7 +18,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
    if(cmd==='speech_model_status')return {ready:false,busy:false,downloaded:0,total:1994857346};
    if(cmd==='get_locale')return JSON.stringify(locales);
    if(['get_local_config','get_config'].includes(cmd))return config;
-   if(cmd==='get_data')return structuredClone(window.__store);
+   if(['get_data','refresh_data'].includes(cmd))return structuredClone(window.__store);
    if(cmd==='save_data'){window.__store=structuredClone(args.data);return structuredClone(args.data);}
    if(cmd==='choose_chat_files')return window.__nextFiles||[{name:'notes.md',content:'Private text selected by the user.'}];
    if(cmd==='chat') {
@@ -31,6 +31,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   }}};
  },{locales});
  await page.goto(pathToFileURL(resolve(__dirname,'../ui/index.html')).href);await page.locator('#boot-splash').waitFor({state:'hidden'});
+ await page.evaluate(()=>openConversation('c',false));
 
  await page.evaluate(()=>{window.__send= requestChat({conversation_id:'c',content:'Leggi il file'});});
  const liveHistory = page.locator('.msg--stream .turn-history');

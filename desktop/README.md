@@ -36,6 +36,9 @@ chiave sono descritti nel runbook; nessun segreto va inserito nel repository.
 - **Impostazioni** con navigazione laterale e ricerca: Generali, Account, Provider di modelli e Voce. Account mostra identità e disconnessione, senza parametri Firebase. I provider hanno una API key dedicata e uno o più modelli con URL base indipendenti. La key non torna mai nella UI: il backend espone solo `api_key_set: true/false`.
 - **Chat**: invia la cronologia della conversazione attiva a `<base_url>/v1/chat/completions`
   (formato OpenAI-compatible, streaming SSE) e mostra la risposta.
+  Se il provider termina per limite di output (`length`) o filtro (`content_filter`),
+  il testo parziale resta visibile con un errore esplicito, non come risposta
+  conclusa; eventuali chiamate a strumenti incomplete non vengono eseguite.
 - **Turno in corso**: il nome della chat nasce dal primo messaggio, subito, senza
   aspettare la risposta, come titolo provvisorio. Dopo la prima risposta riuscita
   una richiesta separata in background propone un titolo breve nella lingua
@@ -64,6 +67,14 @@ chiave sono descritti nel runbook; nessun segreto va inserito nel repository.
   mostrato alla chiusura senza interrompere il modello.
   Modifica lo riporta nel compositore. Anche la dettatura resta
   disponibile (`stop_chat` ferma il turno solo per il proprietario della conversazione).
+- **Errori e chat in background**: un turno fallito conserva testo parziale,
+  errore e Riprova anche cambiando chat o ricaricando la cronologia nella stessa
+  sessione. Non vengono inseriti errori locali nei salvataggi della sidebar.
+  Una cronologia realmente piu recente, ricevuta da un altro dispositivo,
+  sostituisce il tentativo fallito; un nuovo invio non riparte automaticamente.
+  Le code avviate in background mostrano subito la domanda corretta quando si
+  riapre la chat. Lo scorrimento animato del testo si ferma uscendo dalla chat,
+  anche se era gia stato pianificato un frame.
 - **Barra delle applicazioni Windows**: indicatore nativo indeterminato durante
   l'elaborazione AI, anche con finestra minimizzata. Rimane attivo mentre almeno
   una chat sta lavorando e si spegne al termine, in caso di errore o dopo Stop.
@@ -116,7 +127,9 @@ La card **Output / Agenti / Fonti** (più **Cambiamenti** nei progetti e **Shell
 quando la conversazione contiene messaggi, allegati o attività. Il pulsante
 nell'intestazione la nasconde e la riapre. Su desktop l'ingresso e l'uscita animano
 anche lo spazio della conversazione; sotto i 1000 px il pannello si sovrappone alla
-chat per mantenere leggibile il contenuto. Con `prefers-reduced-motion` gli
+chat per mantenere leggibile il contenuto e parte chiuso. La sidebar di navigazione
+parte chiusa sotto gli 850 px e si apre sopra il contenuto, con chiusura tramite
+Escape, sfondo o selezione della chat. Con `prefers-reduced-motion` gli
 spostamenti sono immediati.
 
 Gli **Output** sono i file finali che il modello pubblica esplicitamente con
@@ -742,17 +755,38 @@ dal provider, le operazioni e il loro esito. Interrompi agente annulla le richie
 HTTP in attesa, impedisce nuove operazioni e arresta le sue shell registrate.
 Le attività terminali non vengono riattivate da eventi tardivi.
 
-Lo streaming aggiorna nodi stabili: i dettagli aperti e il focus non vengono
-ricreati a ogni frammento. Ragionamento e attività restano in un unico elenco
-espandibile dentro la chat: il cervello viola pulsa durante il turno e il tempo
-trascorso appare nella stessa intestazione. Non c’è una seconda riga di reasoning
-sopra il composer. Il testo dei messaggi e dell’input usa 13 px, con titoli
-proporzionati e codice invariato. Lo shimmer segnala soltanto lavoro attivo; l'attesa di
-consenso ha un segnale distinto. Le animazioni rispettano movimento ridotto e
-si fermano quando la finestra è nascosta. Sidebar, agenti e strumenti condividono
-icone Lucide e i colori del tema AuraChat.
+Lo streaming raggruppa gli aggiornamenti per frame e conserva i nodi Markdown
+invariati: selezione del testo, copia del codice e scorrimento orizzontale restano
+utilizzabili prima della fine del turno. Il parsing resta affidato a Marked su
+tutto il segmento, con sanitizzazione DOMPurify; non e un parser incrementale.
+Codice con linguaggio e pulsante Copia, tabelle scrollabili e collegamenti
+HTTP(S) hanno lo stesso comportamento durante lo stream e nella cronologia.
 
-Verifiche: tests/operations-flow.cjs, permissions.cjs, chat-progress.cjs,
+Ragionamento e attività restano in un unico elenco espandibile dentro la chat:
+anteprima dell'ultima riga completa del thinking, dettagli Markdown renderizzati
+all'apertura e scorrimento indipendente dal testo principale. Il cervello viola
+pulsa durante il turno e il tempo trascorso appare nella stessa intestazione;
+nessuna seconda riga di reasoning sopra il composer e nessuno shimmer sul testo.
+I messaggi usano 15 px, con titoli proporzionati e input/codice invariati.
+Le animazioni rispettano movimento ridotto e si fermano quando la finestra e
+nascosta; il completamento mostra subito il testo gia ricevuto, senza attese
+artificiali. Sidebar, agenti e strumenti condividono icone e palette AuraChat.
+
+`ui/chat-scroll.js` separa l'intenzione di seguire il turno dalla distanza dal
+fondo: risalire interrompe il follow anche di pochi pixel. **Vai in fondo**,
+un nuovo invio o il ritorno manuale al fondo lo riattivano. Espandere dettagli
+non trascina la cronologia; per massimo 40 conversazioni si conservano posizione
+di lettura, aperture e scroll dei dettagli, solo in memoria fino al riavvio.
+Le soluzioni sono adattate dal confronto con
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), non un port
+della sua UI React o della Messages API: API OpenAI-compatible, allegati,
+bridge visione, coda/guida, permessi, MCP e companion restano quelli di AuraChat.
+Il companion riceve solo le traduzioni dei nuovi errori di risposta incompleta
+o filtrata, non questa revisione dell'interfaccia.
+
+Verifiche: tests/chat-reading.cjs copre follow, memoria di lettura, dettagli
+annidati, stabilita del Markdown e layout compatto. Altri test:
+tests/operations-flow.cjs, permissions.cjs, chat-progress.cjs,
 activity-panel.cjs e suite di regressione UI. Questi test usano Edge reale e
 servizi nativi simulati. tests/run-native.ps1 compila ed esegue i test Rust,
 inserendo il manifest Common Controls v6 nel solo runner dei test (SDK Windows

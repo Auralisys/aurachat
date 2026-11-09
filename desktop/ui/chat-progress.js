@@ -43,8 +43,31 @@ function updateProgressRow(row, original, live, last) {
     row.querySelector('.turn-step__status').textContent = item.kind === 'approval' ? approvalLabel(item) : t(`progress.${status}`);
     row.querySelector('.turn-step__label').classList.toggle('is-working-text',live && ['running','reviewing'].includes(status));
     const text = item.kind === 'reasoning' ? item.text || '' : item.kind === 'approval' ? [item.reason && (item.reason === 'review_unavailable' ? t('permissions.review_unavailable') : item.reason),JSON.stringify(item.action,null,2)].filter(Boolean).join('\n\n') : [item.arguments && JSON.stringify(item.arguments,null,2),item.output].filter(Boolean).join('\n\n');
-    if (row.lastElementChild.textContent !== text) row.lastElementChild.textContent = text;
+    const body = row.lastElementChild;
+    if (item.kind === 'reasoning') {
+      body._reasoning = text;
+      if (row.open) renderMarkdown(body,text);
+    } else if (body.textContent !== text) body.textContent = text;
+    if (row.open) body._follow?.sync();
     updateToolImages(row, item);
+}
+
+function reasoningPreview(text, live) {
+  const lines = String(text || '').replace(/\r\n/g,'\n').split('\n');
+  // Only preview a completed line while streaming; avoid a label changing per token.
+  if (live) lines.pop();
+  const line = live ? lines.findLast(line => line.trim()) : lines.find(line => line.trim());
+  return (line || '').replace(/^\s{0,3}(?:#{1,6}\s+|>\s*)/, '').replace(/\*\*|__|`/g,'').trim();
+}
+
+function progressScroller(container, details) {
+  container._follow = scrollFollower(container);
+  details.addEventListener('toggle', event => {
+    if (event.target !== details || !details.open) return;
+    if (container._reasoning != null) renderMarkdown(container,container._reasoning);
+    if (container._restored) {container._restored = false;return;}
+    container._follow.restore(container.scrollHeight <= container.clientHeight + 2, container.scrollTop);
+  });
 }
 
 // Images returned by tools (e.g. browser screenshots) are kept in memory for this
@@ -90,13 +113,20 @@ function progressHistory(items, live = false, existing = null) {
   if (!existing) {
     const summary = document.createElement('summary');
     const timer = document.createElement('span');timer.className = 'thinking__timer';timer.hidden = true;
-    summary.append(progressIcon({kind:'reasoning'}), document.createElement('span'), timer, icon('chevron'));
+    const label = document.createElement('span');label.className = 'turn-history__label';
+    const preview = document.createElement('span');preview.className = 'turn-history__preview';preview.setAttribute('aria-hidden','true');
+    summary.append(progressIcon({kind:'reasoning'}), label, preview, timer, icon('chevron'));
     summary.onclick = event => {if (!details.lastElementChild.children.length) event.preventDefault();};
     const list = document.createElement('div');list.className = 'turn-history__list';details.append(summary,list);
+    progressScroller(list,details);
   }
   details.querySelector(':scope > summary > span').textContent = t('progress.history') + (items.length ? ` · ${items.length}` : '');
   details.querySelector(':scope > summary').setAttribute('aria-disabled', String(!items.length));
   details.querySelector('.thinking__timer').hidden = true;
+  const latest = items.at(-1);
+  const preview = details.querySelector('.turn-history__preview');
+  preview.textContent = latest?.kind === 'reasoning' ? reasoningPreview(latest.text,live) : latest ? progressLabel(latest) : '';
+  preview.title = preview.textContent;
   const list = details.lastElementChild;
   const rows = items.map((item,index) => {
     const key = item.id || `reasoning-${index}`;
@@ -105,12 +135,17 @@ function progressHistory(items, live = false, existing = null) {
       row = document.createElement('details');row.className = 'turn-step';row.dataset.stepId = key;
       const title = document.createElement('summary');
       const label = document.createElement('span');label.className = 'turn-step__label';
-      const status = document.createElement('span');status.className = 'turn-step__status';title.append(progressIcon(item),label,status);row.append(title,document.createElement(item.kind === 'reasoning' ? 'p' : 'pre'));
+      const status = document.createElement('span');status.className = 'turn-step__status';title.append(progressIcon(item),label,status);
+      const body = document.createElement(item.kind === 'reasoning' ? 'div' : 'pre');
+      body.className = item.kind === 'reasoning' ? 'turn-step__body markdown markdown--reasoning' : 'turn-step__body';
+      row.append(title,body);progressScroller(body,row);
     }
     updateProgressRow(row, item, live, index === items.length - 1);
     return row;
   });
-  reconcileChildren(list,rows);details.toggleAttribute('data-live-history',live);return details;
+  reconcileChildren(list,rows);
+  if (details.open) list._follow.sync();
+  details.toggleAttribute('data-live-history',live);return details;
 }
 
 function renderTurnBody(body, message, live = false) {
@@ -121,14 +156,7 @@ function renderTurnBody(body, message, live = false) {
     if (!text) return;
     const key = `text-${offset}`;
     const part = existing.get(key) || document.createElement('div');part.className = 'turn-text';part.dataset.partKey = key;
-    if (part._raw !== text) {
-      part._raw = text;part.innerHTML = markdownHTML(text);
-      part.querySelectorAll('a').forEach(link => {
-        link.rel = 'noopener noreferrer';
-        link.onclick = async event => {event.preventDefault();if (!/^https?:$/.test(link.protocol)) return;
-          try {await invoke('open_external_url',{url:link.href});} catch (_) {composerStatus(t('chat.link_failed'));}};
-      });
-    }
+    renderMarkdown(part,text);
     nodes.push(part);
   };
   const flush = () => {
@@ -153,7 +181,12 @@ function renderTurnBody(body, message, live = false) {
     }
     history.toggleAttribute('data-live-history', true);
     const latest = message.activity?.at(-1);
-    history.dataset.phase = latest?.kind === 'approval' && latest.status === 'pending' ? 'waiting' : 'working';
+    const waiting = latest?.kind === 'approval' && latest.status === 'pending';
+    const thinking = latest?.kind === 'reasoning' && (latest.offset || 0) >= message.content.length;
+    history.dataset.phase = waiting ? 'waiting' : thinking ? 'thinking' : 'working';
+    if (!history.querySelector('.turn-history__preview').textContent) {
+      history.querySelector('.turn-history__preview').textContent = t(waiting ? 'progress.waiting' : message.content ? 'progress.writing' : 'progress.thinking');
+    }
     history.querySelector('.thinking__timer').hidden = false;
   }
   reconcileChildren(body,nodes);
@@ -173,17 +206,22 @@ function updateLiveTurn() {
   const stream = run.stream ||= {content:'', shown:0, activity:[], frame:null};
   const body = $('#messages .msg--stream .msg__text');
   if (!stream || !body) return;
-  const box = $('#messages'), follow = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
   renderTurnBody(body, {content:stream.content.slice(0, stream.shown), activity:stream.activity.filter(item => (item.offset || 0) <= stream.shown)}, true);
-  if (follow) box.scrollTop = box.scrollHeight;
+  chatScroll.sync();
 }
 
 function revealTurn(run) {
   const stream = run.stream;
   if (!stream || stream.frame) return;
+  if (document.hidden || state.runs.get(state.activeConversationId) !== run) {
+    stream.shown = stream.content.length;return;
+  }
   let previous = performance.now();
   const tick = now => {
     stream.frame = null;
+    if (document.hidden || state.runs.get(state.activeConversationId) !== run) {
+      stream.shown = stream.content.length;stream.resolve?.();stream.resolve = null;return;
+    }
     const remaining = stream.content.length - stream.shown;
     const step = progressMotion.matches ? remaining : Math.max(1, Math.ceil(Math.min(now - previous, 64) * Math.max(0.12, remaining / 700)));
     stream.shown = Math.min(stream.content.length, stream.shown + step);
@@ -198,9 +236,10 @@ function revealTurn(run) {
 }
 
 async function finishLiveTurn(run) {
-  if (!run.stream || run.stream.shown >= run.stream.content.length) return;
-  if (document.hidden) {cancelAnimationFrame(run.stream.frame);run.stream.frame = null;run.stream.shown = run.stream.content.length;return;}
-  await new Promise(resolve => {run.stream.resolve = resolve;revealTurn(run);});
+  const stream = run.stream;if (!stream) return;
+  cancelAnimationFrame(stream.frame);stream.frame = null;stream.shown = stream.content.length;
+  stream.resolve?.();stream.resolve = null;
+  if (!document.hidden && state.runs.get(state.activeConversationId) === run) updateLiveTurn();
 }
 
 const remoteTurnSync = {busy:false, targets:new Map()};
@@ -301,7 +340,7 @@ async function discoverRemoteTarget(id) {
 }
 
 function releaseRemoteTurn(id) {
-  if (!state.runs.get(id)?.remote || state.runs.get(id)?.pending) return;
+  if (!state.runs.get(id)?.remote || state.runs.get(id)?.pending || state.runs.get(id)?.queueOutcome === 'failed') return;
   state.runs.delete(id);
   stopTimer();
 }
@@ -369,6 +408,10 @@ async function refreshRemoteTurn(id = state.activeConversationId) {
       const target = findConversation(id)?.conversation;if (target) Object.assign(target, saved);
       const baseline = state.persistedData && conversationInData(state.persistedData, id);
       if (baseline) Object.assign(baseline, structuredClone(saved));
+      if (run?.queueOutcome === 'failed') {
+        if (stillActive()) {restoreConversationHistory(id,saved);renderMessages();updateContextInfo();updateComposerControls();}
+        if (run.queueOutcome === 'failed') return;
+      }
       if (run) run.pending = false;
       state.runs.delete(id);
       let messages = (saved.messages || []).slice();
@@ -399,7 +442,7 @@ async function setupChatProgress() {
   setTimeout(pollRemote, 3000);
   document.addEventListener('visibilitychange', () => {
     document.documentElement.classList.toggle('is-backgrounded',document.hidden);
-    if (!document.hidden) return;
+    if (!document.hidden) {updateLiveTurn();return;}
     for (const run of state.runs.values()) {
       const stream = run.stream;if (!stream) continue;
       cancelAnimationFrame(stream.frame);stream.frame = null;stream.shown = stream.content.length;
@@ -454,7 +497,10 @@ async function setupChatProgress() {
       run.messages.push({...message, guidance:true});
       stream.content = ''; stream.shown = 0; stream.activity = [];
     }
-    if (state.activeConversationId === payload.conversation_id) {renderThinkingStatus();if (['__steering','__question_summary','__guidance_queued','__guidance_withdrawn'].includes(payload.kind)) {renderMessages();} else if (payload.kind !== '__delta') {updateLiveTurn();}}
+    if (state.activeConversationId === payload.conversation_id) {
+      if (['__steering','__question_summary','__guidance_queued','__guidance_withdrawn'].includes(payload.kind)) renderMessages();
+      else revealTurn(run);
+    }
   });
   // Retain compatibility with native project events emitted by older builds.
   await appWindow.listen('project-tool-activity', ({payload}) => {
