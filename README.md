@@ -41,6 +41,9 @@ present, but building and testing it requires macOS and Xcode.
   dictation, live Markdown with code copy, compact reasoning previews and an
   activity panel. Streaming respects your reading position, with a jump-to-latest
   control and per-conversation reading memory for the current session.
+- **Show the model what you mean.** Attach or paste images, place numbered
+  comments on them, or open links in a built-in browser beside the chat and
+  attach an annotated screenshot of the page (Windows).
 - **Signed desktop updates.** Startup checks, automatic installation when a new
   version is available and automatic restart. Windows updates do not recreate
   desktop shortcuts.

@@ -16,7 +16,7 @@ const assert = require('node:assert/strict');
    window.__calls.push({cmd,args});
    if(cmd==='get_locale')return JSON.stringify(locales);
    if(['get_local_config','get_config'].includes(cmd))return config;
-   if(cmd==='get_data')return structuredClone(window.__store);
+   if(['get_data','refresh_data'].includes(cmd))return structuredClone(window.__store);
    if(cmd==='save_data'){
     if(window.__failSave){window.__failSave=false;throw new Error('Test network unavailable');}
     window.__store=structuredClone(args.data);return structuredClone(args.data);
@@ -120,6 +120,7 @@ const assert = require('node:assert/strict');
  assert.equal(await page.evaluate(()=>window.__store.projects[1].conversations.length),1);
  assert.deepEqual(await page.evaluate(id=>window.__grants[id],newId),['C:\\Work\\Shared assets']);
  // Empty sections offer one aligned action without a redundant empty label.
+ await page.setViewportSize({width:1080,height:880});
  await page.evaluate(()=>sessionStorage.setItem('empty','1'));await page.reload();await page.locator('#boot-splash').waitFor({state:'hidden'});
  assert.equal(await section.locator('.tree-empty').count(),0);
  assert.equal(await recent.locator('.tree-empty').count(),0);

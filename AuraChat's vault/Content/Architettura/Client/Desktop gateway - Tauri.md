@@ -443,7 +443,7 @@ sola, senza retry automatico in caso di esito ambiguo. Le letture delle ricevute
 escludono contenuto e allegati; quelle dei dispositivi escludono i cataloghi skill.
 Permessi ed esecuzione degli strumenti restano sul computer di destinazione.
 Il protocollo 6 aggiunge allegati testuali, modifica e rigenerazione al relay chat,
-il protocollo 8 le immagini;
+il protocollo 8 le immagini, il protocollo 9 i commenti sulle immagini;
 se il gateway e precedente viene richiesto l'aggiornamento invece di perdere
 silenziosamente i campi. Il companion mobile resta compatibile.
 
@@ -703,3 +703,38 @@ Firestore dai salvataggi della sidebar. I turni accodati in background includono
 la domanda nello stato ottimistico; il rendering animato si arresta non appena
 la conversazione non e piu attiva. Regressioni in `background-chats.cjs`,
 `history-save.cjs` e `chat-reading.cjs`.
+## Commenti sulle immagini e browser interno
+
+Richiesta: poter indicare al modello punti precisi di un'immagine e di una pagina
+web, con un browser accanto alla chat, senza perdere le funzioni esistenti.
+
+Contratto (`llm.rs`): l'allegato immagine accetta `id` (`img-` + 12 esadecimali) e
+`annotation` versione 1 con `source` `image` o `browser`, dimensioni uguali a
+quelle dell'immagine, 1–20 commenti (`id`, `x`/`y` normalizzati 0–1, testo fino a
+1000 caratteri) e, solo per le catture, `url` http(s) senza credenziali, query e
+frammento, `title` e `captured_at`. Un contratto non valido produce
+`invalid_annotation`. I marker non sono disegnati sui pixel: `api_messages`
+aggiunge dopo l'immagine un testo `[Annotations on image nome]` con le posizioni
+in percentuale; il bridge `deepseek-flash` lo usa per orientare la descrizione e lo
+lascia dopo di essa. Le annotazioni vengono salvate nella cronologia con
+l'immagine. `RELAY_PROTOCOL` sale a 9 e il controllo remoto le invia solo a gateway
+aggiornati (`remote_update_required`); il companion le mostra in sola lettura.
+
+UI: `image-annotations.js` è l'editor (dialog modale, clic o Invio per aggiungere,
+trascinamento e frecce per spostare, Canc per rimuovere, Ctrl+Invio per salvare);
+`images.js` aggiunge pulsante, badge e marker nel visualizzatore.
+
+Browser (`browser.rs`, `browser.js`): webview figlia della finestra `main`
+(feature Tauri `unstable`; per questo le API usano `Window`/`get_window` invece di
+`get_webview_window`). I comandi `browser_open/bounds/action/close/capture`
+rifiutano chiamanti diversi da `main`; la pagina remota non riceve IPC perché la
+capability è limitata alla webview locale. Solo http/https, mai `*.localhost`
+(protocolli dell'app), testo libero come ricerca DuckDuckGo, pop-up nella stessa
+pagina. Lo stato arriva con `browser-state`/`browser-blocked`. La webview nativa
+copre il DOM, quindi la UI la nasconde sotto dialog, menu e overlay e la
+riposiziona a ogni cambio di layout; il pannello si alterna con l'attività.
+La cattura usa WebView2 `CapturePreview` (PNG della parte visibile) e passa
+dall'editor prima di diventare allegato; su macOS non è disponibile.
+
+Verifica: `desktop/tests/image-annotations.cjs`, `browser::tests` e test LLM su
+validazione, testo per il modello e bridge.

@@ -17,7 +17,7 @@ const assert=require('node:assert/strict');
   if(cmd==='get_config'){if(offline)throw new Error('Firestore network unavailable');return config;}
   if(cmd==='login'){logins++;if(args.password!=='valid-password')throw new Error('Invalid credentials');Object.assign(config,{firebase_email:args.email,firebase_auth_set:true});return config;}
   if(cmd==='save_config'){saves++;assert.equal(args.input.firebase_password,null);assert.ok(args.input.api_key);config.api_key_set=true;return config;}
-  if(cmd==='get_data')return data;
+  if(['get_data','refresh_data'].includes(cmd))return data;
   if(cmd==='save_data'){saves++;return args.data;}
  });
  await page.addInitScript(()=>window.__TAURI__={core:{invoke:(cmd,args)=>window.mockInvoke(cmd,args)},window:{getCurrentWindow:()=>({close(){},minimize(){},async listen(){return ()=>{};}})}});

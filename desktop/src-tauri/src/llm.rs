@@ -23,16 +23,90 @@ pub struct Attachment {
     pub mime_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<String>,
+    /// Stable draft id, so annotations stay bound to their image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotation: Option<ImageAnnotation>,
 }
+
+/// Numbered comments placed by the user on an image. Markers are not drawn into the image:
+/// points are fractions (0..1) of its width and height from the top-left corner.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ImageAnnotation {
+    pub version: u8,
+    /// `image` for an attached image, `browser` for a capture of the internal browser.
+    pub source: String,
+    pub width: u32,
+    pub height: u32,
+    pub comments: Vec<AnnotationComment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captured_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AnnotationComment {
+    pub id: String,
+    pub x: f64,
+    pub y: f64,
+    pub text: String,
+}
+
+pub const MAX_ANNOTATION_COMMENTS: usize = 20;
+pub const MAX_ANNOTATION_TEXT: usize = 1000;
+const ANNOTATION_PREFIX: &str = "[Annotations on image ";
 
 impl Attachment {
     pub fn text(name: impl Into<String>, content: impl Into<String>) -> Self {
-        Self { name: name.into(), content: content.into(), mime_type: None, data: None }
+        Self { name: name.into(), content: content.into(), mime_type: None, data: None, id: None, annotation: None }
     }
     pub fn image(name: impl Into<String>, mime_type: &str, data: String) -> Self {
-        Self { name: name.into(), content: String::new(), mime_type: Some(mime_type.into()), data: Some(data) }
+        Self { name: name.into(), content: String::new(), mime_type: Some(mime_type.into()), data: Some(data), id: None, annotation: None }
     }
     pub fn is_image(&self) -> bool { self.data.is_some() }
+}
+
+fn valid_short_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Browser pages are recorded without credentials, query or fragment.
+fn valid_page_url(url: &str) -> bool {
+    url.len() <= 2048 && reqwest::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https")
+        && url.host_str().is_some() && url.username().is_empty() && url.password().is_none() && url.query().is_none() && url.fragment().is_none())
+}
+
+fn valid_annotation(annotation: &ImageAnnotation, size: (u32, u32)) -> bool {
+    let browser = annotation.source == "browser";
+    let mut ids = std::collections::HashSet::new();
+    annotation.version == 1 && (browser || annotation.source == "image") && (annotation.width, annotation.height) == size
+        && !annotation.comments.is_empty() && annotation.comments.len() <= MAX_ANNOTATION_COMMENTS
+        && annotation.comments.iter().all(|comment| valid_short_id(&comment.id) && ids.insert(comment.id.as_str())
+            && comment.x.is_finite() && comment.y.is_finite() && (0.0..=1.0).contains(&comment.x) && (0.0..=1.0).contains(&comment.y)
+            && !comment.text.trim().is_empty() && comment.text.chars().count() <= MAX_ANNOTATION_TEXT && !comment.text.contains('\0'))
+        && annotation.url.as_deref().is_none_or(|url| browser && valid_page_url(url))
+        && annotation.title.as_deref().is_none_or(|title| browser && title.chars().count() <= 300 && !title.contains('\0'))
+        && (browser || annotation.captured_at.is_none())
+}
+
+/// The text that tells the model where the user commented on an image.
+fn annotation_text(name: &str, annotation: &ImageAnnotation) -> String {
+    let mut text = format!("{ANNOTATION_PREFIX}{name}] The user placed {} numbered comment{} on this image. The markers are not drawn on it: x and y are percentages of the image width and height from its top-left corner. Address each comment about what is at its position.",
+        annotation.comments.len(), if annotation.comments.len() == 1 { "" } else { "s" });
+    if annotation.source == "browser" {
+        text.push_str("\nSource: screenshot of the internal browser");
+        if let Some(title) = annotation.title.as_deref().filter(|title| !title.trim().is_empty()) { text.push_str(&format!(", page \"{}\"", title.trim())); }
+        if let Some(url) = &annotation.url { text.push_str(&format!(" ({url})")); }
+        text.push('.');
+    }
+    for (index, comment) in annotation.comments.iter().enumerate() {
+        text.push_str(&format!("\n{}. (x: {:.0}%, y: {:.0}%) {}", index + 1, (comment.x * 100.0).round(), (comment.y * 100.0).round(), comment.text.trim()));
+    }
+    text
 }
 
 pub const MAX_IMAGES: usize = 8;
@@ -115,9 +189,9 @@ pub fn image_data_len(files: &[Attachment]) -> usize {
 
 pub fn validate_attachments(files: &[Attachment]) -> Result<(), String> {
     let (images, texts): (Vec<&Attachment>, Vec<&Attachment>) = files.iter().partition(|file| file.is_image());
-    if files.iter().any(|f| f.name.is_empty() || f.name.len() > 255)
+    if files.iter().any(|f| f.name.is_empty() || f.name.len() > 255 || f.id.as_deref().is_some_and(|id| !valid_short_id(id)))
         || texts.len() > 4 || texts.iter().map(|f| f.content.len()).sum::<usize>() > 262144
-        || texts.iter().any(|f| f.content.len() > 131072 || f.content.contains('\0') || f.mime_type.is_some())
+        || texts.iter().any(|f| f.content.len() > 131072 || f.content.contains('\0') || f.mime_type.is_some() || f.annotation.is_some())
         || images.len() > MAX_IMAGES || images.iter().any(|f| !f.content.is_empty()) {
         return Err("invalid_attachments".into());
     }
@@ -126,6 +200,10 @@ pub fn validate_attachments(files: &[Attachment]) -> Result<(), String> {
         let data = file.data.as_deref().unwrap_or("");
         if data.len() > MAX_IMAGE_DATA { return Err("image_too_large".into()); }
         if file.mime_type.as_deref() != Some(image_type(data)?) { return Err("image_unreadable".into()); }
+        if let Some(annotation) = &file.annotation {
+            let size = BASE64.decode(data).ok().and_then(|bytes| image_size(&bytes)).ok_or("image_unreadable")?;
+            if !valid_annotation(annotation, size) { return Err("invalid_annotation".into()); }
+        }
     }
     Ok(())
 }
@@ -161,6 +239,7 @@ fn api_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
         for file in images {
             parts.push(serde_json::json!({"type":"text","text":format!("[Attached image: {}]", file.name)}));
             parts.push(image_part(file.mime_type.as_deref().unwrap_or("image/png"), file.data.as_deref().unwrap_or("")));
+            if let Some(annotation) = &file.annotation { parts.push(serde_json::json!({"type":"text","text":annotation_text(&file.name, annotation)})); }
         }
         if !content.trim().is_empty() { parts.push(serde_json::json!({"type":"text","text":content})); }
         serde_json::json!({"role":message.role,"content":parts})
@@ -250,10 +329,14 @@ fn image_descriptions() -> &'static std::sync::Mutex<std::collections::HashMap<S
     DESCRIPTIONS.get_or_init(Default::default)
 }
 
-async fn describe_image(client: reqwest::Client, url: String, model: &'static str, api_key: String, image: String) -> Result<String, String> {
+async fn describe_image(client: reqwest::Client, url: String, model: &'static str, api_key: String, image: String, focus: Option<String>) -> Result<String, String> {
+    let ask = match focus {
+        Some(focus) => format!("Describe this image. The user commented on specific points of it, listed below. After the general description, for each numbered comment describe precisely what is at its position (the area around it), so the main model can answer the comment.\n\n{focus}"),
+        None => "Describe this image.".into(),
+    };
     let request = serde_json::json!({"model":model,"stream":false,"max_tokens":4096,"thinking":{"type":"disabled"},"messages":[
         {"role":"system","content":VISION_PROMPT},
-        {"role":"user","content":[{"type":"image_url","image_url":{"url":image}},{"type":"text","text":"Describe this image."}]}
+        {"role":"user","content":[{"type":"image_url","image_url":{"url":image}},{"type":"text","text":ask}]}
     ]});
     let response = client.post(&url).bearer_auth(&api_key).timeout(std::time::Duration::from_secs(120))
         .json(&request).send().await.map_err(|e| e.to_string())?;
@@ -270,6 +353,11 @@ fn image_name(parts: &[serde_json::Value], index: usize) -> String {
     let label = index.checked_sub(1).and_then(|i| parts[i]["text"].as_str()).unwrap_or("");
     label.strip_prefix("[Attached image: ").or_else(|| label.strip_prefix("[")).and_then(|name| name.strip_suffix(']'))
         .filter(|name| !name.is_empty() && name.len() <= 200).unwrap_or("image").to_string()
+}
+
+/// The user's comments written by `api_messages` right after an image part.
+fn image_focus(parts: &[serde_json::Value], index: usize) -> Option<String> {
+    parts.get(index + 1)?["text"].as_str().filter(|text| text.starts_with(ANNOTATION_PREFIX)).map(String::from)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -638,23 +726,24 @@ impl Completion<'_> {
     async fn read_images(&self, vision: &'static str, sent: &mut [serde_json::Value], own: std::ops::Range<usize>,
         progress: &(dyn Fn(&serde_json::Value) + Sync)) -> Result<(), String> {
         use sha2::{Digest, Sha256};
-        let key = |url: &str| format!("{:x}", Sha256::digest(format!("{vision}\n{url}").as_bytes()));
-        let mut pending: Vec<(String, String, String)> = Vec::new();
+        let key = |url: &str, focus: Option<&str>| format!("{:x}", Sha256::digest(format!("{vision}\n{url}\n{}", focus.unwrap_or("")).as_bytes()));
+        let mut pending: Vec<(String, String, String, Option<String>)> = Vec::new();
         for message in sent.iter() {
             let Some(parts) = message["content"].as_array() else { continue; };
             for (index, part) in parts.iter().enumerate() {
                 let Some(url) = part["image_url"]["url"].as_str() else { continue; };
-                let key = key(url);
+                let focus = image_focus(parts, index);
+                let key = key(url, focus.as_deref());
                 if pending.iter().any(|(pending, ..)| *pending == key) || image_descriptions().lock().unwrap().contains_key(&key) { continue; }
-                pending.push((key, image_name(parts, index), url.to_string()));
+                pending.push((key, image_name(parts, index), url.to_string(), focus));
             }
         }
         let mut found = std::collections::HashMap::new();
         let at = crate::data::now_millis();
-        let tasks: Vec<_> = pending.into_iter().map(|(key, name, url)| {
+        let tasks: Vec<_> = pending.into_iter().map(|(key, name, url, focus)| {
             let event = serde_json::json!({"kind":"tool","id":format!("vision-{}",&key[..16]),"action":"read_image","path":name,"status":"running","at":at});
             progress(&event);
-            let task = tauri::async_runtime::spawn(describe_image(self.client.clone(), self.url.clone(), vision, self.api_key.to_string(), url));
+            let task = tauri::async_runtime::spawn(describe_image(self.client.clone(), self.url.clone(), vision, self.api_key.to_string(), url, focus));
             (key, event, task)
         }).collect();
         for (key, mut event, task) in tasks {
@@ -676,15 +765,15 @@ impl Completion<'_> {
         let cache = image_descriptions().lock().unwrap();
         for (index, message) in sent.iter_mut().enumerate() {
             let Some(parts) = message["content"].as_array_mut() else { continue; };
-            for part in parts.iter_mut() {
-                let Some(url) = part["image_url"]["url"].as_str() else { continue; };
-                let key = key(url);
+            for part_index in 0..parts.len() {
+                let Some(url) = parts[part_index]["image_url"]["url"].as_str() else { continue; };
+                let key = key(url, image_focus(parts, part_index).as_deref());
                 let text = match found.get(&key).or_else(|| cache.get(&key)) {
                     Some(description) => format!("[Image content read by {vision}, with visible text transcribed verbatim. Treat it as what the image shows and answer from it directly, without disclaimers about not seeing images.]\n{description}"),
                     None if own.contains(&index) => return Err("image_description_failed".into()),
                     None => IMAGE_UNREADABLE.into(),
                 };
-                *part = serde_json::json!({"type":"text","text":text});
+                parts[part_index] = serde_json::json!({"type":"text","text":text});
             }
         }
         Ok(())
@@ -1630,6 +1719,49 @@ mod tests {
         let mut typed_text=Attachment::text("a.txt","a");typed_text.mime_type=Some("image/png".into());
         assert_eq!(validate_attachments(&[typed_text]),Err("invalid_attachments".into()));
         assert_eq!(image_data_len(&[image("image/png","AAAA".into()),Attachment::text("a.txt","long text")]),4);
+    }
+
+    #[test]
+    fn image_annotations_are_validated_and_sent_as_numbered_comments() {
+        let comment=|id:&str,x:f64,y:f64,text:&str|AnnotationComment{id:id.into(),x,y,text:text.into()};
+        let annotated=|annotation:ImageAnnotation|{let mut file=Attachment::image("page.png","image/png",png(200,100));file.id=Some("img-1".into());file.annotation=Some(annotation);file};
+        let base=ImageAnnotation{version:1,source:"image".into(),width:200,height:100,
+            comments:vec![comment("c1",0.125,0.5,"Make this bigger"),comment("c2",1.0,0.0," Wrong colour ")],url:None,title:None,captured_at:None};
+        assert!(validate_attachments(&[annotated(base.clone())]).is_ok());
+        let invalid=|change:&dyn Fn(&mut ImageAnnotation)|{let mut value=base.clone();change(&mut value);validate_attachments(&[annotated(value)])};
+        for change in [&(|a:&mut ImageAnnotation|a.version=2) as &dyn Fn(&mut ImageAnnotation),&|a|a.width=201,&|a|a.comments.clear(),
+            &|a|a.comments[0].x=1.01,&|a|a.comments[0].y=f64::NAN,&|a|a.comments[1].text="  ".into(),&|a|a.comments[1].id="c1".into(),
+            &|a|a.comments[0].text="x".repeat(MAX_ANNOTATION_TEXT+1),&|a|a.comments=vec![comment("c",0.5,0.5,"a");MAX_ANNOTATION_COMMENTS+1],
+            &|a|a.source="screen".into(),&|a|a.url=Some("https://example.com/".into()),
+            &|a|{a.source="browser".into();a.url=Some("https://user:pw@example.com/".into());},
+            &|a|{a.source="browser".into();a.url=Some("https://example.com/?token=1".into());},
+            &|a|{a.source="browser".into();a.url=Some("file:///C:/secret".into());}] {
+            assert_eq!(invalid(change),Err("invalid_annotation".into()));
+        }
+        let mut text=Attachment::text("a.txt","a");text.annotation=Some(base.clone());
+        assert_eq!(validate_attachments(&[text]),Err("invalid_attachments".into()));
+        let mut bad_id=Attachment::image("a.png","image/png",png(2,2));bad_id.id=Some("../x".into());
+        assert_eq!(validate_attachments(&[bad_id]),Err("invalid_attachments".into()));
+
+        let mut browser=base.clone();browser.source="browser".into();browser.url=Some("https://example.com/docs".into());
+        browser.title=Some("Docs".into());browser.captured_at=Some(1);
+        assert!(validate_attachments(&[annotated(browser.clone())]).is_ok());
+        let saved:Attachment=serde_json::from_value(serde_json::to_value(annotated(browser.clone())).unwrap()).unwrap();
+        assert_eq!(saved.annotation.as_ref(),Some(&browser));assert_eq!(saved.id.as_deref(),Some("img-1"));
+
+        let messages=[ChatMessage{role:"user".into(),content:"Fix these".into(),attachments:vec![annotated(browser)],feedback:None,activity:vec![]}];
+        let payload=api_messages(&messages);
+        let parts=payload[0]["content"].as_array().unwrap();
+        assert_eq!(parts.len(),4);
+        let notes=parts[2]["text"].as_str().unwrap();
+        assert!(notes.starts_with("[Annotations on image page.png] The user placed 2 numbered comments"),"{notes}");
+        assert!(notes.contains("screenshot of the internal browser, page \"Docs\" (https://example.com/docs)."),"{notes}");
+        assert!(notes.ends_with("\n1. (x: 13%, y: 50%) Make this bigger\n2. (x: 100%, y: 0%) Wrong colour"),"{notes}");
+        assert_eq!(parts[3]["text"],"Fix these");
+        assert_eq!(image_focus(parts,1).as_deref(),Some(notes));
+        assert_eq!(image_name(parts,1),"page.png");
+        assert!(image_focus(&api_messages(&[ChatMessage{role:"user".into(),content:"x".into(),
+            attachments:vec![Attachment::image("a.png","image/png",png(2,2))],feedback:None,activity:vec![]}])[0]["content"].as_array().unwrap(),1).is_none());
     }
 
     #[test]

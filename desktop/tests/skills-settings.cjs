@@ -19,7 +19,7 @@ const assert = require('node:assert/strict');
         __calls.push({cmd,args});
         if (cmd==='get_locale') return JSON.stringify(strings);
         if (['get_config','get_local_config'].includes(cmd)) return config;
-        if (cmd==='get_data') return {projects:[{id:'p',name:'Project P',conversations:[]}],conversations:[]};
+        if (['get_data','refresh_data'].includes(cmd)) return {projects:[{id:'p',name:'Project P',conversations:[]}],conversations:[]};
         if (cmd==='speech_model_status') return {ready:false,busy:false,downloaded:0,total:1};
         if (cmd==='project_skills') return {skills:structuredClone(skills.filter(s => (s.scope==='global'||args.project_id==='p') && (args.include_disabled||s.enabled))),truncated:false};
         if (cmd==='set_skill_enabled') {

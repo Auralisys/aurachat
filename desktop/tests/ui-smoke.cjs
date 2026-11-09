@@ -18,7 +18,8 @@ const assert = require('node:assert/strict');
    if(cmd==='get_locale')return JSON.stringify(locales);
    if(cmd==='get_local_config'||cmd==='get_config'||cmd==='save_config')return config;
    if(cmd==='set_model'){config.active_model=args.model;return config;}
-   if(cmd==='get_data')return data;
+   if(cmd==='set_conversation_model'){data.projects[0].conversations.find(c=>c.id===args.conversation_id).model=args.model;return data;}
+   if(['get_data','refresh_data'].includes(cmd))return data;
    if(cmd==='save_data')return args.data;
    if(cmd==='chat'){await new Promise(r=>setTimeout(r,150));return {data,messages:[{role:'user',content:args.content},{role:'assistant',content:'Risposta di prova.'}],usage:{prompt_tokens:12,completion_tokens:6}};}
   }}};
@@ -54,7 +55,7 @@ const assert = require('node:assert/strict');
  assert.equal(await page.locator('#help-dialog').isVisible(),false);
  await page.fill('#composer-input','Test modifica');
  await page.click('#menu-edit');await page.getByRole('menuitem',{name:'Seleziona tutto',exact:true}).click();
- assert.equal(await page.locator('#composer-input').evaluate(el=>el.selectionEnd-el.selectionStart),13);
+ assert.equal(await page.evaluate(()=>getSelection().toString()),'Test modifica');
  await page.fill('#composer-input','');
  await page.locator('#menu-file').focus();await page.keyboard.press('ArrowDown');await page.keyboard.press('Escape');
  assert.equal(await page.locator('#menu-file').getAttribute('aria-expanded'),'false');
@@ -66,6 +67,7 @@ const assert = require('node:assert/strict');
  assert.equal(await page.locator('.sidebar__section-head #btn-new-project').count(),1);
  await page.click('#model-select');
  await page.locator('#model-menu').getByRole('menuitemradio',{name:'deepseek-v4-pro',exact:true}).click();
+ await page.locator('#model-confirm button[value="switch"]').click();
  await page.waitForFunction(()=>document.querySelector('#model-name').textContent==='deepseek-v4-pro');
  await page.locator('#model-select').focus();await page.keyboard.press('ArrowDown');await page.keyboard.press('Escape');
  assert.equal(await page.locator('#model-select').getAttribute('aria-expanded'),'false');

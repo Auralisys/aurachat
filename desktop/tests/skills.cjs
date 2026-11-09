@@ -18,7 +18,7 @@ const assert = require('node:assert/strict');
         window.__calls.push({cmd,args});
         if (cmd === 'get_locale') return JSON.stringify(locales[args.lang] || locales.it);
         if (['get_local_config','get_config'].includes(cmd)) return config;
-        if (cmd === 'get_data') return structuredClone(window.__store);
+        if (['get_data','refresh_data'].includes(cmd)) return structuredClone(window.__store);
         if (cmd === 'save_data') return structuredClone(args.data);
         if (cmd === 'speech_model_status') return {ready:false,busy:false,downloaded:0,total:1};
         if (cmd === 'project_permission_mode') return 'ask';
@@ -40,20 +40,20 @@ const assert = require('node:assert/strict');
     assert.equal(await page.evaluate(() => __skillRequests[0].project), null);
     await fulfill(0,[{...skill('impeccable','Global design skill'),scope:'global',id:'global:fixture'}]);
     await options.first().waitFor();assert.match(await options.first().textContent(), /Globale/);
-    await input.fill('/impeccable');await input.press('Enter');assert.equal(await input.inputValue(), '/impeccable ');
+    await input.fill('/impeccable');await input.press('Enter');assert.equal(await page.evaluate(() => composerText()), '/impeccable ');
     await page.evaluate(() => __skillRequests=[]);
     await input.press('Escape');assert.equal(await chooser.isHidden(), true);
     await selectProject('p');await open();await page.waitForFunction(() => __skillRequests.length === 1);
     assert.equal(await page.evaluate(() => __skillRequests[0].project), 'p');
     assert.equal(await status.textContent(), locales.it['skills.loading']);
-    await input.press('Enter');assert.equal(await input.inputValue(), '/');
+    await input.press('Enter');assert.equal(await page.evaluate(() => composerText()), '/');
     await fulfill(0, [skill('review','Review code'),skill('write','Write safely')]);
     await options.last().waitFor();assert.equal(await options.count(), 2);
     assert.equal(await input.getAttribute('aria-expanded'), 'true');
     await input.press('ArrowDown');assert.equal(await input.getAttribute('aria-activedescendant'), 'skill-option-1');
     await input.press('ArrowUp');assert.equal(await input.getAttribute('aria-activedescendant'), 'skill-option-0');
     await input.press('ArrowUp');await input.press('Enter');
-    assert.equal(await input.inputValue(), '/write ');assert.equal(await chooser.isHidden(), true);
+    assert.equal(await page.evaluate(() => composerText()), '/write ');assert.equal(await chooser.isHidden(), true);
     assert.equal(await page.evaluate(() => __calls.filter(c => c.cmd === 'chat').length), 0);
     await input.fill('/review task');assert.equal(await chooser.isHidden(), true);
 
@@ -61,10 +61,10 @@ const assert = require('node:assert/strict');
     await open();await fulfill(1, [skill('review','<img src=x onerror=alert(1)> Review code')]);
     await options.first().waitFor();assert.equal(await chooser.locator('img').count(), 0);
     assert.match(await options.first().textContent(), /<img src=x/);
-    await input.fill('/code');await options.first().click();assert.equal(await input.inputValue(), '/review ');
+    await input.fill('/code');await options.first().click();assert.equal(await page.evaluate(() => composerText()), '/review ');
     await open();await fulfill(2, [skill('review','Code review')]);await options.first().waitFor();
     await input.fill('/missing');assert.equal(await status.textContent(), locales.it['skills.no_match']);
-    await input.press('Enter');assert.equal(await input.inputValue(), '/missing');
+    await input.press('Enter');assert.equal(await page.evaluate(() => composerText()), '/missing');
     await input.press('Escape');await page.evaluate(() => updateComposerControls());assert.equal(await chooser.isHidden(), true);
 
     // Duplicates stay ambiguous even when filtering by just one description.
@@ -72,8 +72,8 @@ const assert = require('node:assert/strict');
     await options.last().waitFor();await input.fill('/Only-first');assert.equal(await options.count(), 1);
     assert.equal(await options.first().getAttribute('aria-disabled'), 'true');
     assert.match(await status.textContent(), /catalogo è incompleto/);
-    await input.press('Enter');assert.equal(await input.inputValue(), '/Only-first');
-    await options.first().click({force:true});assert.equal(await input.inputValue(), '/Only-first');
+    await input.press('Enter');assert.equal(await page.evaluate(() => composerText()), '/Only-first');
+    await options.first().click({force:true});assert.equal(await page.evaluate(() => composerText()), '/Only-first');
 
     // A newer request wins even in the same project; a stale project response also loses.
     await input.press('Escape');await open();const old = (await count()) - 1;

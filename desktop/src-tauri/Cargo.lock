@@ -238,6 +238,7 @@ dependencies = [
  "tokio",
  "toml 1.1.8+spec-1.1.0",
  "transcribe-rs",
+ "webview2-com",
  "windows",
 ]
 

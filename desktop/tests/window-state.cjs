@@ -32,7 +32,7 @@ const assert = require('node:assert/strict');
     }finally{window.__inFlight--;}
     return;
    }
-   if(cmd==='get_data')return {projects:[],conversations:[]};
+   if(['get_data','refresh_data'].includes(cmd))return {projects:[],conversations:[]};
   }}};
  },{strings});
  await page.goto(pathToFileURL(resolve(__dirname,'../ui/index.html')).href);

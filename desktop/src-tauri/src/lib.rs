@@ -18,6 +18,7 @@ mod chat_runs;
 mod questions;
 mod companion;
 mod updates;
+mod browser;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -100,7 +101,7 @@ fn update_taskbar_progress(app: &tauri::AppHandle) {
         if let Err(error) = app.run_on_main_thread(move || {
             let state = handle.state::<AppState>();
             let active = state.running_chats.lock().unwrap();
-            if let Some(window) = handle.get_webview_window("main") {
+            if let Some(window) = handle.get_window("main") {
                 if let Err(error) = window.set_progress_bar(window_state::chat_progress(active.len())) {
                     eprintln!("Taskbar progress update failed: {error}");
                 }
@@ -895,7 +896,7 @@ fn open_external_url(app:tauri::AppHandle, url:String) -> Result<(),String> {
 
 /// Picked images are returned as-is; the UI scales and re-encodes them before sending.
 #[tauri::command]
-async fn choose_chat_files(window:tauri::WebviewWindow) -> Result<Vec<Attachment>,String> {
+async fn choose_chat_files(window:tauri::Window) -> Result<Vec<Attachment>,String> {
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
     const MAX_PICKED_IMAGE: usize = 20 << 20;
     const IMAGES: [&str; 5] = ["png","jpg","jpeg","gif","webp"];
@@ -933,7 +934,7 @@ async fn choose_chat_files(window:tauri::WebviewWindow) -> Result<Vec<Attachment
 }
 
 #[tauri::command(rename_all = "snake_case")]
-async fn choose_project_folder(window: tauri::WebviewWindow, state: tauri::State<'_, AppState>, project_id: String, lang: String) -> Result<Option<String>, String> {
+async fn choose_project_folder(window: tauri::Window, state: tauri::State<'_, AppState>, project_id: String, lang: String) -> Result<Option<String>, String> {
     if project_id.trim().is_empty() { return Err("project id required".into()); }
     let auth = firebase_auth(&state)?;
     let uid = ensure_uid(&state, &auth).await?;
@@ -1086,7 +1087,7 @@ async fn prune_folder_access(state: tauri::State<'_, AppState>) -> Result<(), St
 }
 
 #[tauri::command(rename_all = "snake_case")]
-async fn restore_window(window: tauri::WebviewWindow, state: tauri::State<'_, AppState>, restore_saved: bool) -> Result<(), String> {
+async fn restore_window(window: tauri::Window, state: tauri::State<'_, AppState>, restore_saved: bool) -> Result<(), String> {
     let _save = state.window_save_lock.lock().await;
     let auth = firebase_auth(&state).ok();
     let uid = if restore_saved {
@@ -1161,7 +1162,7 @@ fn capture_window(window: &tauri::Window) {
 }
 
 fn show_main_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = app.get_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -1217,11 +1218,12 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app,_,_| {
-            if let Some(window)=app.get_webview_window("main") {let _=window.show();let _=window.set_focus();}
+            if let Some(window)=app.get_window("main") {let _=window.show();let _=window.set_focus();}
         }))
         .manage(std::sync::Arc::new(managed_shells::Shells::default()))
         .manage(std::sync::Arc::new(media::Media::default()))
         .manage(approvals::Approvals::default())
+        .manage(browser::Browser::default())
         .manage(questions::Questions::default())
         .manage(agent_runs::AgentRuns::default())
         .manage(updates::Updates::default())
@@ -1256,7 +1258,7 @@ pub fn run() {
                 viewing_chat: Mutex::new(None),
             });
 
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_window("main") {
                 let _ = window.set_icon(app_icon());
             }
 
@@ -1265,7 +1267,7 @@ pub fn run() {
             let handle=app.handle().clone();
             tauri_plugin_notification::NotificationExt::notification(app.handle()).on_action(move |action| {
                 if action.action_id()!="tap" {return;}
-                let Some(window)=handle.get_webview_window("main") else {return;};
+                let Some(window)=handle.get_window("main") else {return;};
                 let _=window.unminimize();let _=window.show();let _=window.set_focus();
                 if let Some(id)=action.notification().and_then(|n|n.extra().get("conversation_id")).and_then(|v|v.as_str()).filter(|id|!id.is_empty()) {
                     let _=window.emit("open-conversation",id);
@@ -1332,6 +1334,7 @@ pub fn run() {
             prune_folder_access,
             choose_chat_files,
             open_external_url
+            ,browser::browser_open, browser::browser_bounds, browser::browser_action, browser::browser_close, browser::browser_capture
             ,list_shells, stop_shell
             ,speech_model_status, download_speech_model, cancel_speech_download, remove_speech_model, prepare_speech_model, transcribe_audio
             ,pause_dictation_media, resume_dictation_media

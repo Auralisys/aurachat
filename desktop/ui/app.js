@@ -276,7 +276,7 @@ function icon(name) {
     }
     return svg;
   }
-  const glyph = {computer:'Monitor', gear:'Settings', person:'UserRound', cpu:'Cpu', microphone:'Mic', search:'Search', back:'ArrowLeft', trash:'Trash2', compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', image:'Image', fileCode:'FileCode', fileData:'FileJson', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown', globe:'Globe', external:'ExternalLink'}[name];
+  const glyph = {computer:'Monitor', gear:'Settings', person:'UserRound', cpu:'Cpu', microphone:'Mic', search:'Search', back:'ArrowLeft', trash:'Trash2', compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', image:'Image', fileCode:'FileCode', fileData:'FileJson', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown', globe:'Globe', external:'ExternalLink', forward:'ArrowRight', reload:'RotateCw', capture:'Camera'}[name];
   if (glyph && lucide.icons[glyph]) return lucide.createElement(lucide.icons[glyph], {class:'ui-icon','aria-hidden':'true'});
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
@@ -935,7 +935,7 @@ function renderMarkdown(target, content) {
       link.onclick = async event => {
         event.preventDefault();
         if (!/^https?:$/.test(link.protocol)) return;
-        try {await invoke('open_external_url',{url:link.href});} catch (_) {composerStatus(t('chat.link_failed'));}
+        await openLink(link.href, event);
       };
     });
     const decorateCode = pre => {
@@ -1336,7 +1336,7 @@ function renderDraft() {
   };
   if (images.length || pending) {
     const group = document.createElement('div');group.className = 'attachment-images';
-    images.forEach((file,index) => group.append(imageTile(images,index,remove(file))));
+    images.forEach((file,index) => group.append(imageTile(images,index,remove(file),opener => annotateDraftImage(file,opener))));
     for (let i = 0; i < pending; i++) group.append(imageSkeleton());
     list.append(group);
   }
@@ -1348,6 +1348,15 @@ function renderDraft() {
   }
   list.hidden=!state.attachments.length && !pending;$('#attachment-note').hidden=!state.attachments.length;
   $('#editing-message').hidden=state.editingMessageIndex===null;updateComposerControls();
+}
+
+async function annotateDraftImage(file, opener) {
+  const id = ensureAttachmentId(file), origin = state.activeConversationId;
+  const annotation = await openAnnotator(file, {opener});
+  if (annotation === undefined || origin !== state.activeConversationId || !state.attachments.includes(file)) return;
+  if (annotation) file.annotation = annotation;else delete file.annotation;
+  renderDraft();
+  [...document.querySelectorAll('#composer-attachments .image-tile__annotate')].find(button => button.closest('.image-tile')?.dataset.id === id)?.focus();
 }
 
 async function attachFiles() {
@@ -1384,13 +1393,13 @@ async function addImageAttachments(sources) {
   }
   for (const source of accepted) {
     let file = null;
-    try {file = await prepareImage(source);}
+    try {file = source?.prepared ? source.file : await prepareImage(source);}
     catch (e) {error ||= errText(e);}
     const files = draft();
     if (file) {
       const total = files.filter(isImageAttachment).reduce((sum,item) => sum + item.data.length, 0);
       if (total + file.data.length > IMAGE_LIMIT.total) error ||= 'image_too_large';
-      else {file.name = uniqueImageName(file.name, new Set(files.map(item => item.name)));files.push(file);}
+      else {file.name = uniqueImageName(file.name, new Set(files.map(item => item.name)));ensureAttachmentId(file);files.push(file);}
     }
     const left = imageJobs.get(origin) - 1;
     if (left > 0) imageJobs.set(origin, left);else imageJobs.delete(origin);
@@ -1722,6 +1731,7 @@ async function init() {
   setupComposerExtras();
   setupSidebarSections();
   await setupActivity();
+  await setupBrowser();
   await appWindow.listen('conversation-title-updated', ({payload}) => {
     if (payload?.email !== state.config.firebase_email || typeof payload.title !== 'string') return;
     applyConversationTitle(payload.conversation_id,payload.title,payload.title_state);
@@ -1945,7 +1955,7 @@ function updateAccount() {
 function setupAppMenus() {
   let editTarget = null;
   document.addEventListener('focusin', e => {
-    if (e.target.matches('input, textarea')) editTarget = e.target;
+    if (e.target.matches('input, textarea, [contenteditable="true"]')) editTarget = e.target;
   });
   const triggers = [...document.querySelectorAll('[data-app-menu]')];
   const close = () => {
@@ -1957,7 +1967,7 @@ function setupAppMenus() {
   const edit = command => {
     if (!editTarget?.isConnected || !editTarget.getClientRects().length) return;
     editTarget.focus();
-    if (command === 'selectAll') editTarget.select();
+    if (command === 'selectAll' && typeof editTarget.select === 'function') editTarget.select();
     else document.execCommand(command);
   };
   const actions = {

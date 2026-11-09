@@ -51,7 +51,10 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  assert.equal(await page.locator('.markdown img,.markdown script,.markdown [onerror],.markdown a[href^="javascript:"]').count(),0);
  assert.equal(await page.evaluate(()=>!!window.__xss),false);
  await page.getByRole('button',{name:'Copia codice',exact:true}).click();assert.match(await page.evaluate(()=>window.__copied.at(-1)),/console.log/);
- await page.getByRole('link',{name:'fonte',exact:true}).click();assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='open_external_url').at(-1).args.url),'https://example.com/');
+ await page.getByRole('link',{name:'fonte',exact:true}).click();await page.waitForFunction(()=>window.__calls.some(c=>c.cmd==='browser_open'));
+ assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='browser_open').at(-1).args.url),'https://example.com/');
+ await page.evaluate(()=>closeBrowser());
+ await page.getByRole('link',{name:'fonte',exact:true}).click({modifiers:['Control']});assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='open_external_url').at(-1).args.url),'https://example.com/');
  await page.locator('#context-info summary').click();assert.match(await page.locator('#context-details').innerText(),/33/);
  await page.locator('#context-info summary').click();await page.screenshot({path:resolve(shots,'markdown-desktop.png')});
  // Editing resubmits the selected user turn and replaces its following answer.

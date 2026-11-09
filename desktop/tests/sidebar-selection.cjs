@@ -15,7 +15,7 @@ const assert = require('node:assert/strict');
     window.__TAURI__ = {window:{getCurrentWindow:()=>({async listen(){return ()=>{};}})},core:{invoke:async (cmd,args) => {
       if(cmd === 'get_locale') return JSON.stringify(locales);
       if(['get_config','get_local_config'].includes(cmd)) return config;
-      if(cmd === 'get_data') return data;
+      if(['get_data','refresh_data'].includes(cmd)) return data;
       if(cmd === 'chat') {
         await new Promise((resolve,reject) => {window.__finishChat = () => window.__failChat ? reject(new Error('Test failure')) : resolve();});
         conversation.messages.push({role:'user',content:args.content},{role:'assistant',content:'Fatto'});

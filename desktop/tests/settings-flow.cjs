@@ -16,7 +16,7 @@ const assert = require('node:assert/strict');
   await page.exposeFunction('mockInvoke', async (cmd, args) => {
     if (cmd === 'get_locale') return JSON.stringify(strings);
     if (cmd === 'get_local_config' || cmd === 'get_config') return config;
-    if (cmd === 'get_data') return { projects: [], conversations: [] };
+    if (['get_data','refresh_data'].includes(cmd)) return { projects: [], conversations: [] };
     if (cmd === 'save_provider') {
       saved.push(args.input);
       if (fail) throw new Error('Simulated offline');

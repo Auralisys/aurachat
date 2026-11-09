@@ -107,8 +107,8 @@ usano le richieste `devices/{device}/requests` del companion: l'esecuzione e i
 permessi restano sul computer di origine. La destinazione resta associata alla
 chat anche dopo la fine del turno, per poter continuare la conversazione da remoto.
 Allegati testuali, modifica e rigenerazione richiedono protocollo 6 sul gateway,
-le immagini protocollo 8; i vecchi gateway vengono segnalati prima di inviare
-operazioni non supportate.
+le immagini protocollo 8, i commenti sulle immagini protocollo 9; i vecchi
+gateway vengono segnalati prima di inviare operazioni non supportate.
 Nessun errore remoto fa ripartire il messaggio in locale e gli esiti incerti non
 sono reinviati automaticamente.
 Il controllo avviene all'apertura, poi ogni 3 secondi durante il turno (15 quando
@@ -1106,3 +1106,54 @@ limiti, conversione delle richieste, modelli senza visione e lettura tramite
 `deepseek-flash`. Il test reale `real_provider_reads_image` (ignorato, richiede
 `AURACHAT_LLM_SMOKE=1`, `AURACHAT_IMAGE` e `AURACHAT_IMAGE_TEXT`) usa il modello
 attivo dell'account.
+
+## Commenti sulle immagini e browser interno
+
+**Annotazioni.** Ogni immagine nella bozza ha il pulsante «Annota immagine»
+(`image-annotations.js`): si apre un editor a tutto schermo dove un clic
+sull'immagine (o Invio sul canvas) aggiunge un commento numerato. I marker si
+trascinano o si spostano con le frecce (1%, Maiusc 5%) e si eliminano con Canc;
+massimo 20 commenti da 1000 caratteri. I commenti senza testo vengono scartati,
+Esc/Annulla non modifica quelli salvati. Il badge sulla miniatura indica il numero
+di commenti; nel visualizzatore i marker compaiono sopra l'immagine con le note
+sotto. I marker **non** vengono disegnati sui pixel: l'allegato porta un `id`
+(`img-` + 12 esadecimali) e `annotation` (`version: 1`, `source` `image` o
+`browser`, `width`/`height` dell'immagine, `comments` con `id`, `x`/`y` in 0–1 e
+`text`; per le catture anche `url` senza credenziali, query e frammento, `title`
+e `captured_at` in ms). `llm.rs` valida il contratto (`invalid_annotation`) e,
+dopo l'immagine, aggiunge al messaggio utente un testo
+`[Annotations on image nome]` con la posizione in percentuale di ogni commento;
+con il bridge `deepseek-flash` la nota orienta anche la lettura dell'immagine e
+resta dopo la descrizione. Il
+telefono mostra marker e note in sola lettura; il relay passa al protocollo 9 e il
+controllo remoto invia annotazioni solo a gateway aggiornati
+(`remote_update_required`).
+
+**Browser interno.** Il globo nell'intestazione apre un pannello a destra della
+chat (alternativo al pannello attività, larghezza trascinabile o da tastiera,
+salvata in `localStorage`). I link nelle risposte si aprono qui; Ctrl/Maiusc+clic
+e il pulsante dedicato usano il browser di sistema. `browser.rs` crea una webview
+figlia della finestra principale (`get_window`, feature Tauri `unstable`) solo su
+richiesta della webview `main`: indirizzi completi, host senza schema
+(`https://`, `http://` per localhost) o ricerche DuckDuckGo. Sono ammessi solo
+http/https e mai gli host `*.localhost` dei protocolli dell'app; navigazioni
+bloccate emettono `browser-blocked`, i pop-up sostituiscono la pagina corrente.
+La pagina remota non ha accesso all'IPC di Tauri (capability solo locale). La
+webview nativa è disegnata sopra il DOM: `browser.js` la nasconde quando un
+dialog, menu o overlay la copre, quando la vista chat non è visibile e durante
+l'annotazione, e ne aggiorna i limiti con `ResizeObserver`. Chiudere il pannello
+distrugge la pagina.
+
+**Cattura.** «Annota schermata e allega» cattura la parte visibile della pagina in
+PNG (WebView2 `CapturePreview`, solo Windows; su macOS il pulsante non compare e
+il comando risponde `browser_capture_unsupported`), apre l'editor con titolo e
+indirizzo e, al salvataggio, allega l'immagine con nome `host-data-ora.png`
+(anche senza commenti); Annulla scarta la cattura. Errori:
+`browser_invalid_url`, `browser_blocked_url`, `browser_closed`,
+`browser_capture_failed`.
+
+Verifica: `desktop/tests/image-annotations.cjs` (editor, salvataggio e annulla,
+argomenti `chat`, visualizzatore, apertura e limiti del pannello, occultamento
+sotto i menu, cattura annotata e annullata, link, alternanza con l'attività), test
+Rust `browser::tests` (indirizzi e blocchi) e test su validazione e testo delle
+annotazioni in `llm.rs`.

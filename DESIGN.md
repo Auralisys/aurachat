@@ -61,3 +61,13 @@ indipendente. Posizione e aperture si conservano tra conversazioni nella session
 non fra riavvii. Gli aggiornamenti non ricreano i blocchi Markdown invariati.
 Sotto 850 px la sidebar parte chiusa e si apre in overlay; la card attivita
 parte chiusa sotto 1000 px. Nessun redesign del companion Flutter in questa fase.
+
+## Desktop — commenti e browser
+
+Commenti sulle immagini come marker numerati in accento su un'immagine pulita:
+editor modale con l'immagine a sinistra e l'elenco dei commenti a destra (in
+colonna sotto 820 px), badge col numero sulla miniatura, note sotto l'immagine
+nel visualizzatore. Il browser interno occupa il lato destro al posto della card
+attivita: barra compatta con indirizzo a pillola, sottile barra di caricamento,
+maniglia di ridimensionamento accessibile da tastiera. La pagina nativa sparisce
+sotto menu e dialog invece di coprirli. Rispetto di reduced-motion e forced-colors.

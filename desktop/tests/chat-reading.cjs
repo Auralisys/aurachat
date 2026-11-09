@@ -95,7 +95,7 @@ async function run() {
     assert.equal(await live.locator('.turn-step').getAttribute('data-status'),'completed');
     await live.getByRole('button',{name:'Copia codice',exact:true}).click();
     assert.match(await page.evaluate(()=>__copied.at(-1)),/const risultato/);
-    await live.getByRole('link',{name:'documentazione'}).click();
+    await live.getByRole('link',{name:'documentazione'}).click({modifiers:['Control']});
     assert.equal(await page.evaluate(()=>__calls.filter(call=>call.cmd==='open_external_url').at(-1).args.url),'https://example.com/');
     await page.evaluate(()=>{
       window.__paragraph=document.querySelector('.msg--stream .turn-text p');

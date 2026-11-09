@@ -31,7 +31,7 @@ const assert=require('node:assert/strict');
         window.__calls.push({cmd,args});
         if(cmd==='get_locale')return JSON.stringify(locales);
         if(['get_local_config','get_config'].includes(cmd))return config;
-        if(cmd==='get_data')return structuredClone(data);
+        if(['get_data','refresh_data'].includes(cmd))return structuredClone(data);
         if(cmd==='project_permission_mode')return 'auto';
         if(cmd==='speech_model_status')return {ready:false,busy:false};
         if(['list_shells','list_approvals','list_questions','project_folder_access'].includes(cmd))return [];

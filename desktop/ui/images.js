@@ -202,10 +202,13 @@ function prepareImage(source) {
 function imageThumb(files, index, className = 'image-thumb') {
   const file = files[index], entry = imageEntry(file);
   const button = document.createElement('button');button.type = 'button';button.className = className;
-  button.setAttribute('aria-label', `${t('chat.open_image')}: ${file.name}`);button.title = file.name;
+  const comments = annotationComments(file).length;
+  const note = comments ? ` (${comments} ${t(comments === 1 ? 'annotations.count_one' : 'annotations.count_many')})` : '';
+  button.setAttribute('aria-label', `${t('chat.open_image')}: ${file.name}${note}`);button.title = file.name + note;
   const img = document.createElement('img');img.alt = '';img.draggable = false;img.decoding = 'async';
   if (entry) img.src = entry.url;
   button.append(img);
+  if (comments) button.append(annotationBadge(comments));
   button.onclick = () => openImageViewer(files, index, button);
   return button;
 }
@@ -227,12 +230,19 @@ function messageImagesEl(files) {
   return group;
 }
 
-function imageTile(files, index, remove) {
+function imageTile(files, index, remove, annotate) {
   const tile = document.createElement('div');tile.className = 'image-tile';
+  if (files[index].id) tile.dataset.id = files[index].id;
   const close = document.createElement('button');close.type = 'button';close.className = 'image-tile__remove';
   close.setAttribute('aria-label', `${t('chat.remove_attachment')}: ${files[index].name}`);close.title = t('chat.remove_attachment');
   close.append(icon('close'));close.onclick = remove;
   tile.append(imageThumb(files, index, 'image-tile__open'), close);
+  if (annotate) {
+    const edit = document.createElement('button');edit.type = 'button';edit.className = 'image-tile__annotate';
+    edit.setAttribute('aria-label', `${t('annotations.annotate')}: ${files[index].name}`);edit.title = t('annotations.annotate');
+    edit.append(viewerIcon('MessageSquarePlus'));edit.onclick = () => annotate(edit);
+    tile.append(edit);
+  }
   return tile;
 }
 
@@ -259,13 +269,14 @@ function createImageViewer() {
   };
   const figure = document.createElement('figure');figure.className = 'image-viewer__figure';
   const img = document.createElement('img');img.className = 'image-viewer__image';
+  const stage = document.createElement('div');stage.className = 'image-viewer__stage';stage.append(img);
   const caption = document.createElement('figcaption');caption.className = 'image-viewer__caption';
   const name = document.createElement('span');name.id = 'image-viewer-name';
   const count = document.createElement('span');count.className = 'image-viewer__count';
-  caption.append(name, count);figure.append(img, caption);
+  caption.append(name, count);figure.append(stage, caption);
   viewer.append(control('image-viewer__close', icon('close')), control('image-viewer__nav image-viewer__nav--prev', viewerIcon('ChevronLeft'), -1), figure,
     control('image-viewer__nav image-viewer__nav--next', viewerIcon('ChevronRight'), 1));
-  viewer.addEventListener('click', event => {if (!event.target.closest('button, img')) viewer.close();});
+  viewer.addEventListener('click', event => {if (!event.target.closest('button, img, .annotation-layer, .annotation-notes')) viewer.close();});
   viewer.addEventListener('keydown', event => {
     if (event.defaultPrevented || viewer._images.length < 2 || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
     event.preventDefault();showViewerImage(viewer._index + (event.key === 'ArrowLeft' ? -1 : 1));
@@ -286,6 +297,11 @@ function showViewerImage(index) {
   const url = imageURL(file);
   if (url) img.src = url;else img.removeAttribute('src');
   img.alt = file.name || '';
+  const figure = viewer.querySelector('.image-viewer__figure'), stage = viewer.querySelector('.image-viewer__stage');
+  stage.querySelector('.annotation-layer')?.remove();figure.querySelector('.annotation-notes')?.remove();
+  const annotated = annotationComments(file).length > 0;
+  figure.classList.toggle('has-notes', annotated);
+  if (annotated) {stage.append(annotationOverlay(file));figure.append(annotationList(file));}
   viewer.querySelector('#image-viewer-name').textContent = file.name || '';
   viewer.querySelector('.image-viewer__count').textContent = count > 1 ? `${viewer._index + 1} / ${count}` : '';
 }

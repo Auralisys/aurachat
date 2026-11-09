@@ -131,3 +131,10 @@ sostituzione della palette Auralisys, dei permessi o delle funzioni di AuraChat.
 - Risposta troncata o filtrata segnalata esplicitamente, conservando il testo
   parziale senza eseguire tool incompleti. Il mobile riceve i messaggi di errore,
   non questo restyling desktop.
+- Commenti sulle immagini: marker numerati in accento, mai disegnati sui pixel;
+  editor modale con elenco a lato (in colonna sotto 820 px), badge sulla
+  miniatura e note nel visualizzatore. Il telefono li mostra in sola lettura.
+- Browser interno a destra, alternativo alla card attivita: indirizzo a pillola,
+  barra di caricamento sottile, ridimensionamento con mouse o tastiera. I link
+  delle risposte si aprono qui (Ctrl+clic nel browser di sistema); la cattura
+  passa sempre dall'editor dei commenti prima di diventare allegato.

@@ -395,7 +395,7 @@ function renderActivity() {
   }
   const dock = $('#activity-dock'), items = activityItems();
   const hasActivity = state.messages.some(m => ['user','assistant'].includes(m.role)) || state.busy || Object.values(items).some(list => list.length);
-  const visible = activity.visible && hasActivity && !$('#view-chat').hidden;
+  const visible = activity.visible && hasActivity && !$('#view-chat').hidden && !browserIsOpen();
   dock.hidden = $('#view-chat').hidden;
   dock.classList.toggle('is-visible', visible);dock.inert = !visible || $('.main').inert;
   dock.setAttribute('aria-hidden', String(!visible));
@@ -686,7 +686,11 @@ async function setupActivity() {
     if (payload?.conversation_id !== state.activeConversationId || ['__delta','__reasoning'].includes(payload?.kind)) return;
     scheduleActivityRender();
   });
-  $('#activity-toggle').onclick = () => {activity.visible = !activity.visible;renderActivity();};
+  // The browser and the activity dock share the right side: asking for activity closes the browser.
+  $('#activity-toggle').onclick = () => {
+    if (browserIsOpen()) {activity.visible = true;closeBrowser();}
+    else {activity.visible = !activity.visible;renderActivity();}
+  };
   $('#activity-close').onclick = closeActivityPanel;
   $('#activity-back').onclick = () => openActivity(activity.section);
   $('#activity-dock').onkeydown = e => {

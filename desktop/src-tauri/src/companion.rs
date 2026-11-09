@@ -62,8 +62,8 @@ const LIVE_HOT_MS: u64 = 1_000;
 const LIVE_COLD_MS: u64 = 10_000;
 const LIVE_RETENTION_MS: u64 = 60_000;
 // Relay protocol advertised to phones/computers. 7 adds the `watch` action,
-// 8 adds image attachments.
-const RELAY_PROTOCOL: u64 = 8;
+// 8 adds image attachments, 9 adds comments placed on images.
+const RELAY_PROTOCOL: u64 = 9;
 // Phone pushes are opt-in per chat: opening or using the chat on the phone
 // follows it for this long; a turn started from a computer stops following.
 const PUSH_WATCH_MS: u64 = 30 * 60_000;
@@ -340,7 +340,7 @@ fn viewing_match(viewing: Option<&str>, focused: bool, conversation: &str) -> bo
 /// A local completion toast is redundant only while the user is looking at that chat
 /// in the focused window. A background window, minimize or tray still notifies.
 pub fn chat_visible(app: &tauri::AppHandle, state: &AppState, conversation: &str) -> bool {
-    let focused = app.get_webview_window("main").and_then(|window| window.is_focused().ok()).unwrap_or(false);
+    let focused = app.get_window("main").and_then(|window| window.is_focused().ok()).unwrap_or(false);
     viewing_match(state.viewing_chat.lock().unwrap().as_deref(), focused, conversation)
 }
 
@@ -616,6 +616,9 @@ pub async fn remote_chat_request(state:tauri::State<'_,AppState>,device_id:Strin
     if needs_update && device["protocol"].as_u64().unwrap_or(0)<6 {return Err("remote_update_required".into());}
     let images=arguments["attachments"].as_array().is_some_and(|files|files.iter().any(|file|!file["data"].is_null()));
     if images && device["protocol"].as_u64().unwrap_or(0)<8 {return Err("remote_update_required".into());}
+    // Older gateways would silently drop the comments placed on images.
+    let annotated=arguments["attachments"].as_array().is_some_and(|files|files.iter().any(|file|!file["annotation"].is_null()));
+    if annotated && device["protocol"].as_u64().unwrap_or(0)<9 {return Err("remote_update_required".into());}
     if !matches!(action.as_str(),"chat"|"steer"|"withdraw_guidance"|"stop"|"approve"|"answer_question"|"stop_agent"|"stop_shell"|"chat_recap") {
         return Err("unsupported_remote_action".into());
     }
