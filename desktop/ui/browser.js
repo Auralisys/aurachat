@@ -2,7 +2,7 @@
 // Native pages stay alive when hidden, but never paint over a dialog or menu.
 const browserPage = {open:false, expanded:false, tabs:[], active:null, frame:0, owner:null};
 const BROWSER_WIDTH = {min:360, keep:420, key:'aurachat.browserWidth'};
-const BROWSER_FLOATING = '.overlay:not([hidden]), .tree-menu:not([hidden]), .project-preview:not([hidden]), .model-menu:not([hidden]), .app-menu__panel:not([hidden]), .account-menu:not([hidden]), .boot-splash:not([hidden]), .context-info[open] > div, .activity-dock.is-visible';
+const BROWSER_FLOATING = '.overlay:not([hidden]), .tree-menu:not([hidden]), .project-preview:not([hidden]), .model-menu:not([hidden]), .app-menu__panel:not([hidden]), .account-menu:not([hidden]), .boot-splash:not([hidden]), .context-info[open] > div';
 let browserQueue = Promise.resolve();
 
 function browserIsOpen() { return browserPage.open; }

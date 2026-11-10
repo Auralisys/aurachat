@@ -740,7 +740,11 @@ riposiziona a ogni cambio di layout; solo la pagina attiva può essere visibile.
 La coda JS serializza apertura, limiti, azioni, cattura e chiusura. Nascondere
 conserva le pagine; chiudere aspetta il backend e mantiene la scheda in caso di
 errore. Logout/cambio account chiude le schede; non si ripristinano al riavvio.
-Il riepilogo è indipendente dal pannello multi-tab e non riserva una colonna.
+Il riepilogo è indipendente dal pannello multi-tab e riserva una colonna da
+280 px nella griglia della chat, ridimensionando messaggi e composer. Si apre
+al cambio conversazione; la chiusura manuale non viene annullata dai refresh.
+Sotto 700 px disponibili si dispone sopra i messaggi con altezza limitata e
+scroll proprio, senza sovrapporsi alla chat.
 Git e dettagli attività riusano i renderer esistenti e seguono la chat/progetto
 corrente; filtri, indirizzi in bozza e messaggio Git si conservano al cambio scheda.
 La cattura usa WebView2 `CapturePreview` (PNG della parte visibile) e passa

@@ -135,8 +135,10 @@ sostituzione della palette Auralisys, dei permessi o delle funzioni di AuraChat.
   editor modale con elenco a lato (in colonna sotto 820 px), badge sulla
   miniatura e note nel visualizzatore. Il telefono li mostra in sola lettura.
 - Header con menu, riepilogo, separatore e pulsante del pannello laterale,
-  senza globo. Il riepilogo fluttua senza ridimensionare la chat e resta
-  indipendente dal pannello con schede, **+**, espansione e Nascondi.
+  senza globo. Il riepilogo riserva 280 px a destra, spostando messaggi e composer,
+  e si apre entrando nelle conversazioni gia avviate. Con al massimo 700 px
+  disponibili si dispone sopra i messaggi con scroll proprio, mai in overlay.
+  Resta indipendente dal pannello con schede, **+**, espansione e Nascondi.
 - Browser e Git nelle schede del pannello, insieme ai dettagli di Output,
   Fonti, Agenti e Shell. Una pagina nativa per scheda: cambiare scheda o
   nascondere conserva la pagina, **×** chiude solo quella scelta. I link aprono

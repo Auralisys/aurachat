@@ -59,8 +59,8 @@ Seguire il fondo e una scelta del lettore: risalire sospende lo scroll automatic
 **Vai in fondo** o un nuovo invio lo riattivano. I dettagli hanno uno scroll
 indipendente. Posizione e aperture si conservano tra conversazioni nella sessione,
 non fra riavvii. Gli aggiornamenti non ricreano i blocchi Markdown invariati.
-Sotto 850 px la sidebar parte chiusa e si apre in overlay; la card attivita
-parte chiusa sotto 1000 px. Nessun redesign del companion Flutter in questa fase.
+Sotto 850 px la sidebar di navigazione parte chiusa e si apre in overlay.
+Il riepilogo attivita non copre mai la chat. Nessun redesign del companion Flutter in questa fase.
 
 ## Desktop — commenti e browser
 
@@ -76,8 +76,11 @@ sotto menu e dialog invece di coprirli. Rispetto di reduced-motion e forced-colo
 
 Intestazione secondo il riferimento ChatGPT/Codex: menu, elenco del riepilogo,
 separatore verticale e icona del pannello destro; nessun pulsante globo qui.
-Il riepilogo da 304 px, limitato allo spazio disponibile, fluttua sotto il suo
-pulsante senza spostare la chat. Pannello a schede indipendente con **+**,
+Il riepilogo riserva una colonna da 280 px a destra, ridimensionando messaggi e
+composer senza coprirli. Si apre entrando in una conversazione gia avviata;
+la chiusura manuale resta valida durante gli aggiornamenti della stessa chat.
+Con meno di 700 px disponibili alla chat si dispone sopra i messaggi, con
+altezza limitata e scroll proprio, mai in overlay. Pannello a schede indipendente con **+**,
 chiusura per scheda, espansione/ripristino e Nascondi. Browser e Git condividono
 il contenitore con i dettagli esistenti di Output, Fonti, Agenti e Shell.
 Schede neutre con icona e titolo troncabile; nessun terminale interattivo o

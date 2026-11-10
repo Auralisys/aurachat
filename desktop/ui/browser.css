@@ -1,4 +1,4 @@
-/* Chat and tool panel share the workspace; the summary never reserves a column. */
+/* The tool panel stays independent of the conversation's summary column. */
 .browser-panel { --browser-width:clamp(360px, 46%, 960px); position:relative; flex:0 0 var(--browser-width); min-width:0; display:flex; flex-direction:column; border-left:1px solid var(--c-border); background:var(--c-sidebar); }
 .workspace:has(#view-chat[hidden]) .browser-panel { display:none; }
 .panel-tabbar { display:flex; align-items:center; gap:4px; min-height:56px; flex:none; padding:8px; }

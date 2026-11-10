@@ -1,9 +1,21 @@
 .main { container-type:inline-size; }
-.summary-anchor { position:relative; flex:none; }
-.activity-dock { --agent-color:var(--c-glow); position:absolute; z-index:6; top:calc(100% + 8px); right:-8px; width:min(304px,calc(100vw - 140px)); max-width:calc(100cqw - 80px); }
+.view--chat:has(.activity-dock.is-visible) { display:grid; grid-template-columns:minmax(0,1fr) 280px; grid-template-rows:auto minmax(0,1fr) auto; }
+.view--chat.is-empty:has(.activity-dock.is-visible) { grid-template-rows:auto minmax(0,1fr) auto minmax(0,1fr); }
+.view--chat > .chat-header { grid-column:1 / -1; grid-row:1; }
+.view--chat > .messages { grid-column:1; grid-row:2; min-width:0; }
+.view--chat > .composer { grid-column:1; grid-row:3; min-width:0; }
+.activity-dock { --agent-color:var(--c-glow); grid-column:2; grid-row:2 / -1; min-width:0; min-height:0; padding:0 16px 16px 0; overflow:hidden; }
 .view--chat { overflow:visible; }
 .chat-header { position:relative; z-index:2; }
-.activity-card { width:100%; max-height:calc(100dvh - 160px); overflow:auto; overscroll-behavior:contain; padding:12px 20px 16px; border-radius:var(--radius-xl); background:var(--c-panel); box-shadow:0 12px 28px #0003; }
+.activity-card { width:100%; max-height:100%; overflow:auto; overscroll-behavior:contain; padding:12px 16px 16px; border-radius:var(--radius-xl); background:var(--c-panel); }
+@container (max-width:700px) {
+  .view--chat:has(.activity-dock.is-visible) { grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto minmax(0,1fr) auto; }
+  .view--chat.is-empty:has(.activity-dock.is-visible) { grid-template-rows:auto auto minmax(0,1fr) auto minmax(0,1fr); }
+  .view--chat:has(.activity-dock.is-visible) > .messages { grid-row:3; }
+  .view--chat:has(.activity-dock.is-visible) > .composer { grid-row:4; }
+  .activity-dock { grid-column:1; grid-row:2; padding:0 var(--space-4) var(--space-4); }
+  .activity-card { max-height:min(32dvh,240px); }
+}
 .activity-card__header { display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--c-text-muted); font-size:12px; }
 .activity-card__header > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .activity-card__header .icon-button { flex:none; }

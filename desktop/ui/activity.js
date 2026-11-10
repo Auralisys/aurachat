@@ -1,6 +1,6 @@
 // Conversation-scoped activity. Sources come only from user-supplied material;
 // native activity events are retained for the current app session.
-const activity = { conversations: new Map(), visible: !matchMedia('(max-width:1000px)').matches, section: null, selected: null, conversationId: null, filter: 'all' };
+const activity = { conversations: new Map(), visible: true, section: null, selected: null, conversationId: null, filter: 'all' };
 
 // Artifacts are what the model produced. Model prose and raw tool output are not.
 const ARTIFACT_TYPES = [
@@ -388,6 +388,7 @@ function renderActivity() {
   };
   if (activity.conversationId !== state.activeConversationId) {
     activity.conversationId = state.activeConversationId;activity.selected = null;activity.filter = 'all';
+    activity.visible = true;
     for (const tab of browserPage.tabs.filter(tab => tab.section)) {tab.selected = null;tab.filter = 'all';tab.scroll = 0;}
     if (state.activeConversationId) {refreshActivityShells(state.activeConversationId);refreshPermissionRequests(state.activeConversationId);refreshQuestions(state.activeConversationId);}
   }

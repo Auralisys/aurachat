@@ -125,8 +125,10 @@ sono necessarie nuove regole Firestore rispetto al relay esistente.
 ### Riepilogo e pannello a schede
 
 L'intestazione separa **menu · riepilogo · divisore · pannello laterale**:
-nessun globo per aprire il pannello. Il riepilogo è una card flottante ancorata
-al proprio pulsante, indipendente dalle schede e senza ridimensionare la chat.
+nessun globo per aprire il pannello. Il riepilogo riserva una colonna da 280 px
+a destra della conversazione, ridimensionando messaggi e composer senza coprirli.
+Si apre entrando in una conversazione gia avviata; chiuderlo manualmente lo
+mantiene nascosto durante gli aggiornamenti della stessa chat.
 Mostra **Modifiche**, **Output**, **Fonti** e, quando presenti, **Agenti** e **Shell**.
 Il nome del progetto identifica il contesto; il menu offre le viste complete
 e Nascondi. I pulsanti **+** aggiungono una fonte o preparano una richiesta di
@@ -138,7 +140,9 @@ Git richiede una chat di progetto con una cartella locale. Ogni vista strumenti
 riutilizza la propria scheda e segue la conversazione corrente; i browser
 rimangono aperti passando tra chat. Espandi usa tutto lo spazio di lavoro,
 Nascondi torna alla chat senza chiudere le schede. Sotto i 1000 px chat e pannello
-si alternano a tutta larghezza. Il riepilogo parte chiuso sotto i 1000 px.
+si alternano a tutta larghezza. Quando alla chat restano al massimo 700 px,
+il riepilogo si dispone sopra i messaggi con altezza limitata e scroll proprio,
+mai in overlay, anche con il pannello a schede aperto.
 La sidebar di navigazione
 parte chiusa sotto gli 850 px e si apre sopra il contenuto, con chiusura tramite
 Escape, sfondo o selezione della chat. Con `prefers-reduced-motion` gli

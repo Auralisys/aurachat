@@ -41,8 +41,8 @@ present, but building and testing it requires macOS and Xcode.
 - **Local project tools.** Files, commands, Git and MCP integrations operate on
   the gateway computer, within the permissions you grant.
 - **A desktop app that stays out of the way.** System tray operation, local
-  dictation, live Markdown with code copy, compact reasoning previews and an
-  floating summary and a separate tabbed side panel for browser pages, Git and
+  dictation, live Markdown with code copy, compact reasoning previews, a docked
+  summary that opens with existing conversations, and a separate tabbed side panel for browser pages, Git and
   conversation tools. Long pasted text folds into editable inline line-count
   chips; the complete text is sent. Streaming respects your reading position, with a jump-to-latest
   control and per-conversation reading memory for the current session.

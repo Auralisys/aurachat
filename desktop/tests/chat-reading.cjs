@@ -141,7 +141,7 @@ async function run() {
     await page.evaluate(()=>__emit('__delta',' Ritorno spontaneo in fondo.'.repeat(15)));await settled();
     assert.ok(await bottom()<=2);
     // Closing the side panel widens the chat and clamps its scroll; reopening must stay at the bottom.
-    for(const control of ['#panel-toggle','#browser-close','#panel-toggle','#browser-close']){
+    for(const control of ['#activity-toggle','#activity-toggle','#panel-toggle','#browser-close','#panel-toggle','#browser-close']){
       await page.click(control);await settled();
       assert.ok(await bottom()<=2,`Chat must stay at the bottom after ${control}`);
     }
