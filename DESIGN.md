@@ -71,3 +71,13 @@ nel visualizzatore. Il browser interno occupa il lato destro al posto della card
 attivita: barra compatta con indirizzo a pillola, sottile barra di caricamento,
 maniglia di ridimensionamento accessibile da tastiera. La pagina nativa sparisce
 sotto menu e dialog invece di coprirli. Rispetto di reduced-motion e forced-colors.
+
+## Desktop — utilizzo e costi
+
+Pulsante compatto nell'intestazione con token e costo (`12,7k · 0,0047 $`), cifre
+tabulari. Popover da 304 px sul pannello scuro con radius-xl: costo in grande,
+barra a tre segmenti (cache in accento chiaro, ingresso nuovo in viola, uscita in
+bianco), righe etichetta/valore e righe per modello con tag «sconto 50%». Numeri
+in `k`/`M` con valore esatto nel tooltip, USD con due cifre significative.
+Nelle impostazioni ogni modello ha un riquadro prezzi richiudibile con chip di
+stato, riepilogo e campi con suffisso USD (una colonna sotto 600 px).

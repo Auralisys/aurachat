@@ -1638,15 +1638,153 @@ function setupChoiceMenu(id) {
   };
 }
 
-// ===== Contesto =====
+// ===== Utilizzo e costo stimato =====
+// Locale compact notation would not abbreviate thousands in Italian: k/M stay explicit.
+function formatTokens(value) {
+  const n = Math.max(0, Number(value) || 0);
+  if (n < 1000) return new Intl.NumberFormat(lang).format(n);
+  let scaled = n / 1000, suffix = 'k';
+  if (Math.round(scaled * 10) / 10 >= 1000) { scaled = n / 1e6; suffix = 'M'; }
+  return new Intl.NumberFormat(lang, { maximumFractionDigits: scaled < 100 ? 1 : 0 }).format(scaled) + suffix;
+}
+
+function exactTokens(value) { return `${new Intl.NumberFormat(lang).format(Number(value) || 0)} ${t('chat.tokens')}`; }
+
+// About two significant digits: cents for whole dollars, down to $0.00001 for single replies.
+function formatUsd(value) {
+  const n = Math.max(0, Number(value) || 0);
+  const currency = digits => new Intl.NumberFormat(lang, { style:'currency', currency:'USD', currencyDisplay:'narrowSymbol', minimumFractionDigits:digits, maximumFractionDigits:digits });
+  if (n > 0 && n < 0.00001) return '< ' + currency(5).format(0.00001);
+  return currency(n === 0 || n >= 1 ? 2 : Math.min(5, Math.max(2, 1 - Math.floor(Math.log10(n))))).format(n);
+}
+
+function usageElement(tag, className, text) {
+  const el = document.createElement(tag);
+  if (className) el.className = className;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+function usageCost(usage) { return usage.cost_usd != null ? formatUsd(usage.cost_usd) : '—'; }
+
+function usageTotals(usage) {
+  if (!usage?.total_tokens) return null;
+  const counts = ['prompt_tokens', 'completion_tokens', 'total_tokens', 'requests', 'cache_hit_tokens', 'cache_miss_tokens', 'reasoning_tokens', 'unpriced_tokens'];
+  const totals = { ...usage, models: Array.isArray(usage.models) ? usage.models : [] };
+  for (const key of counts) totals[key] = Number(usage[key]) || 0;
+  return totals;
+}
+
+function usageRow(label, value, title, swatch) {
+  const row = usageElement('div', 'usage-row');
+  const dt = usageElement('dt', '', label);
+  if (swatch) dt.prepend(usageElement('i', 'usage-swatch usage-swatch--' + swatch));
+  const dd = usageElement('dd', '', value);
+  if (title) dd.title = title;
+  row.append(dt, dd);
+  return row;
+}
+
+function usageBar(usage) {
+  const parts = usage.cache_hit_tokens + usage.cache_miss_tokens > 0
+    ? [['hit', usage.cache_hit_tokens], ['miss', usage.cache_miss_tokens], ['output', usage.completion_tokens]]
+    : [['miss', usage.prompt_tokens], ['output', usage.completion_tokens]];
+  const bar = usageElement('div', 'usage-bar');
+  bar.setAttribute('aria-hidden', 'true');
+  for (const [kind, tokens] of parts) if (tokens > 0) { const part = usageElement('span', 'usage-bar__part usage-swatch--' + kind); part.style.flexGrow = tokens; bar.append(part); }
+  return bar;
+}
+
+function usageSection(title, usage, detailed) {
+  const section = usageElement('section', 'usage-section');
+  const head = usageElement('header', 'usage-section__head');
+  head.append(usageElement('h2', 'usage-section__title', title), usageElement('strong', 'usage-section__cost', usageCost(usage)));
+  if (usage.cost_usd != null) head.lastChild.title = new Intl.NumberFormat(lang, { style:'currency', currency:'USD', maximumFractionDigits:6 }).format(usage.cost_usd);
+  section.append(head);
+  const list = usageElement('dl', 'usage-list');
+  const split = usage.cache_hit_tokens + usage.cache_miss_tokens > 0;
+  if (!detailed) {
+    list.append(usageRow(t('usage.input'), formatTokens(usage.prompt_tokens), exactTokens(usage.prompt_tokens)),
+      usageRow(t('usage.output'), formatTokens(usage.completion_tokens), exactTokens(usage.completion_tokens)));
+    section.append(list);
+    return section;
+  }
+  section.append(usageBar(usage));
+  if (split) {
+    const share = Math.round(usage.cache_hit_tokens / Math.max(1, usage.cache_hit_tokens + usage.cache_miss_tokens) * 100);
+    list.append(usageRow(t('usage.cache_hit'), formatTokens(usage.cache_hit_tokens), exactTokens(usage.cache_hit_tokens), 'hit'),
+      usageRow(t('usage.cache_miss'), formatTokens(usage.cache_miss_tokens), exactTokens(usage.cache_miss_tokens), 'miss'));
+    list.append(usageRow(t('usage.cache_share'), new Intl.NumberFormat(lang, { style:'percent' }).format(share / 100)));
+  } else {
+    list.append(usageRow(t('usage.input'), formatTokens(usage.prompt_tokens), exactTokens(usage.prompt_tokens), 'miss'));
+  }
+  list.append(usageRow(t('usage.output'), formatTokens(usage.completion_tokens), exactTokens(usage.completion_tokens), 'output'));
+  if (usage.reasoning_tokens > 0) {
+    const reasoning = usageRow(t('usage.reasoning'), formatTokens(usage.reasoning_tokens), exactTokens(usage.reasoning_tokens));
+    reasoning.classList.add('usage-row--nested'); list.append(reasoning);
+  }
+  if (usage.requests > 0) list.append(usageRow(t('usage.requests'), new Intl.NumberFormat(lang).format(usage.requests)));
+  section.append(list);
+  const models = usage.models || [];
+  if (models.length) {
+    const table = usageElement('ul', 'usage-models');
+    table.setAttribute('aria-label', t('usage.by_model'));
+    for (const row of models) {
+      const item = usageElement('li', 'usage-model');
+      const name = usageElement('span', 'usage-model__name');
+      name.append(usageElement('span', 'usage-model__id', row.model));
+      name.title = row.model;
+      if (row.off_peak) name.append(usageElement('span', 'usage-model__tag', t('usage.off_peak')));
+      const tokens = usageElement('span', 'usage-model__tokens', formatTokens(row.prompt_tokens + row.completion_tokens));
+      tokens.title = exactTokens(row.prompt_tokens + row.completion_tokens);
+      item.append(name, tokens, usageElement('span', 'usage-model__cost', row.cost_usd != null ? formatUsd(row.cost_usd) : t('usage.no_price')));
+      table.append(item);
+    }
+    section.append(table);
+  }
+  return section;
+}
+
 function updateContextInfo() {
-  const details=$('#context-info'),found=activeConversation();
-  const total=found?.conversation.context_tokens || state.lastUsage?.total_tokens || 0;
-  details.hidden=!total&&!state.lastUsage;
-  $('#context-summary').textContent=t('chat.usage');
-  $('#context-details').textContent=state.lastUsage
-    ? `${t('chat.input_tokens')}: ${state.lastUsage.prompt_tokens} · ${t('chat.output_tokens')}: ${state.lastUsage.completion_tokens}`
-    : `${total} ${t('chat.tokens')}`;
+  const details = $('#context-info'), conversation = activeConversation()?.conversation;
+  const chat = usageTotals(conversation?.usage);
+  const last = usageTotals(state.lastUsage);
+  const legacy = conversation?.context_tokens || 0;
+  details.hidden = !chat && !last && !legacy;
+  if (details.hidden) { details.open = false; return; }
+  const headline = chat || last;
+  const summary = $('#context-summary');
+  const tokens = headline ? headline.total_tokens : legacy;
+  summary.textContent = headline?.cost_usd != null ? `${formatTokens(tokens)} · ${formatUsd(headline.cost_usd)}` : `${formatTokens(tokens)} ${t('chat.tokens')}`;
+  const label = `${t('chat.usage')}: ${exactTokens(tokens)}${headline?.cost_usd != null ? ` · ${t('usage.estimated_cost')} ${formatUsd(headline.cost_usd)}` : ''}`;
+  details.querySelector('summary').setAttribute('aria-label', label);
+  details.querySelector('summary').title = label;
+  const panel = $('#context-details'); panel.replaceChildren();
+  if (chat) panel.append(usageSection(t('usage.this_chat'), chat, true));
+  if (last) panel.append(usageSection(t('usage.last_reply'), last, !chat));
+  if (!headline) {
+    const section = usageElement('section', 'usage-section');
+    const list = usageElement('dl', 'usage-list');
+    list.append(usageRow(t('usage.last_context'), formatTokens(legacy), exactTokens(legacy)));
+    section.append(list, usageElement('p', 'usage-note', t('usage.legacy_note')));
+    panel.append(section);
+    return;
+  }
+  const footer = usageElement('footer', 'usage-footer');
+  const unpriced = Math.max(chat?.unpriced_tokens || 0, last?.unpriced_tokens || 0);
+  footer.append(usageElement('p', 'usage-note', t(unpriced ? 'usage.unpriced_note' : 'usage.estimate_note')));
+  const prices = usageElement('button', 'usage-link', t('usage.edit_prices'));
+  prices.type = 'button';
+  prices.onclick = () => { details.open = false; openSettings(); selectSettingsTab('inference'); };
+  footer.append(prices);
+  panel.append(footer);
+}
+
+function closeUsagePanel(restoreFocus) {
+  const details = $('#context-info');
+  if (!details?.open) return;
+  details.open = false;
+  if (restoreFocus) details.querySelector('summary').focus();
 }
 
 // ===== Viste / modal =====
@@ -2095,6 +2233,7 @@ function setupShell() {
   });
   document.addEventListener('click', e => {
     if (!e.target.closest('.model-select, .composer__project, .permission-control')) closeChoiceMenus();
+    if (!e.target.closest('.context-info')) closeUsagePanel(false);
     if (!e.target.closest('.rail__footer')) {
       $('#account-menu').hidden = true;
       $('#account-button').setAttribute('aria-expanded', 'false');
@@ -2103,6 +2242,7 @@ function setupShell() {
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
       if (!$('#settings-overlay').hidden) closeSettings();
+      closeUsagePanel(!!document.activeElement?.closest('.context-info'));
       closeChoiceMenus();
       if (!$('#account-menu').hidden) {
         $('#account-menu').hidden = true;

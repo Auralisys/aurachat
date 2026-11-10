@@ -96,9 +96,22 @@ pub struct Conversation {
     pub messages_loaded: bool,
     #[serde(default)]
     pub revision: Option<String>,
+    /// Token e costo stimato accumulati; vive nel documento della chat, non nell'indice utente.
+    #[serde(default, skip_serializing_if = "crate::llm::Usage::is_empty")]
+    pub usage: crate::llm::Usage,
 }
 
 fn loaded() -> bool { true }
+
+impl Conversation {
+    /// Copies the parts stored in the conversation document, which the user-document index does not carry.
+    pub fn adopt_history(&mut self, source: &Conversation) {
+        self.messages = source.messages.clone();
+        self.messages_loaded = source.messages_loaded;
+        self.revision = source.revision.clone();
+        self.usage = source.usage.clone();
+    }
+}
 
 impl Default for ChatData {
     fn default() -> Self {
@@ -132,8 +145,7 @@ impl ChatData {
                 desired
             } else { current.or(desired) };
             if let Some(source) = source {
-                let target = merged.find_conversation_mut(&conversation).unwrap();
-                target.messages = source.messages.clone();target.messages_loaded = source.messages_loaded;target.revision = source.revision.clone();
+                merged.find_conversation_mut(&conversation).unwrap().adopt_history(source);
             }
         }
         Ok(merged)
@@ -252,7 +264,7 @@ mod tests {
         data.conversations.push(Conversation {
             id: "personal".into(), title: "Chat".into(), title_state: None, messages: vec![],
             created_at: 0, updated_at: 0, context_tokens: 0,
-            model: None, messages_loaded:true, revision:None,
+            model: None, messages_loaded:true, revision:None, usage: Default::default(),
         });
         data.find_conversation_mut("personal").unwrap().title = "Saved".into();
         let saved = serde_json::to_string(&data).unwrap();
@@ -264,10 +276,12 @@ mod tests {
     fn v2_tree_contains_only_metadata_and_preserves_order_and_ids() {
         let full:ChatData=serde_json::from_value(serde_json::json!({"projects":[{"id":"p","name":"P","source_folders":["C:/work"],"conversations":[{
             "id":"c","title":"Chat","messages":[{"role":"user","content":"private message","attachments":[{"name":"a.txt","content":"private attachment"}],"feedback":true}],
-            "created_at":1,"updated_at":2,"context_tokens":3}]}],"conversations":[]})).unwrap();
+            "created_at":1,"updated_at":2,"context_tokens":3,"usage":{"total_tokens":3,"cost_usd":0.25}}]}],"conversations":[]})).unwrap();
+        assert_eq!(full.find_conversation("c").unwrap().usage.cost_usd,Some(0.25));
         let stored=full.storage_tree().unwrap();
         assert_eq!(stored["projects"]["p"]["conversation_ids"],serde_json::json!(["c"]));
         assert!(!stored.to_string().contains("private"));
+        assert!(!stored.to_string().contains("cost_usd"));
         let restored=ChatData::from_storage(stored.clone()).unwrap();
         assert_eq!(restored.storage_tree().unwrap(),stored);
         assert!(restored.find_conversation("c").unwrap().messages.is_empty());

@@ -33,7 +33,8 @@ chiave sono descritti nel runbook; nessun segreto va inserito nel repository.
   finestra nasconde nel tray, non termina. Si esce dal menu del tray.
 - **Onboarding dell'inferenza a preset**: *DeepSeek* (basta la key, endpoint e
   modello precompilati) o *Avanzato* (base_url + modello + key custom).
-- **Impostazioni** con navigazione laterale e ricerca: Generali, Account, Provider di modelli e Voce. Account mostra identità e disconnessione, senza parametri Firebase. I provider hanno una API key dedicata e uno o più modelli con URL base indipendenti. La key non torna mai nella UI: il backend espone solo `api_key_set: true/false`.
+- **Impostazioni** con navigazione laterale e ricerca: Generali, Account, Provider di modelli e Voce. Account mostra identità e disconnessione, senza parametri Firebase. I provider hanno una API key dedicata e uno o più modelli con URL base indipendenti. La key non torna mai nella UI: il backend espone solo `api_key_set: true/false`. Ogni modello può avere un prezzo per 1M token; i modelli DeepSeek ufficiali usano il listino incluso.
+- **Utilizzo e costo stimato**: il pulsante nell'intestazione della chat mostra token (in `k`/`M`) e costo stimato in USD della conversazione, con dettaglio per cache, uscita, ragionamento e modello (vedi «Utilizzo e costo stimato»).
 - **Chat**: invia la cronologia della conversazione attiva a `<base_url>/v1/chat/completions`
   (formato OpenAI-compatible, streaming SSE) e mostra la risposta.
   Se il provider termina per limite di output (`length`) o filtro (`content_filter`),
@@ -1157,3 +1158,55 @@ argomenti `chat`, visualizzatore, apertura e limiti del pannello, occultamento
 sotto i menu, cattura annotata e annullata, link, alternanza con l'attività), test
 Rust `browser::tests` (indirizzi e blocchi) e test su validazione e testo delle
 annotazioni in `llm.rs`.
+
+## Utilizzo e costo stimato
+
+**Pannello.** Nell'intestazione della chat il pulsante Utilizzo riassume token
+totali e costo stimato della conversazione (per esempio `12,7k · 0,0047 $`).
+Da 1000 token in su i numeri usano `k`/`M` con il separatore decimale della
+lingua; il valore esatto è nel tooltip e nell'etichetta accessibile. I costi
+mostrano circa due cifre significative (centesimi da 1 $ in su, fino a
+0,00001 $). Il popover (Esc o clic esterno per chiudere, con il focus che torna
+al pulsante) ha la sezione «Questa chat» e, dopo un invio nella sessione,
+«Ultima risposta»: costo, barra ingresso da cache / ingresso nuovo / uscita,
+quota da cache, token di ragionamento, richieste al modello e una riga per
+modello e fascia oraria con token e costo (tag «sconto 50%», oppure «Senza
+prezzo» con una nota). «Modifica prezzi» apre Impostazioni › Provider di
+modelli. Le chat salvate prima di questa funzione mostrano solo i token di
+contesto dell'ultima risposta; il costo parte dalle risposte successive.
+
+**Conteggio.** `llm.rs` registra l'oggetto `usage` di ogni richiesta al provider
+in `Usage` (righe `models` per modello e fascia `off_peak`): token in ingresso
+e uscita, cache (`prompt_cache_hit_tokens`/`prompt_cache_miss_tokens` di
+DeepSeek oppure `prompt_tokens_details.cached_tokens`), ragionamento
+(`completion_tokens_details.reasoning_tokens`) e numero di richieste. Sono
+inclusi giri di strumenti, sub-agenti, lettura immagini tramite `deepseek-flash`,
+revisione automatica e turni fermati (il provider li fattura comunque); restano
+esclusi i titoli automatici. Alla fine del turno `lib.rs` applica i prezzi
+correnti, congela `cost_usd` e somma il risultato in `Conversation.usage`,
+salvato nei metadati Firestore della chat; cambiare un prezzo non ricalcola le
+risposte passate. `chat` restituisce anche l'utilizzo del turno.
+
+**Prezzi.** USD per 1M token, a tariffa piena, in tre voci: ingresso da cache,
+ingresso nuovo e uscita. `config.rs` contiene il listino DeepSeek (valido solo
+su `api.deepseek.com`): `deepseek-flash` e i nomi legacy `deepseek-v4-flash` e
+`deepseek-v4-flash-vision-exp` costano 0,006 / 0,30 / 1,20 $, `deepseek-v4-pro`
+0,044 / 1,32 / 3,96 $. Fuori dalle ore di punta (lun–ven 01–04 e 06–10 UTC)
+DeepSeek dimezza ingresso e uscita; la fascia viene decisa al momento di ogni
+richiesta. Le festività cinesi, anch'esse scontate, non sono riconosciute: in
+quei giorni la stima resta per eccesso. Nell'editor del provider ogni modello ha
+il riquadro richiudibile «Prezzo per 1M token» con stato (Listino DeepSeek,
+Personalizzato, Non impostato, Da correggere), riepilogo e tre campi (accettano
+`,` e `.`). I campi vuoti usano il listino, che compare come segnaposto; senza
+listino servono tutti e tre i valori. `ModelConfig.pricing` salva solo i prezzi
+personalizzati: un valore uguale al listino torna implicito, così gli
+aggiornamenti del listino arrivano anche ai modelli già salvati. Il backend
+accetta valori tra 0 e 10.000 (`invalid_pricing`); `PublicConfig` espone il prezzo
+personalizzato di ogni modello e `known_pricing` (host, modello, prezzo, fattore
+di sconto).
+
+Verifica: `desktop/tests/usage-panel.cjs` (formati k/M e USD, riepilogo, righe,
+modelli senza prezzo, ultima risposta, chat precedenti, chiusura con Esc e clic
+esterno, collegamento ai prezzi), `desktop/tests/settings-flow.cjs` (listino,
+prezzo incompleto o non valido, prezzo personalizzato salvato e riaperto) e test
+Rust su conteggio, sconto orario, prezzi e round trip Firestore.

@@ -138,3 +138,7 @@ sostituzione della palette Auralisys, dei permessi o delle funzioni di AuraChat.
   barra di caricamento sottile, ridimensionamento con mouse o tastiera. I link
   delle risposte si aprono qui (Ctrl+clic nel browser di sistema); la cattura
   passa sempre dall'editor dei commenti prima di diventare allegato.
+- Utilizzo e costi: pulsante nell'intestazione con token in `k`/`M` e costo
+  stimato in USD; popover con barra cache / ingresso nuovo / uscita, ragionamento,
+  richieste e righe per modello (tag sconto o «Senza prezzo»). Prezzi per modello
+  nell'editor del provider, con listino DeepSeek come segnaposto.

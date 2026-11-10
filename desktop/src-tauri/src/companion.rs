@@ -959,7 +959,7 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
             let now=data::now_millis();
             let model=request["model"].as_str().map(str::to_string);
             if let Some(model)=&model {if !crate::load_user_cached(&state,auth,uid).await?.models.contains_key(model){return Err("model_not_found".into());}}
-            let conversation=Conversation{id:id.into(),title:crate::truncate_title(content),title_state:None,model,messages:vec![],created_at:now,updated_at:now,context_tokens:0,messages_loaded:true,revision:None};
+            let conversation=Conversation{id:id.into(),title:crate::truncate_title(content),title_state:None,model,messages:vec![],created_at:now,updated_at:now,context_tokens:0,messages_loaded:true,revision:None,usage:Default::default()};
             if let Some(project)=request["project_id"].as_str().filter(|p|!p.is_empty()) {
                 tree.projects.iter_mut().find(|p|p.id==project).ok_or("project_not_found")?.conversations.push(conversation);
             }else{tree.conversations.push(conversation);}

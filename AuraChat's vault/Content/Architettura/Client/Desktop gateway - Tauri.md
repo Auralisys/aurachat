@@ -738,3 +738,31 @@ dall'editor prima di diventare allegato; su macOS non è disponibile.
 
 Verifica: `desktop/tests/image-annotations.cjs`, `browser::tests` e test LLM su
 validazione, testo per il modello e bridge.
+
+## Utilizzo e costo stimato
+
+Richiesta: token in forma compatta (`k`/`M`), costo stimato in base ai prezzi del
+modello, prezzi impostabili e listino DeepSeek precaricato.
+
+Dati (`llm.rs`, `lib.rs`): `Usage` somma l'oggetto `usage` di ogni richiesta del
+turno (strumenti, sub-agenti, bridge `deepseek-flash`, revisione automatica e turni
+fermati; esclusi i titoli automatici) in righe `models` per modello e fascia
+`off_peak`, con token in cache (`prompt_cache_hit_tokens` o
+`prompt_tokens_details.cached_tokens`) e di ragionamento. A fine turno i prezzi
+correnti fissano `cost_usd`; il risultato si somma in `Conversation.usage`, salvato
+nei metadati Firestore della chat. Cambiare i prezzi non ricalcola il passato.
+
+Prezzi (`config.rs`): USD per 1M token in tre voci (ingresso da cache, ingresso
+nuovo, uscita). Listino DeepSeek solo per `api.deepseek.com`: Flash e nomi legacy
+0,006 / 0,30 / 1,20, `deepseek-v4-pro` 0,044 / 1,32 / 3,96; sconto del 50% fuori
+dalle ore di punta (lun–ven 01–04 e 06–10 UTC), deciso a ogni richiesta, festività
+cinesi escluse. `ModelConfig.pricing` conserva solo i prezzi personalizzati (un
+valore uguale al listino resta implicito); limiti 0–10.000 (`invalid_pricing`).
+`PublicConfig` espone prezzi personalizzati e `known_pricing`.
+
+UI: pulsante Utilizzo nell'intestazione con popover «Questa chat» / «Ultima
+risposta» (`app.js`) e riquadro prezzi per modello nell'editor del provider
+(`settings.js`). Le chat precedenti mostrano solo i token di contesto.
+
+Verifica: `desktop/tests/usage-panel.cjs`, `desktop/tests/settings-flow.cjs` e test
+Rust su conteggio, sconto, prezzi e round trip Firestore.

@@ -94,23 +94,94 @@ function providerField(label, name, value = '', type = 'text') {
   return field;
 }
 
-function addProviderModel(model = '', endpoint = '') {
+// Prices are USD per million tokens, the unit every provider publishes.
+const PRICE_FIELDS = [['input_cache_hit', 'settings.pricing_hit'], ['input_cache_miss', 'settings.pricing_miss'], ['output', 'settings.pricing_output']];
+
+function listPricing(endpoint, model) {
+  let host;
+  try { host = new URL(endpoint.trim()).hostname; } catch { return null; }
+  const id = model.trim().toLowerCase();
+  return (state.config.known_pricing || []).find(item => item.host === host && item.model === id)?.pricing || null;
+}
+
+function priceText(value) {
+  return new Intl.NumberFormat(lang, { minimumFractionDigits: 2, maximumFractionDigits: 8, useGrouping: false }).format(value);
+}
+
+function priceUsd(value) {
+  return new Intl.NumberFormat(lang, { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value);
+}
+
+// Accepts both decimal separators; prices stay well below grouping range.
+function parsePrice(text) {
+  const value = text.trim();
+  if (!value) return null;
+  if (!/^(\d+([.,]\d*)?|[.,]\d+)$/.test(value)) return NaN;
+  const price = Number(value.replace(',', '.'));
+  return price >= 0 && price <= 10000 ? price : NaN;
+}
+
+function rowPricing(row) {
+  const list = listPricing(row.querySelector('[name=endpoint]').value, row.querySelector('[name=model]').value);
+  const values = PRICE_FIELDS.map(([key]) => parsePrice(row.querySelector(`[name=price_${key}]`).value));
+  if (values.some(Number.isNaN)) return { error: 'errors.invalid_pricing', list };
+  if (values.every(value => value == null)) return { pricing: null, list };
+  if (!list && values.some(value => value == null)) return { error: 'settings.pricing_incomplete', list };
+  return { pricing: Object.fromEntries(PRICE_FIELDS.map(([key], i) => [key, values[i] ?? list[key]])), list };
+}
+
+function providerPricing(row, pricing) {
+  const box = settingsElement('details', 'provider-pricing');
+  const summary = settingsElement('summary', 'provider-pricing__summary');
+  const status = settingsElement('span', 'provider-pricing__status');
+  const value = settingsElement('span', 'provider-pricing__value');
+  summary.append(settingsElement('span', 'provider-pricing__label', t('settings.pricing_title')), status, value, icon('chevron'));
+  const fields = settingsElement('div', 'provider-pricing__fields');
+  for (const [key, label] of PRICE_FIELDS) {
+    const field = providerField(t(label), 'price_' + key, pricing ? priceText(pricing[key]) : '');
+    const input = field.querySelector('input');
+    input.inputMode = 'decimal';
+    const wrap = settingsElement('span', 'provider-pricing__input');
+    const unit = settingsElement('span', 'provider-pricing__currency', 'USD');
+    unit.setAttribute('aria-hidden', 'true');
+    wrap.append(input, unit); field.append(wrap);
+    fields.append(field);
+  }
+  const note = settingsElement('p', 'field__note provider-pricing__note');
+  box.append(summary, fields, note);
+  const inputs = PRICE_FIELDS.map(([key]) => box.querySelector(`[name=price_${key}]`));
+  const refresh = () => {
+    const { pricing: current, list, error } = rowPricing(row);
+    const shown = current || list;
+    box.dataset.state = error ? 'error' : current ? 'custom' : list ? 'list' : 'none';
+    status.textContent = t('settings.pricing_' + box.dataset.state);
+    value.textContent = shown && !error ? t('settings.pricing_summary').replace('{input}', priceUsd(shown.input_cache_miss)).replace('{output}', priceUsd(shown.output)) : '';
+    note.textContent = t(list ? 'settings.pricing_list_note' : 'settings.pricing_none_note');
+    inputs.forEach((input, i) => { input.placeholder = list ? priceText(list[PRICE_FIELDS[i][0]]) : '—'; input.setAttribute('aria-invalid', String(Number.isNaN(parsePrice(input.value)))); });
+  };
+  box.refreshPricing = refresh;
+  row.addEventListener('input', refresh);
+  return box;
+}
+
+function addProviderModel(model = '', endpoint = '', pricing = null) {
   const row = settingsElement('div', 'provider-model-row');
   row.append(providerField(t('settings.model_id'), 'model', model), providerField(t('settings.endpoint'), 'endpoint', endpoint, 'url'));
   row.querySelectorAll('input').forEach(input => { input.required = true; });
   row.querySelector('[name=model]').placeholder = t('settings.model_placeholder');
   row.querySelector('[name=endpoint]').placeholder = 'https://api.example.com/v1';
-  const remove = settingsElement('button', 'icon-button');
+  const remove = settingsElement('button', 'icon-button provider-model-remove');
   remove.type = 'button'; remove.append(icon('trash'));
   remove.title = remove.ariaLabel = t('settings.remove_model');
   remove.onclick = () => { row.remove(); providerDirty = true; updateModelCount(); };
-  row.append(remove); $('#provider-models').append(row); updateModelCount();
+  const pricingBox = providerPricing(row, pricing);
+  row.append(remove, pricingBox); $('#provider-models').append(row); pricingBox.refreshPricing(); updateModelCount();
 }
 
 function updateModelCount() {
   const rows = [...document.querySelectorAll('.provider-model-row')];
   $('#provider-model-count').textContent = String(rows.length);
-  rows.forEach(row => row.querySelector('button').disabled = rows.length === 1);
+  rows.forEach(row => row.querySelector('.provider-model-remove').disabled = rows.length === 1);
 }
 
 function editProvider(provider) {
@@ -162,16 +233,25 @@ function editProvider(provider) {
     models.replaceChildren();
     for (const model of preset.models) addProviderModel(model, preset.endpoint);
   };
-  if (provider) for (const model of provider.models) addProviderModel(model.model, model.base_url);
+  if (provider) for (const model of provider.models) addProviderModel(model.model, model.base_url, model.pricing);
   else populate();
   form.elements.name.required = true; form.elements.name.maxLength = 100;
   form.oninput = () => { providerDirty = true; error.hidden = true; };
   select.onchange = () => { populate(); providerDirty = true; };
   form.onsubmit = async event => {
     event.preventDefault();
+    const rows = [...models.children];
+    const prices = rows.map(rowPricing);
+    const invalid = prices.findIndex(price => price.error);
+    if (invalid >= 0) {
+      const box = rows[invalid].querySelector('.provider-pricing'); box.open = true;
+      error.textContent = t(prices[invalid].error); error.hidden = false;
+      (box.querySelector('[aria-invalid=true]') || box.querySelector('input')).focus();
+      return;
+    }
     const input = { id: provider?.id || crypto.randomUUID(), name: form.elements.name.value.trim(), kind: select.value,
       api_key: form.elements.api_key.value.trim() || null,
-      models: [...models.children].map(row => ({ model: row.querySelector('[name=model]').value.trim(), base_url: row.querySelector('[name=endpoint]').value.trim() })) };
+      models: rows.map((row, i) => ({ model: row.querySelector('[name=model]').value.trim(), base_url: row.querySelector('[name=endpoint]').value.trim(), pricing: prices[i].pricing })) };
     await persistProvider('save_provider', { input }, form);
   };
   providerDirty = false; select.disabled ? form.elements.name.focus() : select.focus();

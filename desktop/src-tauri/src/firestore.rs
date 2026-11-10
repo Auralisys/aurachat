@@ -344,9 +344,7 @@ impl Firestore {
         let result=self.commit(auth,writes).await?;
         let mut cached = ChatData::from_storage(merged)?;
         for c in tree.conversations_all().filter(|c|c.messages_loaded) {
-            if let Some(target) = cached.find_conversation_mut(&c.id) {
-                target.messages=c.messages.clone();target.messages_loaded=true;target.revision=c.revision.clone();
-            }
+            if let Some(target) = cached.find_conversation_mut(&c.id) { target.adopt_history(c); }
         }
         for (id,index) in revisions {if let Some(c)=cached.find_conversation_mut(&id){c.revision=Some(result["writeResults"][index]["updateTime"].as_str().ok_or("missing_commit_version")?.into());}}
         self.trees.lock().unwrap().insert(uid.into(),cached);
@@ -358,9 +356,7 @@ impl Firestore {
     pub async fn refresh_tree_preserving_history(&self,uid:&str,auth:&FirestoreAuth,local:&ChatData)->Result<ChatData,String>{
         let mut tree=self.load_tree(uid,auth).await?;
         for source in local.conversations_all().filter(|c|c.messages_loaded) {
-            if let Some(target)=tree.find_conversation_mut(&source.id) {
-                target.messages=source.messages.clone();target.messages_loaded=true;target.revision=source.revision.clone();
-            }
+            if let Some(target)=tree.find_conversation_mut(&source.id) { target.adopt_history(source); }
         }
         self.trees.lock().unwrap().insert(uid.into(),tree.clone());
         Ok(tree)
@@ -535,7 +531,7 @@ impl Firestore {
         let result=self.commit(auth,writes).await?;
         let mut saved=conversation.clone();saved.revision=Some(result["writeResults"][1]["updateTime"].as_str().ok_or("missing_commit_version")?.into());
         let mut cached=ChatData::from_storage(merged)?;
-        for c in baseline.conversations_all().filter(|c|c.messages_loaded){if let Some(target)=cached.find_conversation_mut(&c.id){target.messages=c.messages.clone();target.messages_loaded=true;target.revision=c.revision.clone();}}
+        for c in baseline.conversations_all().filter(|c|c.messages_loaded){if let Some(target)=cached.find_conversation_mut(&c.id){target.adopt_history(c);}}
         *cached.find_conversation_mut(&saved.id).ok_or("conversation_not_found")?=saved.clone();
         self.trees.lock().unwrap().insert(uid.into(),cached);
         Ok(saved)
@@ -683,6 +679,8 @@ fn conversation_metadata(conversation:&Conversation,count:usize)->Value{
     let mut metadata=json!({"title":conversation.title,"created_at":conversation.created_at,"updated_at":conversation.updated_at,
         "context_tokens":conversation.context_tokens,"message_count":count});
     if let Some(model)=&conversation.model { metadata["model"]=json!(model); }
+    // Omitted when empty, so the field mask of an update leaves the stored total untouched.
+    if !conversation.usage.is_empty() { metadata["usage"]=json!(conversation.usage); }
     metadata
 }
 fn message_path(path:&str,index:usize)->String{format!("{path}/messages/m{index:012}")}
@@ -892,6 +890,24 @@ mod tests {
     }
 
     #[test]
+    fn conversation_usage_round_trips_and_empty_usage_keeps_the_stored_total(){
+        let mut conversation:Conversation=serde_json::from_value(json!({"id":"c","title":"Chat","created_at":1,"updated_at":2,"context_tokens":3})).unwrap();
+        let auth=crate::config::AppConfig::default().firestore_auth();
+        let empty=conversation_write(&auth,"users/u/conversations/c",&conversation_metadata(&conversation,0),Some("version")).unwrap();
+        assert!(!empty["updateMask"]["fieldPaths"].as_array().unwrap().contains(&json!("usage")));
+        conversation.usage.record("deepseek-flash",true,&json!({"prompt_tokens":1200,"completion_tokens":300,"total_tokens":1500,"prompt_cache_hit_tokens":1000,"prompt_cache_miss_tokens":200}));
+        conversation.usage.price(|_|Some(crate::config::ModelPricing{input_cache_hit:0.006,input_cache_miss:0.30,output:1.20}));
+        let metadata=conversation_metadata(&conversation,0);
+        let write=conversation_write(&auth,"users/u/conversations/c",&metadata,Some("version")).unwrap();
+        assert!(write["updateMask"]["fieldPaths"].as_array().unwrap().contains(&json!("usage")));
+        let mut decoded=document_fields(&write["update"]).unwrap();
+        decoded.insert("id".into(),json!("c"));
+        let restored:Conversation=serde_json::from_value(Value::Object(decoded)).unwrap();
+        assert_eq!(restored.usage,conversation.usage);
+        assert!(restored.usage.cost_usd.unwrap()>0.0);
+    }
+
+    #[test]
     #[ignore = "Real authenticated relay CRUD; AURACHAT_REMOTE_SMOKE=1 required"]
     fn real_companion_claim() {
         assert_eq!(std::env::var("AURACHAT_REMOTE_SMOKE").as_deref(),Ok("1"));
@@ -976,7 +992,7 @@ mod tests {
             let chat_path=format!("{path}/conversations/{id}");
             let outcome:Result<(),String>=async {
                 let mut draft=original.clone();
-                draft.conversations.push(Conversation {id:id.clone(),title:"Temporary CRUD fixture".into(),title_state:None,model:None,messages:vec![],created_at:1,updated_at:1,context_tokens:0,messages_loaded:true,revision:None});
+                draft.conversations.push(Conversation {id:id.clone(),title:"Temporary CRUD fixture".into(),title_state:None,model:None,messages:vec![],created_at:1,updated_at:1,context_tokens:0,messages_loaded:true,revision:None,usage:Default::default()});
                 client.save_tree(&uid,&auth,&draft).await?;
                 let mut tree=client.cached_tree(&uid).ok_or("missing_draft_cache")?;
                 check(tree.find_conversation(&id).and_then(|c|c.revision.as_ref()).is_some(),"draft revision")?;

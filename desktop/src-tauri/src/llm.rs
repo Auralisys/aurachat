@@ -329,7 +329,8 @@ fn image_descriptions() -> &'static std::sync::Mutex<std::collections::HashMap<S
     DESCRIPTIONS.get_or_init(Default::default)
 }
 
-async fn describe_image(client: reqwest::Client, url: String, model: &'static str, api_key: String, image: String, focus: Option<String>) -> Result<String, String> {
+/// Returns the description and the provider `usage` of the vision request.
+async fn describe_image(client: reqwest::Client, url: String, model: &'static str, api_key: String, image: String, focus: Option<String>) -> Result<(String, serde_json::Value), String> {
     let ask = match focus {
         Some(focus) => format!("Describe this image. The user commented on specific points of it, listed below. After the general description, for each numbered comment describe precisely what is at its position (the area around it), so the main model can answer the comment.\n\n{focus}"),
         None => "Describe this image.".into(),
@@ -344,8 +345,9 @@ async fn describe_image(client: reqwest::Client, url: String, model: &'static st
     let text = response.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() { return Err(format!("API {}: {}", status.as_u16(), truncate(&text, 300))); }
     let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    value["choices"][0]["message"]["content"].as_str().map(str::trim).filter(|text| !text.is_empty())
-        .map(String::from).ok_or_else(|| "empty description".into())
+    let description = value["choices"][0]["message"]["content"].as_str().map(str::trim).filter(|text| !text.is_empty())
+        .map(String::from).ok_or_else(|| "empty description".to_string())?;
+    Ok((description, value["usage"].clone()))
 }
 
 /// Name shown before an image part by `api_messages` or `tool_images_message`.
@@ -360,11 +362,112 @@ fn image_focus(parts: &[serde_json::Value], index: usize) -> Option<String> {
     parts.get(index + 1)?["text"].as_str().filter(|text| text.starts_with(ANNOTATION_PREFIX)).map(String::from)
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// Token e costo stimato di una o più risposte. I campi oltre ai totali sono assenti nei dati salvati prima della stima costi.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct Usage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
+    pub requests: u64,
+    pub cache_hit_tokens: u64,
+    pub cache_miss_tokens: u64,
+    pub reasoning_tokens: u64,
+    /// Token di modelli senza prezzo noto, esclusi da `cost_usd`.
+    pub unpriced_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ModelUsage>,
+}
+
+/// Consumo di un modello in una fascia di prezzo (`off_peak` = sconto notturno DeepSeek).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ModelUsage {
+    pub model: String,
+    pub off_peak: bool,
+    pub requests: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub cache_hit_tokens: u64,
+    pub cache_miss_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub unpriced_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+}
+
+fn add_cost(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    match (a, b) { (None, None) => None, (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)) }
+}
+
+impl ModelUsage {
+    fn add(&mut self, other: &ModelUsage) {
+        self.requests += other.requests;
+        self.prompt_tokens += other.prompt_tokens;
+        self.completion_tokens += other.completion_tokens;
+        self.cache_hit_tokens += other.cache_hit_tokens;
+        self.cache_miss_tokens += other.cache_miss_tokens;
+        self.reasoning_tokens += other.reasoning_tokens;
+        self.unpriced_tokens += other.unpriced_tokens;
+        self.cost_usd = add_cost(self.cost_usd, other.cost_usd);
+    }
+}
+
+impl Usage {
+    pub fn is_empty(&self) -> bool { self.total_tokens == 0 && self.models.is_empty() }
+
+    /// Adds one provider `usage` object. DeepSeek reports cache hits as `prompt_cache_hit_tokens`, OpenAI as `cached_tokens`.
+    pub fn record(&mut self, model: &str, off_peak: bool, raw: &serde_json::Value) {
+        let prompt = raw["prompt_tokens"].as_u64().unwrap_or(0);
+        let completion = raw["completion_tokens"].as_u64().unwrap_or(0);
+        let total = raw["total_tokens"].as_u64().unwrap_or(prompt + completion);
+        if prompt == 0 && completion == 0 && total == 0 { return; }
+        let hit = raw["prompt_cache_hit_tokens"].as_u64().or_else(|| raw["prompt_tokens_details"]["cached_tokens"].as_u64()).unwrap_or(0).min(prompt);
+        let miss = raw["prompt_cache_miss_tokens"].as_u64().unwrap_or(prompt - hit);
+        let row = ModelUsage { model: model.into(), off_peak, requests: 1, prompt_tokens: prompt, completion_tokens: completion,
+            cache_hit_tokens: hit, cache_miss_tokens: miss,
+            reasoning_tokens: raw["completion_tokens_details"]["reasoning_tokens"].as_u64().unwrap_or(0), unpriced_tokens: 0, cost_usd: None };
+        self.add(&Usage { total_tokens: total, models: vec![row], ..Default::default() });
+    }
+
+    pub fn add(&mut self, other: &Usage) {
+        self.total_tokens += other.total_tokens;
+        for row in &other.models {
+            self.requests += row.requests;
+            self.prompt_tokens += row.prompt_tokens;
+            self.completion_tokens += row.completion_tokens;
+            self.cache_hit_tokens += row.cache_hit_tokens;
+            self.cache_miss_tokens += row.cache_miss_tokens;
+            self.reasoning_tokens += row.reasoning_tokens;
+            self.unpriced_tokens += row.unpriced_tokens;
+            self.cost_usd = add_cost(self.cost_usd, row.cost_usd);
+            match self.models.iter_mut().find(|r| r.model == row.model && r.off_peak == row.off_peak) {
+                Some(existing) => existing.add(row),
+                None => self.models.push(row.clone()),
+            }
+        }
+        if other.models.is_empty() {
+            // Usage saved before per-model rows: only its totals are known.
+            self.prompt_tokens += other.prompt_tokens;
+            self.completion_tokens += other.completion_tokens;
+        }
+    }
+
+    /// Sets the cost of every row with a known price; tokens without a price stay in `unpriced_tokens`.
+    pub fn price(&mut self, pricing: impl Fn(&str) -> Option<crate::config::ModelPricing>) {
+        self.cost_usd = None;
+        self.unpriced_tokens = 0;
+        for row in &mut self.models {
+            match pricing(&row.model) {
+                Some(price) => { row.cost_usd = Some(price.cost(row)); row.unpriced_tokens = 0; }
+                None => { row.cost_usd = None; row.unpriced_tokens = row.prompt_tokens + row.completion_tokens; }
+            }
+            self.cost_usd = add_cost(self.cost_usd, row.cost_usd);
+            self.unpriced_tokens += row.unpriced_tokens;
+        }
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -666,7 +769,7 @@ pub async fn chat_completion(
     activity: impl Fn(&str, &str) + Send + Sync,
     agents: impl Fn(serde_json::Value) + Send + Sync,
 ) -> Result<(String, Usage), String> {
-    chat_completion_steered(client,base_url,model,api_key,messages,project,runtime,None,activity,agents).await
+    chat_completion_steered(client,base_url,model,api_key,messages,project,runtime,None,None,activity,agents).await
 }
 
 pub async fn chat_completion_steered(
@@ -678,6 +781,7 @@ pub async fn chat_completion_steered(
     project: Option<crate::project_files::ProjectFiles>,
     runtime: Option<crate::agent_runs::Runtime>,
     guidance: Option<std::sync::Arc<crate::chat_runs::Guidance>>,
+    meter: Option<&std::sync::Mutex<Usage>>,
     activity: impl Fn(&str, &str) + Send + Sync,
     agents: impl Fn(serde_json::Value) + Send + Sync,
 ) -> Result<(String, Usage), String> {
@@ -706,7 +810,7 @@ pub async fn chat_completion_steered(
     if project.as_ref().is_some_and(|files| !files.roots.is_empty()) {
         history.insert(0, serde_json::json!({"role":"system","content":"After producing a final file deliverable requested by the user, call publish_project_output for that completed file so it appears in Output. Never publish temporary scripts, scratch notes, logs, intermediate files or ordinary source-code edits. A requested final Markdown report or script is valid; do not publish every file you write."}));
     }
-    let runner = Completion {client, url:crate::config::completions_url(base), model, api_key, vision:vision_bridge(base, model), project, runtime, guidance, activity:&activity, agents:&agents};
+    let runner = Completion {client, url:crate::config::completions_url(base), model, api_key, vision:vision_bridge(base, model), project, runtime, guidance, meter, activity:&activity, agents:&agents};
     runner.run(history, true, None).await
 }
 
@@ -717,14 +821,22 @@ struct Completion<'a> {
     project: Option<crate::project_files::ProjectFiles>,
     runtime: Option<crate::agent_runs::Runtime>,
     guidance: Option<std::sync::Arc<crate::chat_runs::Guidance>>,
+    /// Every billed request of the turn, kept even when the turn fails or is cancelled.
+    meter: Option<&'a std::sync::Mutex<Usage>>,
     activity: &'a (dyn Fn(&str, &str) + Send + Sync),
     agents: &'a (dyn Fn(serde_json::Value) + Send + Sync),
 }
 
 impl Completion<'_> {
+    fn record(&self, usage: &mut Usage, model: &str, raw: &serde_json::Value) {
+        let off_peak = crate::config::deepseek_off_peak(&self.url, crate::data::now_millis() / 1000);
+        usage.record(model, off_peak, raw);
+        if let Some(meter) = self.meter { meter.lock().unwrap().record(model, off_peak, raw); }
+    }
+
     /// Replaces every image with a description by the vision model. Only the user's own images must be readable.
     async fn read_images(&self, vision: &'static str, sent: &mut [serde_json::Value], own: std::ops::Range<usize>,
-        progress: &(dyn Fn(&serde_json::Value) + Sync)) -> Result<(), String> {
+        usage: &mut Usage, progress: &(dyn Fn(&serde_json::Value) + Sync)) -> Result<(), String> {
         use sha2::{Digest, Sha256};
         let key = |url: &str, focus: Option<&str>| format!("{:x}", Sha256::digest(format!("{vision}\n{url}\n{}", focus.unwrap_or("")).as_bytes()));
         let mut pending: Vec<(String, String, String, Option<String>)> = Vec::new();
@@ -748,7 +860,8 @@ impl Completion<'_> {
         }).collect();
         for (key, mut event, task) in tasks {
             match task.await.map_err(|error| error.to_string()).and_then(|result| result) {
-                Ok(description) => {
+                Ok((description, raw)) => {
+                    self.record(usage, vision, &raw);
                     event["status"] = "completed".into();event["output"] = description.clone().into();
                     let mut cache = image_descriptions().lock().unwrap();
                     if cache.len() >= MAX_DESCRIPTIONS { cache.clear(); }
@@ -797,7 +910,7 @@ impl Completion<'_> {
             let mut tool_sequence = 0;
             let mut mcp = crate::mcp::Clients::default();
             let mcp_context = crate::mcp::Context::new(self.project.as_ref(),self.runtime.as_ref(),agent);
-            let mut usage = Usage {prompt_tokens:0, completion_tokens:0, total_tokens:0};
+            let mut usage = Usage::default();
     let mut reply = String::new();
             let limit_key = format!("{}\n{}", self.url, self.model);
             let mut turn_start = history.iter().rposition(|m| m["role"] == "user").unwrap_or(history.len());
@@ -828,7 +941,7 @@ impl Completion<'_> {
                 let mut sent = history.clone();
                 if blind_models().lock().unwrap().contains(&limit_key) { strip_images(&mut sent, turn_start..own_end(&history, turn_start)); }
                 cap_images(&mut sent, turn_start);
-                if let Some(vision) = self.vision { self.read_images(vision, &mut sent, turn_start..own_end(&history, turn_start), &tool_progress).await?; }
+                if let Some(vision) = self.vision { self.read_images(vision, &mut sent, turn_start..own_end(&history, turn_start), &mut usage, &tool_progress).await?; }
                 let has_images = sent.iter().any(|message| image_urls(message).next().is_some());
                 let sent_bytes = history_bytes(&sent);
                 body["messages"] = serde_json::Value::Array(sent);
@@ -916,15 +1029,13 @@ impl Completion<'_> {
                         continue;
                     }
                 };
+                self.record(&mut usage, self.model, &value["usage"]);
                 // Never execute partial tool arguments or present a token-limited reply as complete.
                 match value["choices"][0]["finish_reason"].as_str() {
                     Some("length") => return Err("response_truncated".into()),
                     Some("content_filter") => return Err("response_filtered".into()),
                     _ => {}
                 }
-                usage.prompt_tokens += value["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
-                usage.completion_tokens += value["usage"]["completion_tokens"].as_u64().unwrap_or(0);
-                usage.total_tokens += value["usage"]["total_tokens"].as_u64().unwrap_or(0);
                 let message = &value["choices"][0]["message"];
         if let Some(content) = message["content"].as_str() { reply.push_str(content); }
                 let Some(calls) = message["tool_calls"].as_array().filter(|c| !c.is_empty()) else {
@@ -979,7 +1090,7 @@ impl Completion<'_> {
                             if let Some(runtime)=&self.runtime {runtime.finish(&agent_id);}
                             match child_result {
                                 Ok((result, child_usage)) => {
-                                    usage.prompt_tokens += child_usage.prompt_tokens;usage.completion_tokens += child_usage.completion_tokens;usage.total_tokens += child_usage.total_tokens;
+                                    usage.add(&child_usage);
                                     running["status"] = serde_json::json!("completed");running["summary"] = serde_json::json!(truncate(&result,180));running["content"] = serde_json::json!(result);
                                     running["finished_at"] = serde_json::json!(crate::data::now_millis());
                                     (self.agents)(running);
@@ -1466,7 +1577,8 @@ mod tests {
             let (socket,_,body)=request(&listener);
             assert_eq!(body["model"],VISION_MODEL);assert_eq!(body["stream"],false);assert_eq!(body["messages"][0]["content"],VISION_PROMPT);
             assert_eq!(image_urls(&body["messages"][1]).count(),1);
-            respond(socket,"200 OK",&serde_json::json!({"choices":[{"message":{"role":"assistant","content":"Text: AURA 7319. A red circle."}}]}).to_string());
+            respond(socket,"200 OK",&serde_json::json!({"choices":[{"message":{"role":"assistant","content":"Text: AURA 7319. A red circle."}}],
+                "usage":{"prompt_tokens":1200,"completion_tokens":30,"total_tokens":1230}}).to_string());
             for _ in 0..2 {
                 let (socket,_,body)=request(&listener);
                 let messages=body["messages"].as_array().unwrap();
@@ -1474,7 +1586,7 @@ mod tests {
                 assert!(messages.iter().all(|m|image_urls(m).next().is_none()));
                 assert!(messages.iter().any(|m|m["content"][0]["text"]=="[Attached image: probe.png]"
                     && m["content"][1]["text"].as_str().is_some_and(|t|t.starts_with("[Image content read by deepseek-flash") && t.contains("AURA 7319"))));
-                respond(socket,"200 OK",r#"{"choices":[{"message":{"role":"assistant","content":"It says AURA 7319"}}]}"#);
+                respond(socket,"200 OK",r#"{"choices":[{"message":{"role":"assistant","content":"It says AURA 7319"}}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_cache_hit_tokens":64,"prompt_cache_miss_tokens":36,"completion_tokens_details":{"reasoning_tokens":12}}}"#);
             }
             let (socket,_,body)=request(&listener);assert_eq!(body["model"],VISION_MODEL);
             respond(socket,"500 Internal Server Error",r#"{"error":{"message":"unavailable"}}"#);
@@ -1482,9 +1594,9 @@ mod tests {
         let events=std::sync::Mutex::new(Vec::<serde_json::Value>::new());
         let activity=|kind:&str,text:&str| if kind=="__activity" {events.lock().unwrap().push(serde_json::from_str(text).unwrap());};
         let agents=|_:serde_json::Value|{};
-        let client=reqwest::Client::new();let url=format!("http://{address}");
+        let client=reqwest::Client::new();let url=format!("http://{address}");let meter=std::sync::Mutex::new(Usage::default());
         let run=|messages:&[ChatMessage]| {
-            let runner=Completion{client:&client,url:url.clone(),model:"deepseek-v4-pro",api_key:"test",vision:Some(VISION_MODEL),project:None,runtime:None,guidance:None,activity:&activity,agents:&agents};
+            let runner=Completion{client:&client,url:url.clone(),model:"deepseek-v4-pro",api_key:"test",vision:Some(VISION_MODEL),project:None,runtime:None,guidance:None,meter:Some(&meter),activity:&activity,agents:&agents};
             tauri::async_runtime::block_on(runner.run(api_messages(messages),true,None))
         };
         let user=|text:&str,image:Option<String>|ChatMessage{role:"user".into(),content:text.into(),
@@ -1505,6 +1617,13 @@ mod tests {
         assert_eq!(run(&messages).unwrap_err(),"image_description_failed");
         assert_eq!(events.lock().unwrap().last().unwrap()["status"],"failed");
         server.join().unwrap();
+        let usage=meter.into_inner().unwrap();
+        assert_eq!((usage.requests,usage.total_tokens,usage.prompt_tokens,usage.completion_tokens),(3,1470,1400,70));
+        assert_eq!((usage.cache_hit_tokens,usage.cache_miss_tokens,usage.reasoning_tokens),(128,1272,24));
+        let flash=usage.models.iter().find(|row|row.model==VISION_MODEL).unwrap();
+        assert_eq!((flash.requests,flash.cache_miss_tokens,flash.off_peak),(1,1200,false));
+        let pro=usage.models.iter().find(|row|row.model=="deepseek-v4-pro").unwrap();
+        assert_eq!((pro.requests,pro.cache_hit_tokens,pro.cache_miss_tokens,pro.reasoning_tokens),(2,128,72,24));
     }
     #[test]
     fn project_reads_continue_past_eight_rounds_and_512_kib() {

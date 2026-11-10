@@ -35,6 +35,9 @@ present, but building and testing it requires macOS and Xcode.
   live progress, approvals and completion notifications.
 - **Your provider, your models.** DeepSeek presets or an OpenAI-compatible
   endpoint, with provider configuration managed by the desktop.
+- **Know what each chat costs.** Token usage in compact `k`/`M` form, cache hits,
+  reasoning and per-model breakdown, with a USD estimate from the bundled
+  DeepSeek price list (off-peak discount included) or your own per-model prices.
 - **Local project tools.** Files, commands, Git and MCP integrations operate on
   the gateway computer, within the permissions you grant.
 - **A desktop app that stays out of the way.** System tray operation, local

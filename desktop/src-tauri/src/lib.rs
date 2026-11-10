@@ -670,7 +670,8 @@ async fn chat_inner(
         app:app.clone(),owner:uid.clone(),project:String::new(),conversation:conversation_id.clone(),turn_id:turn_id.clone(),
         intent:history.last().map(|m|m.content.chars().take(16000).collect()).unwrap_or_default(),agent_id:None,cancellation:Some(stop.clone())
     });
-    let completion = llm::chat_completion_steered(&state.client, &base_url, &model, &api_key, &history, project, Some(agent_runs::Runtime{app:app.clone(),owner:uid.clone(),conversation:conversation_id.clone(),execution}), Some(guidance.clone()), &progress, |mut agent| {
+    let meter = std::sync::Mutex::new(Usage::default());
+    let completion = llm::chat_completion_steered(&state.client, &base_url, &model, &api_key, &history, project, Some(agent_runs::Runtime{app:app.clone(),owner:uid.clone(),conversation:conversation_id.clone(),execution}), Some(guidance.clone()), Some(&meter), &progress, |mut agent| {
         agent["conversation_id"] = serde_json::json!(conversation_id);
         let mut events = turn_activity.lock().unwrap();
         let mut stored = agent.clone();stored["kind"] = serde_json::json!("agent");stored["offset"] = content_offset.load(std::sync::atomic::Ordering::Relaxed).into();
@@ -695,12 +696,15 @@ async fn chat_inner(
     let reviews=app.state::<approvals::Approvals>().take_turn(&uid,&conversation_id,&turn_id);
     // Uno stop conserva la parte di risposta mostrata finora invece di scartarla con la richiesta.
     let deferred_error = match &outcome {Ok(Err(error)) if !segments.lock().unwrap().is_empty()=>Some(error.clone()),_=>None};
-    let (reply, mut usage, cancelled) = match outcome {
-        Ok(Ok((reply,usage))) => (reply, usage, false),
-        Ok(Err(_)) if deferred_error.is_some() => (std::mem::take(&mut *streamed.lock().unwrap()), Usage{prompt_tokens:0,completion_tokens:0,total_tokens:0}, false),
+    let (reply, cancelled) = match outcome {
+        Ok(Ok((reply,_))) => (reply, false),
+        Ok(Err(_)) if deferred_error.is_some() => (std::mem::take(&mut *streamed.lock().unwrap()), false),
         Ok(Err(error)) => return Err(error),
-        Err(_) => (std::mem::take(&mut *streamed.lock().unwrap()), Usage{prompt_tokens:0,completion_tokens:0,total_tokens:0}, true),
+        Err(_) => (std::mem::take(&mut *streamed.lock().unwrap()), true),
     };
+    // Il meter conta anche le richieste di un turno fermato, che il provider fattura comunque.
+    let mut usage = meter.into_inner().unwrap();
+    user.price_usage(&base_url, &mut usage);
     let mut turn_activity = turn_activity.into_inner().unwrap();
     if cancelled {
         fn cancel(events:&mut [serde_json::Value]) {
@@ -717,8 +721,14 @@ async fn chat_inner(
             }
         }
     }
+    let reviewer=user.models.get(&user.active_model);
     for review in reviews {
-        usage.prompt_tokens+=review.usage["prompt_tokens"].as_u64().unwrap_or(0);usage.completion_tokens+=review.usage["completion_tokens"].as_u64().unwrap_or(0);usage.total_tokens+=review.usage["total_tokens"].as_u64().unwrap_or(0);
+        if let Some(reviewer)=reviewer {
+            let mut review_usage=Usage::default();
+            review_usage.record(&reviewer.model,config::deepseek_off_peak(&reviewer.base_url,review.created_at/1000),&review.usage);
+            user.price_usage(&reviewer.base_url,&mut review_usage);
+            usage.add(&review_usage);
+        }
         let mut event=serde_json::to_value(review).map_err(|e|e.to_string())?;event["kind"]="approval".into();event["offset"]=0.into();turn_activity.push(event);
     }
 
@@ -737,6 +747,7 @@ async fn chat_inner(
         }
         conv.updated_at = data::now_millis();
         if usage.total_tokens > 0 { conv.context_tokens = usage.total_tokens; }
+        conv.usage.add(&usage);
         (conv.messages.clone(), data.clone())
     };
 

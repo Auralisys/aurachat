@@ -11,7 +11,9 @@ const assert = require('node:assert/strict');
   const strings = JSON.parse(readFileSync(resolve(__dirname, '../ui/locales/it.json'), 'utf8'));
   const config = { firebase_email: 'lorenzo@example.com', firebase_project_id: 'demo', firebase_api_key: 'public-demo', firebase_auth_set: true, api_key_set: true,
     models: ['deepseek-flash', 'deepseek-v4-pro'], active_model: 'deepseek-flash', providers: [{ id: 'legacy-0', name: 'DeepSeek', kind: 'deepseek', api_key_set: true,
-      models: ['deepseek-flash', 'deepseek-v4-pro'].map(model => ({ id: model, model, base_url: 'https://api.deepseek.com' })) }] };
+      models: ['deepseek-flash', 'deepseek-v4-pro'].map(model => ({ id: model, model, base_url: 'https://api.deepseek.com', pricing: null })) }],
+    known_pricing: [['deepseek-flash', 0.006, 0.3, 1.2], ['deepseek-v4-pro', 0.044, 1.32, 3.96]].map(([model, input_cache_hit, input_cache_miss, output]) =>
+      ({ host: 'api.deepseek.com', model, pricing: { input_cache_hit, input_cache_miss, output }, off_peak_factor: 0.5 })) };
   const saved = []; let fail = false, loggedOut = false;
   await page.exposeFunction('mockInvoke', async (cmd, args) => {
     if (cmd === 'get_locale') return JSON.stringify(strings);
@@ -66,9 +68,16 @@ const assert = require('node:assert/strict');
   await page.click('.provider-row');
   assert.equal(await page.locator('.provider-model-row').count(), 2);
   assert.equal(await page.locator('[name=api_key]').last().inputValue(), '');
+  // DeepSeek models fall back to the bundled list price, shown as placeholders.
+  const flashPrice = page.locator('.provider-pricing').first();
+  assert.equal(await flashPrice.getAttribute('data-state'), 'list');
+  assert.match(await flashPrice.locator('summary').innerText(),   /Listino DeepSeek\s*ingresso 0,30\s\$ · uscita 1,20\s\$/);
+    assert.match(await page.locator('.provider-pricing').nth(1).locator('summary').innerText(), /ingresso 1,32\s\$ · uscita 3,96\s\$/);
+  assert.match(await flashPrice.locator('[name=price_input_cache_hit]').getAttribute('placeholder'), /^0[.,]006$/);
   await page.click('.provider-form button[type=submit]');
   await page.locator('#providers-overview').waitFor({ state: 'visible' });
   assert.equal(saved.at(-1).api_key, null);
+  assert.deepEqual(saved.at(-1).models.map(model => model.pricing), [null, null]);
   await page.click('#add-provider');
   await page.selectOption('.provider-form [name=kind]', 'openrouter');
   assert.equal(await page.locator('.provider-model-row [name=endpoint]').inputValue(), 'https://openrouter.ai/api/v1');
@@ -83,6 +92,23 @@ const assert = require('node:assert/strict');
   assert.equal(await page.locator('.provider-model-row').count(), 2);
   assert.equal(await page.locator('.provider-model-row').last().locator('[name=endpoint]').inputValue(), 'https://api.example.com/v1');
   await page.locator('.provider-model-row').last().locator('[name=model]').fill('acme-reasoner');
+  // Custom models have no list price: a partial price is rejected before saving, a full one is kept.
+  const acmePrice = page.locator('.provider-pricing').first();
+  assert.equal(await acmePrice.getAttribute('data-state'), 'none');
+  await acmePrice.locator('summary').click();
+  await acmePrice.locator('[name=price_input_cache_miss]').fill('0,5');
+  assert.equal(await acmePrice.getAttribute('data-state'), 'error');
+  const submitted = saved.length;
+  await page.click('.provider-form button[type=submit]');
+  assert.equal(await page.locator('#provider-editor-error').innerText(), strings['settings.pricing_incomplete']);
+  assert.equal(saved.length, submitted);
+  await acmePrice.locator('[name=price_input_cache_hit]').fill('abc');
+  assert.equal(await acmePrice.locator('[name=price_input_cache_hit]').getAttribute('aria-invalid'), 'true');
+  await acmePrice.locator('[name=price_input_cache_hit]').fill('0.1');
+  await acmePrice.locator('[name=price_output]').fill('2');
+  assert.equal(await acmePrice.getAttribute('data-state'), 'custom');
+  assert.match(await acmePrice.locator('summary').innerText(), /Personalizzato\s*ingresso 0,50\s\$ · uscita 2,00\s\$/);
+  await page.evaluate(() => Promise.all(document.getAnimations().map(animation => animation.finished)));
   await page.screenshot({ path: resolve(output, 'editor-desktop.png') });
   await page.setViewportSize({ width: 520, height: 780 });
   await page.screenshot({ path: resolve(output, 'editor-compact.png') });
@@ -95,6 +121,7 @@ const assert = require('node:assert/strict');
   await page.click('.provider-form button[type=submit]');
   await page.locator('#providers-overview').waitFor({ state: 'visible' });
   assert.equal(saved.at(-1).models.length, 2);
+  assert.deepEqual(saved.at(-1).models.map(model => model.pricing), [{ input_cache_hit: 0.1, input_cache_miss: 0.5, output: 2 }, null]);
   assert.equal(await page.locator('.provider-row').count(), 2);
   assert.equal(await page.locator('#provider-editor input[type=password]').count(), 0);
   await page.click('#modal-close');
@@ -104,6 +131,7 @@ const assert = require('node:assert/strict');
   await page.keyboard.press('Control+,');
   await page.click('.settings-nav [data-settings-tab=inference]');
   await page.locator('.provider-row').filter({ hasText: 'Acme AI' }).click();
+  assert.match(await page.locator('.provider-pricing [name=price_input_cache_miss]').first().inputValue(), /^0[.,]50$/);
   await page.fill('.provider-form [name=name]', 'Unsaved');
   page.once('dialog', dialog => dialog.dismiss());
   await page.click('#modal-close');
