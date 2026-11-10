@@ -3,27 +3,33 @@
 //! calls; navigation is limited to http(s) and never reaches the app's own
 //! `*.localhost` protocols. The UI can capture the visible page as PNG.
 
-use std::sync::Mutex;
+use std::{collections::HashMap, sync::Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl};
 
-pub const LABEL: &str = "browser";
 const MAIN: &str = "main";
 const SEARCH: &str = "https://duckduckgo.com/";
 const MAX_INPUT: usize = 2048;
 
 #[derive(Default)]
 pub struct Browser {
-    page: Mutex<PageState>,
+    pages: Mutex<HashMap<String, PageState>>,
 }
 
 #[derive(Clone, Default, Serialize)]
 pub struct PageState {
+    pub tab_id: String,
     pub url: String,
     pub title: String,
     pub loading: bool,
+}
+
+#[derive(Clone, Serialize)]
+struct PageLink {
+    tab_id: String,
+    url: String,
 }
 
 #[derive(Deserialize)]
@@ -86,15 +92,23 @@ fn only_main(caller: &Webview) -> Result<(), String> {
     if caller.label() == MAIN { Ok(()) } else { Err("browser_forbidden".into()) }
 }
 
-fn page(app: &AppHandle) -> Result<Webview, String> {
-    app.get_webview(LABEL).ok_or_else(|| "browser_closed".into())
+fn tab_label(tab_id: &str) -> Result<String, String> {
+    if tab_id.is_empty() || tab_id.len() > 64 || !tab_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) {
+        return Err("browser_invalid_tab".into());
+    }
+    Ok(format!("browser-{tab_id}"))
 }
 
-fn publish(app: &AppHandle, update: impl FnOnce(&mut PageState)) {
+fn page(app: &AppHandle, tab_id: &str) -> Result<Webview, String> {
+    app.get_webview(&tab_label(tab_id)?).ok_or_else(|| "browser_closed".into())
+}
+
+fn publish(app: &AppHandle, tab_id: &str, update: impl FnOnce(&mut PageState)) {
     let state = {
         let browser = app.state::<Browser>();
-        let mut page = browser.page.lock().unwrap();
-        update(&mut page);
+        let mut pages = browser.pages.lock().unwrap();
+        let Some(page) = pages.get_mut(tab_id) else { return };
+        update(page);
         page.clone()
     };
     if let Err(error) = app.emit_to(MAIN, "browser-state", state) {
@@ -102,11 +116,16 @@ fn publish(app: &AppHandle, update: impl FnOnce(&mut PageState)) {
     }
 }
 
-fn place(webview: &Webview, bounds: &Bounds) -> Result<(), String> {
+fn validate_bounds(bounds: &Bounds) -> Result<(), String> {
     let values = [bounds.x, bounds.y, bounds.width, bounds.height];
     if values.iter().any(|value| !value.is_finite() || *value < 0.0 || *value > 100_000.0) {
         return Err("browser_invalid_bounds".into());
     }
+    Ok(())
+}
+
+fn place(webview: &Webview, bounds: &Bounds) -> Result<(), String> {
+    validate_bounds(bounds)?;
     webview
         .set_bounds(tauri::Rect {
             position: LogicalPosition::new(bounds.x, bounds.y).into(),
@@ -115,36 +134,39 @@ fn place(webview: &Webview, bounds: &Bounds) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn create(app: &AppHandle, url: Url, bounds: &Bounds) -> Result<Webview, String> {
+fn create(app: &AppHandle, tab_id: &str, url: Url, bounds: &Bounds) -> Result<Webview, String> {
     let window = app.get_window(MAIN).ok_or("browser_closed")?;
     let blocked = app.clone();
     let opener = app.clone();
     let loads = app.clone();
     let titles = app.clone();
-    let builder = WebviewBuilder::new(LABEL, WebviewUrl::External(url))
+    let blocked_id = tab_id.to_string();
+    let opener_id = tab_id.to_string();
+    let loads_id = tab_id.to_string();
+    let titles_id = tab_id.to_string();
+    let builder = WebviewBuilder::new(tab_label(tab_id)?, WebviewUrl::External(url))
         .on_navigation(move |url| {
             let ok = allowed(url) || url.as_str() == "about:blank";
             if !ok {
-                let _ = blocked.emit_to(MAIN, "browser-blocked", url.as_str());
+                if let Err(error) = blocked.emit_to(MAIN, "browser-blocked", PageLink { tab_id: blocked_id.clone(), url: url.to_string() }) {
+                    eprintln!("Browser navigation event failed: {error}");
+                }
             }
             ok
         })
-        // Pop-ups replace the current page instead of opening unmanaged windows.
+        // The trusted UI owns tabs; remote pages never create unmanaged windows.
         .on_new_window(move |url, _| {
             if allowed(&url) {
-                let app = opener.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Some(webview) = app.get_webview(LABEL) {
-                        let _ = webview.navigate(url);
-                    }
-                });
+                if let Err(error) = opener.emit_to(MAIN, "browser-new-tab", PageLink { tab_id: opener_id.clone(), url: url.to_string() }) {
+                    eprintln!("Browser tab event failed: {error}");
+                }
             }
             NewWindowResponse::Deny
         })
         .on_page_load(move |_, payload| {
             let url = payload.url().to_string();
             let loading = matches!(payload.event(), PageLoadEvent::Started);
-            publish(&loads, |page| {
+            publish(&loads, &loads_id, |page| {
                 if page.url != url {
                     page.title.clear();
                 }
@@ -152,40 +174,49 @@ fn create(app: &AppHandle, url: Url, bounds: &Bounds) -> Result<Webview, String>
                 page.loading = loading;
             });
         })
-        .on_document_title_changed(move |_, title| publish(&titles, |page| page.title = title));
-    window
+        .on_document_title_changed(move |_, title| publish(&titles, &titles_id, |page| page.title = title));
+    let page = window
         .add_child(builder, LogicalPosition::new(bounds.x, bounds.y), LogicalSize::new(bounds.width.max(1.0), bounds.height.max(1.0)))
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    page.hide().map_err(|error| error.to_string())?;
+    Ok(page)
 }
 
-#[tauri::command]
-pub async fn browser_open(app: AppHandle, webview: Webview, url: String, bounds: Bounds) -> Result<Opened, String> {
+#[tauri::command(rename_all = "snake_case")]
+pub async fn browser_open(app: AppHandle, webview: Webview, tab_id: String, url: String, bounds: Bounds) -> Result<Opened, String> {
     only_main(&webview)?;
+    let label = tab_label(&tab_id)?;
     let url = page_url(&url)?;
-    publish(&app, |page| {
+    validate_bounds(&bounds)?;
+    app.state::<Browser>().pages.lock().unwrap().entry(tab_id.clone()).or_insert_with(|| PageState { tab_id: tab_id.clone(), ..Default::default() });
+    publish(&app, &tab_id, |page| {
         page.url = url.to_string();
         page.title.clear();
         page.loading = true;
     });
-    match app.get_webview(LABEL) {
-        Some(page) => {
-            place(&page, &bounds)?;
-            page.show().map_err(|error| error.to_string())?;
-            page.navigate(url.clone()).map_err(|error| error.to_string())?;
-        }
-        None => {
-            create(&app, url.clone(), &bounds)?;
-        }
+    let result = match app.get_webview(&label) {
+        Some(page) => place(&page, &bounds).and_then(|_| page.navigate(url.clone()).map_err(|error| error.to_string())),
+        None => create(&app, &tab_id, url.clone(), &bounds).map(|_| ()),
+    };
+    if let Err(error) = result {
+        publish(&app, &tab_id, |page| page.loading = false);
+        return Err(error);
     }
     Ok(Opened { url: url.to_string(), capture: cfg!(windows) })
 }
 
-#[tauri::command]
-pub async fn browser_bounds(app: AppHandle, webview: Webview, bounds: Bounds, visible: bool) -> Result<(), String> {
+#[tauri::command(rename_all = "snake_case")]
+pub async fn browser_bounds(app: AppHandle, webview: Webview, tab_id: String, bounds: Bounds, visible: bool) -> Result<(), String> {
     only_main(&webview)?;
-    let Some(page) = app.get_webview(LABEL) else { return Ok(()) };
+    let Some(page) = app.get_webview(&tab_label(&tab_id)?) else { return Ok(()) };
     if visible {
         place(&page, &bounds)?;
+        let ids: Vec<_> = app.state::<Browser>().pages.lock().unwrap().keys().cloned().collect();
+        for id in ids.into_iter().filter(|id| id != &tab_id) {
+            if let Some(other) = app.get_webview(&tab_label(&id)?) {
+                other.hide().map_err(|error| error.to_string())?;
+            }
+        }
         page.show()
     } else {
         page.hide()
@@ -193,10 +224,10 @@ pub async fn browser_bounds(app: AppHandle, webview: Webview, bounds: Bounds, vi
     .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub async fn browser_action(app: AppHandle, webview: Webview, action: String) -> Result<(), String> {
+#[tauri::command(rename_all = "snake_case")]
+pub async fn browser_action(app: AppHandle, webview: Webview, tab_id: String, action: String) -> Result<(), String> {
     only_main(&webview)?;
-    let page = page(&app)?;
+    let page = page(&app, &tab_id)?;
     match action.as_str() {
         "back" => page.eval("history.back()"),
         "forward" => page.eval("history.forward()"),
@@ -207,27 +238,31 @@ pub async fn browser_action(app: AppHandle, webview: Webview, action: String) ->
     .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub async fn browser_close(app: AppHandle, webview: Webview) -> Result<(), String> {
+#[tauri::command(rename_all = "snake_case")]
+pub async fn browser_close(app: AppHandle, webview: Webview, tab_id: String) -> Result<(), String> {
     only_main(&webview)?;
-    if let Some(page) = app.get_webview(LABEL) {
+    if let Some(page) = app.get_webview(&tab_label(&tab_id)?) {
+        page.hide().map_err(|error| error.to_string())?;
         page.close().map_err(|error| error.to_string())?;
     }
-    *app.state::<Browser>().page.lock().unwrap() = PageState::default();
+    app.state::<Browser>().pages.lock().unwrap().remove(&tab_id);
     Ok(())
 }
 
-#[tauri::command]
-pub async fn browser_capture(app: AppHandle, webview: Webview) -> Result<Capture, String> {
+#[tauri::command(rename_all = "snake_case")]
+pub async fn browser_capture(app: AppHandle, webview: Webview, tab_id: String) -> Result<Capture, String> {
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
     only_main(&webview)?;
-    let page = page(&app)?;
+    let page = page(&app, &tab_id)?;
+    let state = app.state::<Browser>().pages.lock().unwrap().get(&tab_id).cloned().ok_or("browser_closed")?;
+    let url = page.url().map_err(|error| error.to_string())?.to_string();
     let bytes = capture_png(&page).await?;
     if crate::llm::image_mime(&bytes) != Some("image/png") {
         return Err("browser_capture_failed".into());
     }
-    let state = app.state::<Browser>().page.lock().unwrap().clone();
-    let url = page.url().map(|url| url.to_string()).unwrap_or(state.url);
+    if page.url().map_err(|error| error.to_string())?.as_str() != url {
+        return Err("browser_capture_failed".into());
+    }
     Ok(Capture { data: BASE64.encode(bytes), mime_type: "image/png", url, title: state.title })
 }
 
@@ -304,6 +339,25 @@ async fn capture_png(_: &Webview) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tab_labels_are_isolated_from_app_webviews() {
+        assert_eq!(tab_label("one").unwrap(), "browser-one");
+        assert_ne!(tab_label("one").unwrap(), tab_label("two").unwrap());
+        assert_ne!(tab_label("main").unwrap(), MAIN);
+        for id in ["", "../main", "one/two", "one.two", "with space", "é"] {
+            assert!(tab_label(id).is_err(), "{id}");
+        }
+        assert!(tab_label(&"a".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn bounds_are_checked_before_creating_a_page() {
+        for value in [f64::NAN, f64::INFINITY, -1.0, 100_001.0] {
+            assert!(validate_bounds(&Bounds { x: value, y: 0.0, width: 400.0, height: 600.0 }).is_err());
+        }
+        assert!(validate_bounds(&Bounds { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }).is_ok());
+    }
 
     #[test]
     fn address_bar_text_becomes_a_safe_url() {

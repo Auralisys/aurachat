@@ -122,13 +122,24 @@ sono necessarie nuove regole Firestore rispetto al relay esistente.
 
 ## Struttura
 
-### Card attività e pannello destro
+### Riepilogo e pannello a schede
 
-La card **Output / Agenti / Fonti** (più **Cambiamenti** nei progetti e **Shell** quando serve) compare
-quando la conversazione contiene messaggi, allegati o attività. Il pulsante
-nell'intestazione la nasconde e la riapre. Su desktop l'ingresso e l'uscita animano
-anche lo spazio della conversazione; sotto i 1000 px il pannello si sovrappone alla
-chat per mantenere leggibile il contenuto e parte chiuso. La sidebar di navigazione
+L'intestazione separa **menu · riepilogo · divisore · pannello laterale**:
+nessun globo per aprire il pannello. Il riepilogo è una card flottante ancorata
+al proprio pulsante, indipendente dalle schede e senza ridimensionare la chat.
+Mostra **Modifiche**, **Output**, **Fonti** e, quando presenti, **Agenti** e **Shell**.
+Il nome del progetto identifica il contesto; il menu offre le viste complete
+e Nascondi. I pulsanti **+** aggiungono una fonte o preparano una richiesta di
+output senza inviarla né sovrascrivere una bozza.
+
+Il pannello laterale ospita schede browser e le viste Git, Output, Fonti, Agenti
+e Shell già esistenti. **+** apre una nuova scheda con indirizzo e accesso a Git;
+Git richiede una chat di progetto con una cartella locale. Ogni vista strumenti
+riutilizza la propria scheda e segue la conversazione corrente; i browser
+rimangono aperti passando tra chat. Espandi usa tutto lo spazio di lavoro,
+Nascondi torna alla chat senza chiudere le schede. Sotto i 1000 px chat e pannello
+si alternano a tutta larghezza. Il riepilogo parte chiuso sotto i 1000 px.
+La sidebar di navigazione
 parte chiusa sotto gli 850 px e si apre sopra il contenuto, con chiusura tramite
 Escape, sfondo o selezione della chat. Con `prefers-reduced-motion` gli
 spostamenti sono immediati.
@@ -144,11 +155,11 @@ Ogni riga mostra tipo, dimensione e agente; il pannello conserva i filtri per ti
 Per le integrazioni native `artifact-created` richiede `final_output: true`,
 oltre a un percorso/link o un documento/immagine valido.
 
-**Cambiamenti +N −N** mostra branch, upstream e conteggi locali (senza fetch).
-Nella card Attività il recap è una singola riga di testo, senza chip:
-**Cambiamenti +N −N**, sopra Output e con colori verde/rosso più netti. Il clic apre
-un menu con **Commit…**, **Commit e push…** e **Apri dettaglio completo**, senza
-allargare immediatamente la sidebar. Il menu resta fermo anche durante gli aggiornamenti.
+**Modifiche +N −N** mostra branch, upstream e conteggi locali (senza fetch).
+Nel riepilogo è una riga di testo sopra Output, con conteggi verde/rosso:
+il clic apre direttamente la scheda Git. Il pulsante ellissi separato conserva
+**Commit…**, **Commit e push…** e **Apri dettaglio completo**.
+Il menu resta fermo anche durante gli aggiornamenti.
 Il recap si aggiorna dopo le scritture del modello/sub-agenti e la fine dei comandi;
 un controllo ogni 2 secondi rileva anche le modifiche esterne, durante i turni attivi.
 Gli aggiornamenti invariati non ricreano il modulo o chiudono il menu.
@@ -1130,34 +1141,64 @@ telefono mostra marker e note in sola lettura; il relay passa al protocollo 9 e 
 controllo remoto invia annotazioni solo a gateway aggiornati
 (`remote_update_required`).
 
-**Browser interno.** Il globo nell'intestazione apre un pannello a destra della
-chat (alternativo al pannello attività, larghezza trascinabile o da tastiera,
-salvata in `localStorage`). I link nelle risposte si aprono qui; Ctrl/Maiusc+clic
-e il pulsante dedicato usano il browser di sistema. `browser.rs` crea una webview
-figlia della finestra principale (`get_window`, feature Tauri `unstable`) solo su
+**Browser interno.** Il comando del pannello laterale apre le schede a destra
+della chat; il riepilogo rimane indipendente. La larghezza è trascinabile o
+regolabile da tastiera, salvata in `localStorage`. Ogni link nelle risposte o
+nelle Fonti apre una nuova scheda; Ctrl/Cmd/Maiusc+clic e il pulsante dedicato
+usano il browser di sistema. Frecce, Home/End cambiano scheda dalla barra;
+Canc, clic centrale o **×** chiudono solo quella scelta.
+`browser.rs` crea una webview figlia per scheda della finestra principale
+(`get_window`, feature Tauri `unstable`) solo su
 richiesta della webview `main`: indirizzi completi, host senza schema
 (`https://`, `http://` per localhost) o ricerche DuckDuckGo. Sono ammessi solo
 http/https e mai gli host `*.localhost` dei protocolli dell'app; navigazioni
-bloccate emettono `browser-blocked`, i pop-up sostituiscono la pagina corrente.
+bloccate emettono `browser-blocked`; i pop-up della scheda attiva diventano nuove
+schede tramite `browser-new-tab`, senza finestre native non gestite. Tutti i
+comandi `browser_open/bounds/action/close/capture` e gli eventi portano `tab_id`.
+Il nativo mantiene una mappa separata degli stati e valida gli identificatori.
 La pagina remota non ha accesso all'IPC di Tauri (capability solo locale). La
-webview nativa è disegnata sopra il DOM: `browser.js` la nasconde quando un
+webview nativa è disegnata sopra il DOM: `browser.js` mostra solo la scheda attiva e la nasconde quando un
 dialog, menu o overlay la copre, quando la vista chat non è visibile e durante
-l'annotazione, e ne aggiorna i limiti con `ResizeObserver`. Chiudere il pannello
-distrugge la pagina.
+l'annotazione, e ne aggiorna i limiti con `ResizeObserver`. Nascondere il pannello
+o passare a Git conserva pagine, cronologia e moduli; chiudere una scheda distrugge
+solo quella pagina, dopo conferma nativa. Un errore di chiusura mantiene la scheda
+accessibile per riprovare. Le operazioni native sono serializzate per gestire
+cambi scheda e chiusure durante il caricamento. Le schede non sono ripristinate
+al riavvio e vengono chiuse al cambio account; tra riavvii si conserva solo la larghezza.
 
 **Cattura.** «Annota schermata e allega» cattura la parte visibile della pagina in
 PNG (WebView2 `CapturePreview`, solo Windows; su macOS il pulsante non compare e
 il comando risponde `browser_capture_unsupported`), apre l'editor con titolo e
 indirizzo e, al salvataggio, allega l'immagine con nome `host-data-ora.png`
 (anche senza commenti); Annulla scarta la cattura. Errori:
-`browser_invalid_url`, `browser_blocked_url`, `browser_closed`,
-`browser_capture_failed`.
+`browser_invalid_url`, `browser_blocked_url`, `browser_invalid_tab`,
+`browser_invalid_bounds`, `browser_closed`, `browser_capture_failed`.
+Una cattura non viene allegata se nel frattempo cambia chat, progetto o account;
+la navigazione durante la cattura viene rifiutata dal backend.
 
 Verifica: `desktop/tests/image-annotations.cjs` (editor, salvataggio e annulla,
 argomenti `chat`, visualizzatore, apertura e limiti del pannello, occultamento
-sotto i menu, cattura annotata e annullata, link, alternanza con l'attività), test
-Rust `browser::tests` (indirizzi e blocchi) e test su validazione e testo delle
-annotazioni in `llm.rs`.
+sotto i menu, cattura annotata e annullata, link e indipendenza dal riepilogo),
+`desktop/tests/panel-tabs.cjs` (schede, isolamento, popup, chiusure in corsa,
+bozze, contesto Git, tastiera e layout), test Rust `browser::tests` (indirizzi,
+identificatori e limiti) e test su validazione e testo delle annotazioni in `llm.rs`.
+
+## Testo incollato nel composer
+
+Un testo incollato con **più di 20 righe logiche** diventa un chip inline
+**N righe**, nella posizione del cursore o al posto della selezione. Incolli
+distinti restano blocchi distinti; testo breve, immagini e allegati conservano
+il comportamento precedente. Clic o Invio sul chip apre il testo completo
+modificabile; Annulla non cambia la bozza, Rimuovi lo elimina e Salva aggiorna
+il conteggio (sotto la soglia il testo torna espanso).
+
+`composer.js` usa lo stesso testo completo per serializzazione, copia/taglio,
+posizione del cursore e scelta delle skill. Il chip non è un allegato e non
+riduce i token: all'invio viene espanso nel messaggio, senza inviare la sua
+etichetta. Incolla/rimozione supportano Annulla/Ripeti; il testo resta letterale,
+anche se contiene HTML, e i fine riga CRLF restano intatti se non viene modificato.
+Le bozze in memoria conservano anche i blocchi tra chat, come gli allegati.
+Verifica isolata: `desktop/tests/composer-paste.cjs`.
 
 ## Utilizzo e costo stimato
 

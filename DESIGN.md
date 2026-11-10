@@ -67,10 +67,26 @@ parte chiusa sotto 1000 px. Nessun redesign del companion Flutter in questa fase
 Commenti sulle immagini come marker numerati in accento su un'immagine pulita:
 editor modale con l'immagine a sinistra e l'elenco dei commenti a destra (in
 colonna sotto 820 px), badge col numero sulla miniatura, note sotto l'immagine
-nel visualizzatore. Il browser interno occupa il lato destro al posto della card
-attivita: barra compatta con indirizzo a pillola, sottile barra di caricamento,
+nel visualizzatore. Il browser interno occupa una scheda nel pannello destro:
+barra compatta con indirizzo a pillola, sottile barra di caricamento,
 maniglia di ridimensionamento accessibile da tastiera. La pagina nativa sparisce
 sotto menu e dialog invece di coprirli. Rispetto di reduced-motion e forced-colors.
+
+## Desktop — riepilogo, schede e testo incollato
+
+Intestazione secondo il riferimento ChatGPT/Codex: menu, elenco del riepilogo,
+separatore verticale e icona del pannello destro; nessun pulsante globo qui.
+Il riepilogo da 304 px, limitato allo spazio disponibile, fluttua sotto il suo
+pulsante senza spostare la chat. Pannello a schede indipendente con **+**,
+chiusura per scheda, espansione/ripristino e Nascondi. Browser e Git condividono
+il contenitore con i dettagli esistenti di Output, Fonti, Agenti e Shell.
+Schede neutre con icona e titolo troncabile; nessun terminale interattivo o
+controllo PR/MR simulato. Sotto 1000 px una vista alla volta: Nascondi torna alla chat.
+
+Il testo incollato oltre 20 righe diventa un chip inline con icona documento e
+numero di righe, senza consumare l'altezza del composer. Clic/Invio apre una
+lettura modificabile con annulla/salva/rimuovi. Il testo completo resta nella
+posizione originale del messaggio; il chip non implica una riduzione dei token.
 
 ## Desktop — utilizzo e costi
 

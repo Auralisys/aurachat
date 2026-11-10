@@ -1,15 +1,20 @@
-.activity-dock { --agent-color:#80d9bd; --activity-width:280px; --activity-motion:360ms; --activity-ease:cubic-bezier(.22,1,.36,1); flex:0 0 0; min-width:0; overflow:hidden; opacity:0; visibility:hidden; transform:translateX(32px); transition:flex-basis var(--activity-motion) var(--activity-ease), transform var(--activity-motion) var(--activity-ease), opacity 180ms ease-out, visibility 0s var(--activity-motion); }
-.activity-dock.is-visible { flex-basis:var(--activity-width); opacity:1; visibility:visible; transform:translateX(0); transition-delay:0s; }
-/* Extend only the chat's scroll surface behind the card, preserving its text column. */
-.workspace { --activity-scroll-extension:0px; }
-.workspace:has(.activity-dock.is-visible:not(.is-panel)) { --activity-scroll-extension:280px; }
+.main { container-type:inline-size; }
+.summary-anchor { position:relative; flex:none; }
+.activity-dock { --agent-color:var(--c-glow); position:absolute; z-index:6; top:calc(100% + 8px); right:-8px; width:min(304px,calc(100vw - 140px)); max-width:calc(100cqw - 80px); }
 .view--chat { overflow:visible; }
-.chat-header { position:relative; z-index:2; margin-right:calc(-1 * var(--activity-scroll-extension)); transition:margin-right 360ms cubic-bezier(.22,1,.36,1); }
-.view--chat:not(.is-empty) .messages { margin-right:calc(-1 * var(--activity-scroll-extension)); padding-right:calc(max(var(--space-6), (100% - var(--reading-width)) / 2) + var(--activity-scroll-extension)); transition:margin-right 360ms cubic-bezier(.22,1,.36,1), padding-right 360ms cubic-bezier(.22,1,.36,1); }
-.activity-dock { position:relative; z-index:1; pointer-events:none; }
-.activity-card,.activity-panel { pointer-events:auto; }
-.activity-card { width:calc(var(--activity-width) - 16px); max-height:calc(100% - 72px); overflow:auto; margin-top:56px; padding:12px 16px 16px; border-radius:20px; background:var(--c-panel); }
+.chat-header { position:relative; z-index:2; }
+.activity-card { width:100%; max-height:calc(100dvh - 160px); overflow:auto; overscroll-behavior:contain; padding:12px 20px 16px; border-radius:var(--radius-xl); background:var(--c-panel); box-shadow:0 12px 28px #0003; }
 .activity-card__header { display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--c-text-muted); font-size:12px; }
+.activity-card__header > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.activity-card__header .icon-button { flex:none; }
+.activity-group__header { display:flex; align-items:center; gap:8px; }
+.activity-group__header .activity-group__title { flex:1; min-width:0; }
+.activity-group__header .icon-button { flex:none; margin-right:-8px; }
+.git-summary-row { display:flex; align-items:center; gap:4px; }
+.git-summary-row .activity-group__title { flex:1; min-width:0; width:auto; color:var(--c-text); justify-content:flex-start; gap:8px; }
+.git-summary-row .activity-group__title > span:first-of-type { flex:1; }
+.git-summary-row > .icon-button { flex:none; margin-right:-12px; }
+#activity-toggle.is-active { color:var(--c-text); background:var(--c-hover); }
 .activity-group + .activity-group { margin-top:20px; }
 .git-stats { display:inline-flex; gap:8px; font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .git-added { color:#3ee880; }
@@ -59,8 +64,7 @@
 .agent-orb--waiting,.agent-orb--cancelled { background:var(--c-text-muted); box-shadow:none; }
 .agent-orb--failed { background:var(--c-glow); box-shadow:none; }
 .activity-row__meta { flex:none; display:flex; flex-direction:column; align-items:flex-end; gap:4px; color:var(--c-text-muted); font-size:12px; font-variant-numeric:tabular-nums; }
-.activity-dock.is-panel { --activity-width:420px; }
-.activity-panel { display:flex; flex-direction:column; width:var(--activity-width); height:100%; min-height:0; border-left:1px solid var(--c-border); }
+.activity-panel { --agent-color:var(--c-glow); display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; background:var(--c-surface); }
 .activity-panel__header { display:flex; align-items:center; gap:8px; flex:none; min-height:56px; padding:8px 12px; border-bottom:1px solid var(--c-border); }
 .activity-panel__header h2 { flex:1; min-width:0; margin:0; font-size:13px; font-weight:600; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .activity-tabs { display:flex; gap:4px; padding:8px 12px; border-bottom:1px solid var(--c-border); }
@@ -86,17 +90,7 @@
 .activity-terminal { min-height:160px; }
 .activity-shell-error { color:var(--c-glow); font-size:13px; }
 @keyframes agent-breathe { 50% { opacity:.65; } }
-@media (max-width:1200px) { .activity-dock { --activity-width:248px; } .activity-dock.is-panel { --activity-width:420px; } .workspace:has(.activity-dock.is-visible:not(.is-panel)) { --activity-scroll-extension:248px; } }
-/* Below this width the conversation cannot share a readable column with a panel. */
-@media (max-width:1000px) {
-  .workspace:has(.activity-dock.is-visible:not(.is-panel)) { --activity-scroll-extension:0px; }
-  .activity-dock { position:absolute; top:0; right:0; bottom:0; z-index:5; width:min(280px,100%); pointer-events:none; transform:translateX(100%); }
-  .activity-card { pointer-events:auto; margin-right:12px; }
-  .activity-dock.is-panel { --activity-width:min(440px,100%); width:min(440px,100%); background:var(--c-surface); box-shadow:-12px 0 32px #0003; pointer-events:auto; }
-  .activity-panel { width:100%; }
-}
-@media (max-width:850px) { .view--chat:not(.is-empty) .messages { padding-right:var(--space-4); } }
-@media (prefers-reduced-motion:reduce) { .activity-dock { --activity-motion:0ms; transition:none; } .view--chat:not(.is-empty) .messages,.chat-header { transition:none; } .agent-orb--running { animation:none; } }
+@media (prefers-reduced-motion:reduce) { .agent-orb--running { animation:none; } }
 
 /* Agent identity follows the same icon and color system as the conversation. */
 .activity-dock { --agent-color:var(--c-glow); }

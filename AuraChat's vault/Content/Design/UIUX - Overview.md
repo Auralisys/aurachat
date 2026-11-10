@@ -134,10 +134,18 @@ sostituzione della palette Auralisys, dei permessi o delle funzioni di AuraChat.
 - Commenti sulle immagini: marker numerati in accento, mai disegnati sui pixel;
   editor modale con elenco a lato (in colonna sotto 820 px), badge sulla
   miniatura e note nel visualizzatore. Il telefono li mostra in sola lettura.
-- Browser interno a destra, alternativo alla card attivita: indirizzo a pillola,
-  barra di caricamento sottile, ridimensionamento con mouse o tastiera. I link
-  delle risposte si aprono qui (Ctrl+clic nel browser di sistema); la cattura
-  passa sempre dall'editor dei commenti prima di diventare allegato.
+- Header con menu, riepilogo, separatore e pulsante del pannello laterale,
+  senza globo. Il riepilogo fluttua senza ridimensionare la chat e resta
+  indipendente dal pannello con schede, **+**, espansione e Nascondi.
+- Browser e Git nelle schede del pannello, insieme ai dettagli di Output,
+  Fonti, Agenti e Shell. Una pagina nativa per scheda: cambiare scheda o
+  nascondere conserva la pagina, **×** chiude solo quella scelta. I link aprono
+  nuove schede (Ctrl/Cmd+clic nel browser di sistema); la cattura passa sempre
+  dall'editor dei commenti prima di diventare allegato. Sotto 1000 px pannello e
+  chat si alternano; i controlli non introducono PR/MR o terminali finti.
+- Incolli oltre 20 righe: chip inline **N righe**, con anteprima modificabile
+  e azioni Salva, Annulla e Rimuovi. Mantiene tutto il testo nella sua posizione,
+  non è un allegato né un risparmio di token. Bozze conservate tra chat nella sessione.
 - Utilizzo e costi: pulsante nell'intestazione con token in `k`/`M` e costo
   stimato in USD; popover con barra cache / ingresso nuovo / uscita, ragionamento,
   richieste e righe per modello (tag sconto o «Senza prezzo»). Prezzi per modello

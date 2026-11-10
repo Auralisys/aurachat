@@ -220,7 +220,7 @@ const SHELL_BACKGROUND_MS = 15000;
 
 // Commands waiting for approval belong to the same trail as running processes; short finished commands are noise.
 function activityShells(record) {
-  const shells = [...(record?.shells.values() || [])].filter(shell => shell.id === activity.selected || SHELL_ACTIVE.includes(shell.status) || (shellDuration(shell) ?? 0) >= SHELL_BACKGROUND_MS);
+  const shells = [...(record?.shells.values() || [])].filter(shell => (panelShows('shells') && shell.id === activity.selected) || SHELL_ACTIVE.includes(shell.status) || (shellDuration(shell) ?? 0) >= SHELL_BACKGROUND_MS);
   for (const request of permissionRequests.get(state.activeConversationId)?.values() || []) {
     if (!['pending','reviewing'].includes(request.status) || request.action?.kind !== 'command') continue;
     const args = Array.isArray(request.action?.arguments) ? request.action.arguments : [];
@@ -291,7 +291,7 @@ function sourceRow(item, compact = false) {
   const web = /^https?:/.test(safeActivityURL(item.url) || '') && item.kind !== 'image';
   if (web) {
     row.classList.add('activity-row--link');row.title = item.url;
-    row.onclick = async () => {try {await invoke('open_external_url', {url:item.url});} catch (_) {composerStatus(t('chat.link_failed'));}};
+    row.onclick = event => openLink(item.url, event);
   }
   row.append(icon(web ? 'globe' : item.kind === 'image' ? 'image' : 'file'));
   const text = activityText('span', '', 'activity-row__text');
@@ -371,52 +371,65 @@ function orderedItems(section, items) {
 }
 
 function openActivity(section, selected = null) {
-  if (activity.section !== section || activity.selected !== selected) $('#activity-panel-content').scrollTop = 0;
-  if (section !== 'outputs') activity.filter = 'all';
-  activity.visible = true;activity.section = section;activity.selected = selected;renderActivity();
-  $('#activity-panel-title').focus();
+  openPanelSection(section, selected);
 }
 
 function closeActivityPanel() {
-  activity.section = null;activity.selected = null;activity.filter = 'all';renderActivity();$('#activity-toggle').focus();
+  closePanelTab();
 }
 
 function renderActivity() {
   if (!$('#activity-dock')) return;
-  if (treeMenuTrigger?.closest('.git-group, .git-panel') && !$('#tree-menu').hidden) return;
+  resetPanelAccount();
+  if (treeMenuTrigger?.closest('.activity-card, .git-panel') && !$('#tree-menu').hidden) return;
   const focusKey = document.activeElement?.dataset.activityFocus;
   const restoreFocus = () => {
-    if (focusKey) [...$('#activity-dock').querySelectorAll('[data-activity-focus]')].find(el => el.dataset.activityFocus === focusKey)?.focus({preventScroll:true});
+    if (focusKey) [...document.querySelectorAll('#activity-dock [data-activity-focus], #activity-panel [data-activity-focus]')].find(el => el.dataset.activityFocus === focusKey)?.focus({preventScroll:true});
   };
   if (activity.conversationId !== state.activeConversationId) {
     activity.conversationId = state.activeConversationId;activity.selected = null;activity.filter = 'all';
-    if (activity.section === 'shells') activity.section = null;
+    for (const tab of browserPage.tabs.filter(tab => tab.section)) {tab.selected = null;tab.filter = 'all';tab.scroll = 0;}
     if (state.activeConversationId) {refreshActivityShells(state.activeConversationId);refreshPermissionRequests(state.activeConversationId);refreshQuestions(state.activeConversationId);}
   }
+  activity.section = activePanelTab()?.section || null;
+  renderBrowser();
   const dock = $('#activity-dock'), items = activityItems();
-  const hasActivity = state.messages.some(m => ['user','assistant'].includes(m.role)) || state.busy || Object.values(items).some(list => list.length);
-  const visible = activity.visible && hasActivity && !$('#view-chat').hidden && !browserIsOpen();
-  dock.hidden = $('#view-chat').hidden;
+  const hasActivity = !!gitProject() || state.messages.some(m => ['user','assistant'].includes(m.role)) || state.busy || Object.values(items).some(list => list.length);
+  const visible = activity.visible && hasActivity && !$('#view-chat').hidden;
+  dock.hidden = !visible;
   dock.classList.toggle('is-visible', visible);dock.inert = !visible || $('.main').inert;
   dock.setAttribute('aria-hidden', String(!visible));
   $('#activity-toggle').hidden = !hasActivity;
   $('#activity-toggle').setAttribute('aria-expanded', String(visible));
-  dock.classList.toggle('is-panel', !!activity.section);
-  $('#activity-card').hidden = !!activity.section;$('#activity-panel').hidden = !activity.section;
+  $('#activity-toggle').classList.toggle('is-active', visible);
   const card = $('#activity-card');card.replaceChildren();
   const heading = activityText('div', '', 'activity-card__header');
-  heading.append(activityText('span', t('activity.title')), activityButton(t('activity.hide'), 'minimize', () => {
-    activity.visible = false;renderActivity();$('#activity-toggle').focus();
-  }));card.append(heading);
+  const scope = activityText('span', gitProject()?.name || t('activity.title'));scope.title = scope.textContent;
+  const more = activityButton(t('activity.more'), 'more', () => showTreeMenu(heading, more, t('activity.title'), [
+    ['sources', 'activity.sources', () => openActivity('sources')],
+    ['file', 'activity.outputs', () => openActivity('outputs')],
+    ['minimize', 'activity.hide', () => {activity.visible = false;renderActivity();$('#activity-toggle').focus();}],
+  ]));
+  configureMenuTrigger(more, 'tree-menu');
+  heading.append(scope, more);card.append(heading);
   renderGitCard(card);
-  const sections = ['outputs', 'agents', 'sources'];
-  if (items.shells.length || activity.section === 'shells') sections.push('shells');
+  const sections = ['outputs', 'sources'];
+  if (items.agents.length) sections.push('agents');
+  if (items.shells.length) sections.push('shells');
   for (const section of sections) {
     const group = activityText('section', '', 'activity-group');
+    const header = activityText('div', '', 'activity-group__header');
     const title = activityText('button', '', 'activity-group__title');title.type = 'button';
     title.dataset.activityFocus = `group:${section}`;
     title.append(activityText('span', t(`activity.${section}`)), activityText('span', String(items[section].length)));
-    title.onclick = () => openActivity(section);group.append(title);
+    title.onclick = () => openActivity(section);header.append(title);
+    if (section === 'sources') header.append(activityButton(t('activity.add_source'), 'plus', () => $('#composer-attach').click()));
+    if (section === 'outputs') header.append(activityButton(t('activity.create_output'), 'plus', () => {
+      if (!composerText().trim()) setComposerText(t('activity.output_prompt'));
+      autoGrow();$('#composer-input').focus();
+      composerStatus(t('activity.output_hint'));
+    }));
+    group.append(header);
     if (section === 'agents' && items.agents.length) {
       const active = items.agents.filter(a => ['running','waiting'].includes(a.status));
       group.append(activityText('p', `${active.length} ${t('activity.running_count')} · ${items.agents.length} ${t('activity.total')}`, 'activity-agents-summary'));
@@ -431,7 +444,7 @@ function renderActivity() {
     }
     card.append(group);
   }
-  if (!activity.section) {restoreFocus();return;}
+  if (!activity.section || !browserPage.open) {restoreFocus();return;}
   if (activity.section === 'git') {
     $('#activity-panel-title').textContent = t('git.changes');
     $('#activity-back').hidden = true;$('#activity-tabs').hidden = true;
@@ -443,7 +456,7 @@ function renderActivity() {
     : t(`activity.${section}`);
   $('#activity-back').hidden = !selected;
   const tabs = $('#activity-tabs');tabs.replaceChildren();tabs.hidden = !!selected;
-  for (const name of sections) {
+  for (const name of sections.includes(section) ? sections : [...sections, section]) {
     const tab = activityText('button', `${t(`activity.${name}`)} · ${items[name].length}`);tab.type = 'button';
     tab.dataset.activityFocus = `tab:${name}`;
     tab.setAttribute('aria-current', String(name === section));tab.onclick = () => openActivity(name);tabs.append(tab);
@@ -503,7 +516,7 @@ function renderReferenceDetail(content, item) {
       }
       if (/^https?:/.test(url)) {
         const open = activityText('button', t('activity.open_link'), 'activity-open-link');open.type = 'button';
-        open.onclick = async () => {try {await invoke('open_external_url', {url});} catch (_) {composerStatus(t('chat.link_failed'));}};content.append(open);
+        open.onclick = event => openLink(url, event);content.append(open);
       }
     }
   }
@@ -513,7 +526,7 @@ function renderReferenceDetail(content, item) {
     else body.innerHTML = markdownHTML(item.content);
     body.querySelectorAll('a').forEach(link => link.onclick = async e => {
       e.preventDefault();if (!/^https?:$/.test(new URL(link.href).protocol)) return;
-      try {await invoke('open_external_url', {url: link.href});} catch (_) {composerStatus(t('chat.link_failed'));}
+      await openLink(link.href, e);
     });content.append(body);
   } else if (!item.url && !item.path) content.append(activityText('p', t('activity.no_updates'), 'activity-empty'));
 }
@@ -686,19 +699,21 @@ async function setupActivity() {
     if (payload?.conversation_id !== state.activeConversationId || ['__delta','__reasoning'].includes(payload?.kind)) return;
     scheduleActivityRender();
   });
-  // The browser and the activity dock share the right side: asking for activity closes the browser.
   $('#activity-toggle').onclick = () => {
-    if (browserIsOpen()) {activity.visible = true;closeBrowser();}
-    else {activity.visible = !activity.visible;renderActivity();}
+    activity.visible = !activity.visible;renderActivity();
   };
   $('#activity-close').onclick = closeActivityPanel;
   $('#activity-back').onclick = () => openActivity(activity.section);
   $('#activity-dock').onkeydown = e => {
     if (e.key !== 'Escape') return;
     e.stopPropagation();
+    e.preventDefault();activity.visible = false;renderActivity();$('#activity-toggle').focus();
+  };
+  $('#activity-panel').onkeydown = e => {
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();e.preventDefault();
     if (activity.selected) openActivity(activity.section);
-    else if (activity.section) closeActivityPanel();
-    else {activity.visible = false;renderActivity();$('#activity-toggle').focus();}
+    else closeActivityPanel();
   };
   await appWindow.listen('agent-activity', ({payload}) => {
     if (!payload?.conversation_id || typeof payload.id !== 'string' || !['running','waiting','completed','failed','cancelled'].includes(payload.status)) return;

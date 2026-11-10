@@ -165,12 +165,12 @@ function conversationInData(data, id) {
 }
 
 function saveChatDraft() {
-  state.drafts.set(state.activeConversationId, {text:composerText(), attachments:structuredClone(state.attachments), editing:state.editingMessageIndex});
+  state.drafts.set(state.activeConversationId, {text:composerText(), parts:composerParts(), attachments:structuredClone(state.attachments), editing:state.editingMessageIndex});
 }
 
 function restoreChatDraft(id) {
   const draft = state.drafts.get(id);
-  setComposerText(draft?.text || '');autoGrow();
+  setComposerParts(draft?.parts || [{text:draft?.text || ''}]);autoGrow();
   state.attachments = structuredClone(draft?.attachments || []);state.editingMessageIndex = draft?.editing ?? null;renderDraft();
 }
 
@@ -178,6 +178,7 @@ function appendConversationDraft(id, text) {
   const draft = state.drafts.get(id) || { text: '', attachments: [], editing: null };
   const separator = draft.text && !/\s$/.test(draft.text) ? ' ' : '';
   draft.text = (draft.text || '') + separator + text;
+  if (draft.parts) draft.parts.push({text:separator + text});
   state.drafts.set(id, draft);
 }
 
@@ -276,7 +277,7 @@ function icon(name) {
     }
     return svg;
   }
-  const glyph = {computer:'Monitor', gear:'Settings', person:'UserRound', cpu:'Cpu', microphone:'Mic', search:'Search', back:'ArrowLeft', trash:'Trash2', compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', image:'Image', fileCode:'FileCode', fileData:'FileJson', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown', globe:'Globe', external:'ExternalLink', forward:'ArrowRight', reload:'RotateCw', capture:'Camera'}[name];
+  const glyph = {computer:'Monitor', gear:'Settings', person:'UserRound', cpu:'Cpu', microphone:'Mic', search:'Search', back:'ArrowLeft', trash:'Trash2', compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', image:'Image', fileCode:'FileCode', fileData:'FileJson', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown', globe:'Globe', external:'ExternalLink', forward:'ArrowRight', reload:'RotateCw', capture:'MessageSquarePlus', summary:'List', panelRight:'PanelRight', expand:'Maximize2', restore:'Minimize2', git:'GitBranch', sources:'Files'}[name];
   if (glyph && lucide.icons[glyph]) return lucide.createElement(lucide.icons[glyph], {class:'ui-icon','aria-hidden':'true'});
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
@@ -1936,9 +1937,14 @@ async function init() {
   $('#btn-new-chat').addEventListener('click', () => newChat());
 
   // Composer
+  setupComposerPastes();
   skillsChooser = setupProjectSkills();
   const input = $('#composer-input');
   input.addEventListener('input', () => {autoGrow();updateComposerControls();});
+  // Chromium leaves a <br> after deleting everything, which defeats :empty; mutating the content would break undo.
+  const syncComposerEmpty = () => input.classList.toggle('is-empty', !input.textContent && !input.querySelector('.paste-token'));
+  new MutationObserver(syncComposerEmpty).observe(input, {childList:true, subtree:true, characterData:true});
+  syncComposerEmpty();
   input.addEventListener('keydown', (e) => {
     if (e.defaultPrevented || e.isComposing) return;
     if (e.key === 'Enter') {
@@ -1958,7 +1964,7 @@ async function init() {
     // Spreadsheets and documents also offer a picture of the copied text: prefer the text.
     const images = text.trim() ? [] : clipboardImages(clipboard);
     if (images.length) {addImageAttachments(images);return;}
-    insertComposerText(text);
+    insertComposerPaste(text);
     notifyComposerInput();
   });
   $('#composer-send').addEventListener('click', send);

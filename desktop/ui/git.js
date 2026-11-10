@@ -94,10 +94,13 @@ function renderGitCard(card) {
   if (!gitContext()) return;
   const group = activityText('section', '', 'activity-group git-group');
   const heading = activityText('button', '', 'activity-group__title');heading.type = 'button';heading.dataset.activityFocus = 'group:git';
-  heading.append(activityText('span', t('git.changes')));
+  heading.append(icon('git'), activityText('span', t('git.changes')));
   if (gitView.data) heading.append(gitStats(gitView.data));
-  heading.classList.add('git-menu-trigger');configureMenuTrigger(heading, 'tree-menu');
-  heading.onclick = () => openGitMenu(group, heading);group.append(heading);
+  heading.onclick = () => openActivity('git');
+  const row = activityText('div', '', 'git-summary-row');
+  const more = activityButton(t('git.more'), 'more', () => openGitMenu(group, more));
+  more.classList.add('git-menu-trigger');configureMenuTrigger(more, 'tree-menu');
+  row.append(heading, more);group.append(row);
   const data = gitView.data;
   if (data) heading.setAttribute('aria-description', `${data.branch || t('git.detached')} · ${data.files.length} ${t('git.files')}`);
   else group.append(activityText('p', gitView.loading ? t('git.loading') : t(gitView.repositories?.length === 0 ? 'git.no_repositories' : 'git.open'), 'activity-empty'));
@@ -372,5 +375,5 @@ async function setupGitEvents() {
 
 window.addEventListener('focus', scheduleGitRefresh);
 setInterval(() => {
-  if (gitView.key && activity.visible && !document.hidden) refreshGit(true);
+  if (gitView.key && (activity.visible || panelShows('git')) && !document.hidden) refreshGit(true);
 }, 2000);

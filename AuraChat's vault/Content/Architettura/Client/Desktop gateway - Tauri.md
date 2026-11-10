@@ -194,13 +194,14 @@ Il nativo e simulato nel test browser; nessuna reinstallazione della produzione.
 
 ## Output finali e Git — 21 ottobre 2026
 
-La sidebar mostra **Cambiamenti +N −N** sopra **Output**. Solo
+Il riepilogo mostra **Modifiche +N −N** sopra **Output**. Solo
 `publish_project_output` pubblica un file finale, con `final_output: true`:
 scritture sorgente, script e note temporanee non compaiono automaticamente.
 Nessuna blacklist di estensioni: Markdown e script richiesti come deliverable
 restano pubblicabili. Le pubblicazioni si ricostruiscono anche dai sub-agenti.
 
-Il menu Cambiamenti offre Commit, Commit e push e dettaglio completo. Il dettaglio
+La riga Modifiche apre la scheda Git; il menu ellissi separato offre Commit,
+Commit e push e dettaglio completo. Il dettaglio
 separa stage reale/non staged, con azioni +/− e operazioni su tutto il gruppo.
 Nel gruppo Non staged, cestino per singolo file e Scarta tutti richiedono conferma
 con l'elenco dei file. Il ripristino usa l'indice corrente: lo stage, anche
@@ -724,20 +725,41 @@ UI: `image-annotations.js` è l'editor (dialog modale, clic o Invio per aggiunge
 trascinamento e frecce per spostare, Canc per rimuovere, Ctrl+Invio per salvare);
 `images.js` aggiunge pulsante, badge e marker nel visualizzatore.
 
-Browser (`browser.rs`, `browser.js`): webview figlia della finestra `main`
+Browser (`browser.rs`, `browser.js`): una webview figlia per scheda della finestra `main`
 (feature Tauri `unstable`; per questo le API usano `Window`/`get_window` invece di
 `get_webview_window`). I comandi `browser_open/bounds/action/close/capture`
-rifiutano chiamanti diversi da `main`; la pagina remota non riceve IPC perché la
+rifiutano chiamanti diversi da `main` e ricevono `tab_id` in snake_case, validato
+per evitare collisioni con altre webview. Una mappa conserva lo stato di ogni
+scheda; la pagina remota non riceve IPC perché la
 capability è limitata alla webview locale. Solo http/https, mai `*.localhost`
-(protocolli dell'app), testo libero come ricerca DuckDuckGo, pop-up nella stessa
-pagina. Lo stato arriva con `browser-state`/`browser-blocked`. La webview nativa
+(protocolli dell'app), testo libero come ricerca DuckDuckGo, pop-up della scheda
+attiva trasformati in nuove schede dalla UI tramite `browser-new-tab`.
+Lo stato arriva con `browser-state`/`browser-blocked`, identificato da `tab_id`. La webview nativa
 copre il DOM, quindi la UI la nasconde sotto dialog, menu e overlay e la
-riposiziona a ogni cambio di layout; il pannello si alterna con l'attività.
+riposiziona a ogni cambio di layout; solo la pagina attiva può essere visibile.
+La coda JS serializza apertura, limiti, azioni, cattura e chiusura. Nascondere
+conserva le pagine; chiudere aspetta il backend e mantiene la scheda in caso di
+errore. Logout/cambio account chiude le schede; non si ripristinano al riavvio.
+Il riepilogo è indipendente dal pannello multi-tab e non riserva una colonna.
+Git e dettagli attività riusano i renderer esistenti e seguono la chat/progetto
+corrente; filtri, indirizzi in bozza e messaggio Git si conservano al cambio scheda.
 La cattura usa WebView2 `CapturePreview` (PNG della parte visibile) e passa
-dall'editor prima di diventare allegato; su macOS non è disponibile.
+dall'editor prima di diventare allegato; su macOS non è disponibile. Una
+navigazione durante la cattura, o un cambio chat/progetto/account prima di
+allegarla, viene rifiutato.
 
-Verifica: `desktop/tests/image-annotations.cjs`, `browser::tests` e test LLM su
+Verifica: `desktop/tests/image-annotations.cjs`, `desktop/tests/panel-tabs.cjs`,
+`browser::tests` e test LLM su
 validazione, testo per il modello e bridge.
+
+Composer (`composer.js`): incolli con più di 20 righe logiche diventano nodi
+atomici `contenteditable=false` con conteggio e anteprima modificabile. Il
+testo letterale è serializzato in un attributo JSON, non interpretato come HTML.
+Un unico attraversamento del DOM espande i blocchi per invio, copia/taglio e
+offset delle skill; gli stessi blocchi si salvano nella bozza in memoria.
+Le operazioni di editing native mantengono Annulla/Ripeti; nessuna modifica al
+protocollo messaggi o al companion. `desktop/tests/composer-paste.cjs` copre
+soglia, posizione, CRLF, anteprima, più blocchi, skill, cambio chat e invio completo.
 
 ## Utilizzo e costo stimato
 

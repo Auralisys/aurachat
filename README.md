@@ -42,7 +42,9 @@ present, but building and testing it requires macOS and Xcode.
   the gateway computer, within the permissions you grant.
 - **A desktop app that stays out of the way.** System tray operation, local
   dictation, live Markdown with code copy, compact reasoning previews and an
-  activity panel. Streaming respects your reading position, with a jump-to-latest
+  floating summary and a separate tabbed side panel for browser pages, Git and
+  conversation tools. Long pasted text folds into editable inline line-count
+  chips; the complete text is sent. Streaming respects your reading position, with a jump-to-latest
   control and per-conversation reading memory for the current session.
 - **Show the model what you mean.** Attach or paste images, place numbered
   comments on them, or open links in a built-in browser beside the chat and

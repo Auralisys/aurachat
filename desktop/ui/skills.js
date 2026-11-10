@@ -23,6 +23,7 @@ function setupProjectSkills() {
     const before = composerText().slice(0, cursor);
     const slash = before.lastIndexOf('/');
     if (slash < 0) return null;
+    if (composerPastedAt(slash)) return null;
     if (slash > 0 && !/\s/.test(before[slash - 1])) return null;
     const name = before.slice(slash + 1);
     if (!/^[a-zA-Z0-9_-]*$/.test(name)) return null;
@@ -42,7 +43,7 @@ function setupProjectSkills() {
     let match;
     while ((match = regex.exec(text))) {
       const raw = match[2];
-      if (names.has(raw.slice(1).toLowerCase())) {
+      if (names.has(raw.slice(1).toLowerCase()) && !composerPastedAt(match.index + match[1].length)) {
         tokens.push({start: match.index + match[1].length, end: match.index + match[1].length + raw.length, raw});
       }
     }

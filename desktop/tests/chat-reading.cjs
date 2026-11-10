@@ -140,6 +140,12 @@ async function run() {
     await page.evaluate(()=>{const box=document.querySelector('#messages');box.scrollTop=box.scrollHeight;});await settled();
     await page.evaluate(()=>__emit('__delta',' Ritorno spontaneo in fondo.'.repeat(15)));await settled();
     assert.ok(await bottom()<=2);
+    // Closing the side panel widens the chat and clamps its scroll; reopening must stay at the bottom.
+    for(const control of ['#panel-toggle','#browser-close','#panel-toggle','#browser-close']){
+      await page.click(control);await settled();
+      assert.ok(await bottom()<=2,`Chat must stay at the bottom after ${control}`);
+    }
+    assert.equal(await page.locator('#chat-latest').isHidden(),true);
 
     // Growing code and tables cannot widen the chat or force the transcript sideways.
     await page.evaluate(()=>__emit('__delta','\n\n<img src=x onerror="window.__xss=true"><script>window.__xss=true</script>\n\nTesto **sicuro**.'));

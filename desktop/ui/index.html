@@ -87,9 +87,16 @@
 
           <section id="view-chat" class="view view--chat" hidden>
             <div class="chat-header"><h1 id="conversation-title" class="conversation-title">AuraChat</h1>
-              <details id="context-info" class="context-info" hidden><summary><svg data-icon="usage" aria-hidden="true"></svg><span id="context-summary"></span></summary><div id="context-details"></div></details><button id="conversation-options" class="icon-button" data-i18n-aria-label="chat.conversation_options" data-i18n-title="chat.conversation_options" disabled><svg data-icon="more" aria-hidden="true"></svg></button>
-              <button id="browser-toggle" class="icon-button" aria-expanded="false" aria-controls="browser-panel" data-i18n-aria-label="browser.toggle" data-i18n-title="browser.toggle"><svg data-icon="globe" aria-hidden="true"></svg></button>
-              <button id="activity-toggle" class="icon-button" aria-expanded="true" aria-controls="activity-dock" data-i18n-aria-label="activity.toggle" data-i18n-title="activity.toggle"><svg data-icon="settings" aria-hidden="true"></svg></button>
+              <details id="context-info" class="context-info" hidden><summary><svg data-icon="usage" aria-hidden="true"></svg><span id="context-summary"></span></summary><div id="context-details"></div></details>
+              <div class="chat-tools">
+                <button id="conversation-options" class="icon-button" data-i18n-aria-label="chat.conversation_options" data-i18n-title="chat.conversation_options" disabled><svg data-icon="more" aria-hidden="true"></svg></button>
+                <div class="summary-anchor">
+                  <button id="activity-toggle" class="icon-button" aria-expanded="false" aria-controls="activity-dock" data-i18n-aria-label="activity.toggle" data-i18n-title="activity.toggle"><svg data-icon="summary" aria-hidden="true"></svg></button>
+                  <aside id="activity-dock" class="activity-dock" data-i18n-aria-label="activity.title" hidden><div id="activity-card" class="activity-card"></div></aside>
+                </div>
+                <span class="chat-tools__separator" aria-hidden="true"></span>
+                <button id="panel-toggle" class="icon-button" aria-expanded="false" aria-controls="browser-panel" data-i18n-aria-label="panel.toggle" data-i18n-title="panel.toggle"><svg data-icon="panelRight" aria-hidden="true"></svg></button>
+              </div>
             </div>
             <div id="messages" class="messages" tabindex="-1" data-i18n-aria-label="chat.conversation"></div>
             <div class="composer">
@@ -119,8 +126,17 @@
             </div>
           </section>
         </main>
-        <aside id="browser-panel" class="browser-panel" data-i18n-aria-label="browser.title" hidden>
-          <div id="browser-resize" class="browser-panel__resize" role="separator" aria-orientation="vertical" aria-controls="browser-panel" tabindex="0" data-i18n-aria-label="browser.resize" data-i18n-title="browser.resize"></div>
+        <aside id="browser-panel" class="browser-panel" data-i18n-aria-label="panel.title" hidden>
+          <div id="browser-resize" class="browser-panel__resize" role="separator" aria-orientation="vertical" aria-controls="browser-panel" tabindex="0" data-i18n-aria-label="panel.resize" data-i18n-title="panel.resize"></div>
+          <div class="panel-tabbar">
+            <div id="panel-tabs" class="panel-tabs" role="tablist" data-i18n-aria-label="panel.tabs"></div>
+            <button id="panel-add-tab" type="button" class="icon-button" data-i18n-aria-label="panel.new_tab" data-i18n-title="panel.new_tab"><svg data-icon="plus" aria-hidden="true"></svg></button>
+            <div class="panel-window-actions">
+              <button id="panel-expand" type="button" class="icon-button" aria-pressed="false" data-i18n-aria-label="panel.expand" data-i18n-title="panel.expand"><svg data-icon="expand" aria-hidden="true"></svg></button>
+              <button id="browser-close" type="button" class="icon-button" data-i18n-aria-label="panel.hide" data-i18n-title="panel.hide"><svg data-icon="panelRight" aria-hidden="true"></svg></button>
+            </div>
+          </div>
+          <div id="panel-content" class="panel-content" role="tabpanel">
           <form id="browser-bar" class="browser-bar" autocomplete="off">
             <button id="browser-back" type="button" class="icon-button" data-i18n-aria-label="browser.back" data-i18n-title="browser.back"><svg data-icon="back" aria-hidden="true"></svg></button>
             <button id="browser-forward" type="button" class="icon-button" data-i18n-aria-label="browser.forward" data-i18n-title="browser.forward"><svg data-icon="forward" aria-hidden="true"></svg></button>
@@ -128,21 +144,26 @@
             <input id="browser-address" class="browser-address" type="text" inputmode="url" spellcheck="false" enterkeyhint="go" data-i18n-aria-label="browser.address" data-i18n-placeholder="browser.address_placeholder">
             <button id="browser-capture" type="button" class="icon-button browser-capture" data-i18n-aria-label="browser.capture" data-i18n-title="browser.capture"><svg data-icon="capture" aria-hidden="true"></svg></button>
             <button id="browser-external" type="button" class="icon-button" data-i18n-aria-label="browser.external" data-i18n-title="browser.external"><svg data-icon="external" aria-hidden="true"></svg></button>
-            <button id="browser-close" type="button" class="icon-button" data-i18n-aria-label="browser.close" data-i18n-title="browser.close"><svg data-icon="close" aria-hidden="true"></svg></button>
           </form>
           <div id="browser-progress" class="browser-progress" hidden></div>
           <p id="browser-status" class="browser-status" role="status" hidden></p>
           <div id="browser-view" class="browser-view">
-            <div id="browser-empty" class="browser-empty"><svg data-icon="globe" aria-hidden="true"></svg><p data-i18n="browser.empty"></p></div>
+            <div id="browser-empty" class="browser-empty">
+              <h2 data-i18n="panel.tools"></h2>
+              <div class="panel-tools">
+                <button id="panel-open-git" type="button"><svg data-icon="git" aria-hidden="true"></svg><span data-i18n="git.changes"></span></button>
+                <button id="panel-open-browser" type="button"><svg data-icon="globe" aria-hidden="true"></svg><span data-i18n="browser.title"></span></button>
+              </div>
+              <p id="panel-git-note" data-i18n="panel.git_note" hidden></p>
+              <p data-i18n="browser.empty"></p>
+            </div>
           </div>
-        </aside>
-        <aside id="activity-dock" class="activity-dock" data-i18n-aria-label="activity.title" hidden>
-          <div id="activity-card" class="activity-card"></div>
           <section id="activity-panel" class="activity-panel" hidden>
             <header class="activity-panel__header"><button id="activity-back" class="icon-button" data-i18n-aria-label="ui.back"><svg data-icon="back" aria-hidden="true"></svg></button><h2 id="activity-panel-title" tabindex="-1"></h2><button id="activity-close" class="icon-button" data-i18n-aria-label="modal.close"><svg data-icon="close" aria-hidden="true"></svg></button></header>
             <nav id="activity-tabs" class="activity-tabs" data-i18n-aria-label="activity.title"></nav>
             <div id="activity-panel-content" class="activity-panel__content"></div>
           </section>
+          </div>
         </aside>
         </div>
       </div>

@@ -20,6 +20,7 @@ const PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADh
       if(['get_data','refresh_data'].includes(cmd))return structuredClone(window.__data);
       if(cmd==='list_shells')return [];if(cmd==='get_conversation')return {...structuredClone(conversation(args.conversation_id)),messages_loaded:true};if(cmd==='save_data'){window.__data=structuredClone(args.data);return structuredClone(window.__data);}
       if(cmd==='browser_open'){const url=args.url.includes('://')?args.url:`https://${args.url}/`;return {url,capture:true};}
+      if(cmd==='browser_capture'&&window.__delayCapture)await new Promise(resolve=>window.__releaseCapture=resolve);
       if(cmd==='browser_capture')return {data:PNG,mime_type:'image/png',url:'https://user:pw@example.com/pagina?token=segreto#x',title:'Esempio'};
       if(cmd==='chat'){
         const id=args.conversation_id;
@@ -99,22 +100,22 @@ const PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADh
   await viewer.locator('.annotation-notes').click();assert.equal(await viewer.evaluate(v=>v.open),true);
   await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('dialog.image-viewer').open);
 
-  // Browser interno: il globo apre il pannello vuoto con l'indirizzo a fuoco.
-  await page.click('#browser-toggle');
+  // Il pannello a schede si apre senza nascondere il riepilogo.
+  await page.click('#panel-toggle');
   assert.equal(await page.locator('#browser-panel').isVisible(),true);
   assert.equal(await page.evaluate(()=>document.activeElement.id),'browser-address');
   assert.equal(await page.locator('#browser-empty').isVisible(),true);
-  assert.equal(await page.locator('#activity-dock').evaluate(d=>d.classList.contains('is-visible')),false);
+  assert.equal(await page.locator('#activity-dock').isVisible(),true);
   await page.fill('#browser-address','example.com');await page.keyboard.press('Enter');
   await page.waitForFunction(()=>window.__calls.some(call=>call.cmd==='browser_open'));
   const opened=(await calls('browser_open'))[0];
   const view=await page.locator('#browser-view').boundingBox();
   assert.equal(opened.url,'example.com');
   assert.deepEqual(opened.bounds,{x:Math.round(view.x),y:Math.round(view.y),width:Math.round(view.width),height:Math.round(view.height)});
-  await page.evaluate(()=>window.__events['browser-state']({payload:{url:'https://example.com/',title:'Example',loading:true}}));
+  await page.evaluate(()=>window.__events['browser-state']({payload:{tab_id:activePanelTab().id,url:'https://example.com/',title:'Example',loading:true}}));
   assert.equal(await page.locator('#browser-progress').isVisible(),true);
   assert.equal(await page.locator('#browser-reload').getAttribute('aria-label'),'Interrompi caricamento');
-  await page.evaluate(()=>window.__events['browser-state']({payload:{url:'https://example.com/',title:'Example',loading:false}}));
+  await page.evaluate(()=>window.__events['browser-state']({payload:{tab_id:activePanelTab().id,url:'https://example.com/',title:'Example',loading:false}}));
   assert.equal(await page.locator('#browser-address').inputValue(),'https://example.com/');
   assert.equal((await lastBounds()).visible,true);
 
@@ -159,17 +160,33 @@ const PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADh
   await page.waitForFunction(()=>window.__calls.some(call=>call.cmd==='open_external_url'));
   assert.equal((await calls('open_external_url'))[0].url,'https://example.com/docs');
 
-  // L'attività e il browser si alternano sul lato destro.
+  // Riepilogo e schede sono indipendenti; nascondere il pannello non chiude le pagine.
   await page.click('#activity-toggle');
-  assert.equal(await page.locator('#browser-panel').isHidden(),true);
+  assert.equal(await page.locator('#browser-panel').isVisible(),true);
+  assert.equal(await page.locator('#activity-dock').isHidden(),true);
+  await page.click('#activity-toggle');
   assert.equal(await page.locator('#activity-dock').evaluate(d=>d.classList.contains('is-visible')),true);
-  assert.equal((await calls('browser_close')).length,1);
-  await page.click('#browser-toggle');
-  assert.equal(await page.locator('#activity-dock').evaluate(d=>d.classList.contains('is-visible')),false);
+  assert.equal(await page.locator('#panel-tabs [role=tab]').count(),2);
+  assert.equal((await calls('browser_close')).length,0);
   await page.click('#browser-close');
   assert.equal(await page.locator('#browser-panel').isHidden(),true);
-  assert.equal(await page.evaluate(()=>document.activeElement.id),'browser-toggle');
+  assert.equal(await page.evaluate(()=>document.activeElement.id),'panel-toggle');
+  await page.click('#panel-toggle');
+  assert.equal(await page.locator('#browser-address').inputValue(),'https://example.com/docs');
+  assert.equal((await calls('browser_open')).length,2);
+  await page.locator('.panel-tab.is-active .panel-tab__close').click();
+  await page.waitForFunction(()=>window.__calls.some(call=>call.cmd==='browser_close'));
+  assert.equal((await calls('browser_close'))[0].tab_id,(await calls('browser_open'))[1].tab_id);
 
+  // An account change while capture is pending must never attach the old page.
+  const attachmentsBeforeLogout=await page.evaluate(()=>state.attachments.length);
+  await page.evaluate(()=>window.__delayCapture=true);
+  await page.click('#browser-capture');
+  await page.waitForFunction(()=>window.__releaseCapture);
+  await page.evaluate(()=>{state.config.firebase_auth_set=false;renderActivity();window.__releaseCapture();});
+  await page.evaluate(async()=>{await browserQueue;await new Promise(requestAnimationFrame);});
+  assert.equal(await page.evaluate(()=>state.attachments.length),attachmentsBeforeLogout);
+  assert.equal(await page.locator('dialog.annotator[open]').count(),0);
   assert.deepEqual(errors,[]);
   await browser.close();
   console.log('image annotations and browser ok');

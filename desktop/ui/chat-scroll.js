@@ -26,8 +26,10 @@ function scrollFollower(viewport, changed = () => {}) {
     if (event.target !== viewport) return;
     const top = viewport.scrollTop;
     if (written === null || Math.abs(top - written) > .5) {
-      if (top < sampled - .5) following = false;
-      else if (top > sampled + .5 && floor() - top <= 2) following = true;
+      const atFloor = floor() - top <= 2;
+      // A wider viewport clamps scrollTop to its new bottom; that is not the reader scrolling up.
+      if (top < sampled - .5 && !atFloor) following = false;
+      else if (top > sampled + .5 && atFloor) following = true;
     }
     sampled = top;written = null;changed();
   }, {passive:true});
