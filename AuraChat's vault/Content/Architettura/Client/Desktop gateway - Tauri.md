@@ -456,11 +456,14 @@ sull'esecuzione locale.
 ## Titoli sintetici delle chat — 26 ottobre 2026
 
 Il testo troncato del primo messaggio resta soltanto un titolo provvisorio.
-Dopo una risposta riuscita, `generate_chat_title` in
-`desktop/src-tauri/src/lib.rs` avvia una richiesta separata in background tramite
+Dal fix dell'11 novembre 2026, `chat_inner` inizializza e salva titolo, stato e
+modello sotto `history_save_lock`, senza salvare il turno incompleto.
+Avvia poi `generate_chat_title` in `desktop/src-tauri/src/lib.rs` come task
+asincrono separato, prima di attendere la risposta principale, tramite
 `llm::conversation_title` (`desktop/src-tauri/src/llm.rs`). Usa il modello della
-chat, nessuno strumento, massimo 2.000 caratteri del primo messaggio e 1.000 della
-prima risposta, output 128 token e timeout 25 secondi. Il prompt chiede 3-6
+chat, nessuno strumento, massimo 2.000 caratteri del primo messaggio (nomi dei
+file se il testo e vuoto) e timeout 25 secondi. Non richiede la prima risposta
+e non aspetta ragionamento o strumenti. Il prompt chiede 3-6
 parole nella lingua dell'utente. Sul dominio ufficiale DeepSeek viene anche
 disabilitato il thinking; sugli endpoint custom non vengono imposti parametri
 reasoning proprietari. E una chiamata AI aggiuntiva, non un servizio gratuito.
@@ -472,6 +475,10 @@ chi prenota pending -> generating chiama il modello; nessun altro desktop o
 telefono deve farlo. Una rinomina manuale annulla l'applicazione del risultato.
 Errori o output non valido mantengono il titolo provvisorio, registrano l'errore
 e mostrano un avviso sulla chat aperta, senza retry AI automatici.
+Un errore o Stop del turno non annulla il titolo gia avviato; riprovare una chat
+ancora senza messaggi salvati non resetta gli stati generating/generated/failed/manual.
+La UI conserva lo stato piu avanzato quando il risultato del turno o un
+salvataggio della sidebar arriva dopo `conversation-title-updated`.
 
 Il desktop riceve `conversation-title-updated`; il relay live e il tree del
 companion propagano il titolo a desktop remoto e mobile. La generazione e sempre
@@ -480,9 +487,9 @@ sul gateway che esegue il turno. Le vecchie chat non vengono rinominate in massa
 Le notifiche di completamento usano i primi 200 caratteri della risposta
 conclusiva del modello, separata dal testo accumulato prima delle chiamate agli
 strumenti tramite il callback interno `__final_response`. Non cambiano il testo
-della chat. La notifica della nuova chat attende il tentativo di titolo AI in
-background; la risposta viene restituita alla UI senza attendere. In caso di
-errore del titolo rimane il provvisorio; Stop ed errori notificano lo stato
+della chat. La notifica usa il titolo disponibile al completamento, senza
+attendere il task del titolo. Se ancora in corso o fallito, rimane il
+provvisorio; Stop ed errori notificano lo stato
 esplicitamente, senza riciclare testo di ragionamento o lavoro ancora parziale.
 
 ## Notifiche opt-in e relay economico — 30 ottobre 2026

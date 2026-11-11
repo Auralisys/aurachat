@@ -110,6 +110,8 @@ companion: invio, coda, guida immediata, Stop, domande e approvazioni.
 Icona computer a sinistra del titolo; consensi locali invariati. Le
 nuove chat generano inoltre un titolo sintetico in background dopo la prima
 risposta, con contesto ridotto e protezione delle rinomine manuali.
+Dal fix dell'11 novembre 2026 il titolo parte gia all'avvio del primo turno,
+in parallelo alla risposta, usando solo il primo messaggio.
 Entrambe le installazioni vanno aggiornate. Modifiche non ancora verificate
 sulle app installate; eseguiti solo controlli statici, nessuna suite di test,
 build di produzione o reinstallazione.

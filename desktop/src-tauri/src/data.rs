@@ -273,6 +273,29 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_save_preserves_initialized_title_and_manual_rename_wins() {
+        let base:ChatData=serde_json::from_value(serde_json::json!({"projects":[],"conversations":[{
+            "id":"chat","title":"Chat","created_at":1,"updated_at":1,"context_tokens":0
+        }]})).unwrap();
+        let mut desired=base.clone();
+        desired.conversations[0].title="First message".into();
+        let mut current=desired.clone();
+        current.conversations[0].title_state=Some("pending".into());
+        current.conversations[0].model=Some("selected-model".into());
+        let saved=ChatData::rebase(&base,&desired,&current).unwrap();
+        assert_eq!(saved.conversations[0].title_state.as_deref(),Some("pending"));
+        assert_eq!(saved.conversations[0].model.as_deref(),Some("selected-model"));
+        assert!(saved.conversations[0].messages.is_empty());
+
+        let mut desired=saved.clone();
+        desired.conversations[0].title="My title".into();
+        desired.conversations[0].title_state=Some("manual".into());
+        let renamed=ChatData::rebase(&saved,&desired,&saved).unwrap();
+        assert_eq!(renamed.conversations[0].title,"My title");
+        assert_eq!(renamed.conversations[0].title_state.as_deref(),Some("manual"));
+    }
+
+    #[test]
     fn v2_tree_contains_only_metadata_and_preserves_order_and_ids() {
         let full:ChatData=serde_json::from_value(serde_json::json!({"projects":[{"id":"p","name":"P","source_folders":["C:/work"],"conversations":[{
             "id":"c","title":"Chat","messages":[{"role":"user","content":"private message","attachments":[{"name":"a.txt","content":"private attachment"}],"feedback":true}],

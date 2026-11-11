@@ -520,9 +520,6 @@ async fn run_chat(
     let event_id=format!("{}-{}",conversation_id,data::now_millis());
     let _=app.emit("live-turn",serde_json::json!({"conversation_id":conversation_id.clone(),"turn_id":event_id.clone(),"status":"running","user_content":content.clone()}));
     let result=chat_inner(app.clone(),state.clone(),conversation_id.clone(),content,attachments,retry,edit_index,expected_owner).await;
-    let title_job=result.as_ref().ok().filter(|reply|!reply.cancelled)
-        .and_then(|reply|reply.data.find_conversation(&conversation_id))
-        .filter(|chat|chat.title_state.as_deref()==Some("pending")).cloned();
     let turn_status=match &result {Ok(reply) if reply.cancelled=>"cancelled",Ok(_)=>"completed",Err(_)=>"failed"};
     let _=app.emit("live-turn",serde_json::json!({"conversation_id":conversation_id.clone(),"turn_id":event_id.clone(),"status":turn_status}));
     let (title,body)=match &result {
@@ -535,16 +532,6 @@ async fn run_chat(
         _=>body.into(),
     };
     tauri::async_runtime::spawn(async move {
-        if let Some(conversation)=title_job {
-            if let Err(error)=generate_chat_title(&app,&notification_owner,&conversation).await {
-                eprintln!("Conversation title generation failed: {error}");
-                let state=app.state::<AppState>();
-                if state.firestore.uid().as_deref()==Some(notification_owner.as_str()) {
-                    let email=state.config.lock().unwrap().firebase_email.clone();
-                    let _=app.emit("conversation-title-error",serde_json::json!({"conversation_id":conversation.id,"email":email}));
-                }
-            }
-        }
         let state=app.state::<AppState>();
         if state.firestore.uid().as_deref()!=Some(notification_owner.as_str()) {return;}
         let chat_title=state.data.lock().unwrap().find_conversation(&conversation_id)
@@ -592,29 +579,40 @@ async fn chat_inner(
     let model = mc.model.clone();
     let api_key = user.model_key(mc).to_string();
 
-    let needs_load=state.data.lock().unwrap().find_conversation(&conversation_id).is_some_and(|c| !c.messages_loaded);
-    if needs_load {
-        let conversation=state.firestore.load_conversation(&uid,&auth,&conversation_id).await?;
-        if let Some(cached)=state.data.lock().unwrap().find_conversation_mut(&conversation_id) { *cached=conversation; }
-    }
-    let (history, user_message, keep_count) = {
-        let data = state.data.lock().unwrap();
-        let conv = data.find_conversation(&conversation_id).ok_or("conversation_not_found")?;
-        llm::prepare_turn(&conv.messages,content,attachments,retry,edit_index)?
+    let (history, user_message, keep_count, title_job) = {
+        let _save=state.history_save_lock.lock().await;
+        let needs_load=state.data.lock().unwrap().find_conversation(&conversation_id).is_some_and(|c| !c.messages_loaded);
+        if needs_load {
+            let conversation=state.firestore.load_conversation(&uid,&auth,&conversation_id).await?;
+            if let Some(cached)=state.data.lock().unwrap().find_conversation_mut(&conversation_id) { *cached=conversation; }
+        }
+        let mut tree=state.data.lock().unwrap().clone();
+        let conversation=tree.find_conversation_mut(&conversation_id).ok_or("conversation_not_found")?;
+        let (history,user_message,keep_count)=llm::prepare_turn(&conversation.messages,content,attachments,retry,edit_index)?;
+        let (changed,title_job)=prepare_title_job(conversation,&user_message,&effective_model);
+        if changed {
+            // Persist the pending title before claiming it, without saving the unfinished turn.
+            state.firestore.save_tree(&uid,&auth,&tree).await?;
+            *state.data.lock().unwrap()=state.firestore.cached_tree(&uid).unwrap_or(tree);
+        }
+        (history,user_message,keep_count,title_job)
     };
     let _=app.emit("live-turn",serde_json::json!({"conversation_id":conversation_id,
         "status":"context","keep_count":keep_count,
         "user_message":{"role":"user","content":user_message.content,"attachments":[]}}));
 
-    // Il nome e il modello della chat nascono dal primo messaggio, prima della risposta del modello.
-    if let Some(conversation) = state.data.lock().unwrap().find_conversation_mut(&conversation_id) {
-        if conversation.messages.is_empty() {
-            if conversation.title_state.as_deref()!=Some("manual") {
-                conversation.title = first_title(&user_message.content, &user_message.attachments);
-                conversation.title_state=Some("pending".into());
+    if let Some(conversation)=title_job {
+        let app=app.clone();let owner=uid.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(error)=generate_chat_title(&app,&owner,&conversation).await {
+                eprintln!("Conversation title generation failed: {error}");
+                let state=app.state::<AppState>();
+                if state.firestore.uid().as_deref()==Some(owner.as_str()) {
+                    let email=state.config.lock().unwrap().firebase_email.clone();
+                    let _=app.emit("conversation-title-error",serde_json::json!({"conversation_id":conversation.id,"email":email}));
+                }
             }
-            conversation.model = Some(effective_model.clone());
-        }
+        });
     }
 
     let turn_id=format!("turn-{}",data::now_millis());
@@ -769,6 +767,74 @@ async fn chat_inner(
     })
 }
 
+fn prepare_title_job(conversation:&mut data::Conversation,message:&ChatMessage,model:&str)->(bool,Option<data::Conversation>) {
+    let mut changed=false;
+    if conversation.messages.is_empty() {
+        if conversation.model.is_none() {
+            conversation.model=Some(model.into());changed=true;
+        }
+        // A failed first turn still has no saved messages; never reset an already claimed title.
+        if conversation.title_state.is_none() {
+            conversation.title=first_title(&message.content,&message.attachments);
+            conversation.title_state=Some("pending".into());changed=true;
+        }
+    }
+    let job=if conversation.title_state.as_deref()==Some("pending") {
+        let mut job=conversation.clone();
+        if job.messages.is_empty() {job.messages.push(message.clone());}
+        Some(job)
+    } else {None};
+    (changed,job)
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    #[test]
+    fn title_job_uses_the_first_message_without_saving_an_unfinished_turn() {
+        for input in [
+            serde_json::json!({"role":"user","content":"  Analizza il progetto\n e proponi miglioramenti  "}),
+            serde_json::json!({"role":"user","content":"","attachments":[{"name":"diagramma.png","mime_type":"image/png"}]}),
+        ] {
+            let message:ChatMessage=serde_json::from_value(input).unwrap();
+            let mut conversation:data::Conversation=serde_json::from_value(serde_json::json!({
+                "id":"chat","title":"Chat","created_at":1,"updated_at":1,"context_tokens":0
+            })).unwrap();
+            let (changed,job)=prepare_title_job(&mut conversation,&message,"selected-model");
+            assert!(changed);
+            assert_eq!(conversation.title,first_title(&message.content,&message.attachments));
+            assert_eq!(conversation.title_state.as_deref(),Some("pending"));
+            assert_eq!(conversation.model.as_deref(),Some("selected-model"));
+            assert!(conversation.messages.is_empty());
+            let job=job.unwrap();
+            assert_eq!(job.messages.len(),1);
+            assert_eq!(serde_json::to_value(&job.messages[0]).unwrap(),serde_json::to_value(&message).unwrap());
+        }
+    }
+
+    #[test]
+    fn title_job_does_not_restart_after_a_failed_turn_or_rename_old_chats() {
+        let message:ChatMessage=serde_json::from_value(serde_json::json!({"role":"user","content":"Retry"})).unwrap();
+        for status in ["generating","generated","failed","manual"] {
+            let mut conversation:data::Conversation=serde_json::from_value(serde_json::json!({
+                "id":"chat","title":"Preserved","title_state":status,"model":"selected-model",
+                "messages":[],"created_at":1,"updated_at":1,"context_tokens":0
+            })).unwrap();
+            let (changed,job)=prepare_title_job(&mut conversation,&message,"selected-model");
+            assert!(!changed);assert!(job.is_none());
+            assert_eq!(conversation.title,"Preserved");
+            assert_eq!(conversation.title_state.as_deref(),Some(status));
+        }
+        let mut old:data::Conversation=serde_json::from_value(serde_json::json!({
+            "id":"old","title":"Existing chat","messages":[{"role":"user","content":"Original"}],
+            "created_at":1,"updated_at":1,"context_tokens":0
+        })).unwrap();
+        let (changed,job)=prepare_title_job(&mut old,&message,"selected-model");
+        assert!(!changed);assert!(job.is_none());assert_eq!(old.title,"Existing chat");
+    }
+}
+
 async fn change_auto_title(app:&tauri::AppHandle,owner:&str,conversation:&data::Conversation,
     expected_state:&str,title:&str,status:&str)->Result<bool,String> {
     let state=app.state::<AppState>();
@@ -798,8 +864,7 @@ async fn generate_chat_title(app:&tauri::AppHandle,owner:&str,conversation:&data
         if message.content.trim().is_empty() {message.attachments.iter().map(|file|if file.is_image() {format!("image: {}",file.name)} else {file.name.clone()}).collect::<Vec<_>>().join(", ")}
         else {message.content.clone()}
     }).unwrap_or_default();
-    let reply=conversation.messages.iter().find(|message|message.role=="assistant").map(|message|message.content.as_str()).unwrap_or("");
-    match llm::conversation_title(&state.client,&config.base_url,&config.model,key,&prompt,reply).await {
+    match llm::conversation_title(&state.client,&config.base_url,&config.model,key,&prompt).await {
         Ok(title)=>{change_auto_title(app,owner,conversation,"generating",&title,"generated").await?;Ok(())},
         Err(error)=>{
             change_auto_title(app,owner,conversation,"generating",&conversation.title,"failed").await?;

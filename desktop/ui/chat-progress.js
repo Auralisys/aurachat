@@ -244,11 +244,19 @@ async function finishLiveTurn(run) {
 
 const remoteTurnSync = {busy:false, targets:new Map()};
 
+const conversationTitleOrder = {pending:1,generating:2,generated:3,failed:3,manual:4};
+
+function preserveConversationTitle(target, current) {
+  if (target && current && (current.title_state === 'manual' ||
+      (conversationTitleOrder[current.title_state] || 0) > (conversationTitleOrder[target.title_state] || 0))) {
+    target.title = current.title;target.title_state = current.title_state;
+  }
+}
+
 function applyConversationTitle(id, title, titleState) {
   const conversation = findConversation(id)?.conversation;
   if (!conversation || conversation.title_state === 'manual') return;
-  const order = {pending:1,generating:2,generated:3,failed:3,manual:4};
-  if ((order[titleState] || 0) < (order[conversation.title_state] || 0)) return;
+  if ((conversationTitleOrder[titleState] || 0) < (conversationTitleOrder[conversation.title_state] || 0)) return;
   const titleFailed = titleState === 'failed' && conversation.title_state !== 'failed';
   if (conversation.title === title && conversation.title_state === titleState) return;
   for (const target of [conversation, state.persistedData && conversationInData(state.persistedData,id), state.runs.get(id)?.saved]) {

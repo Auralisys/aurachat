@@ -11,6 +11,10 @@ const {readFileSync}=require('node:fs');const {resolve}=require('node:path');con
     let revision=0;
     const all=data=>[...(data?.conversations||[]),...(data?.projects||[]).flatMap(p=>p.conversations||[])];
     const find=(data,id)=>all(data).find(c=>c.id===id);
+    window.__title=(id,title,title_state)=>{
+      Object.assign(find(window.__data,id),{title,title_state});
+      window.__events['conversation-title-updated']({payload:{conversation_id:id,title,title_state,email:config.firebase_email}});
+    };
     const json=messages=>JSON.stringify(messages||[]);
     const withoutFeedback=messages=>JSON.stringify((messages||[]).map(({feedback,...message})=>message));
     // Mirrors ChatData::rebase + save_tree: a sidebar save may change feedback, never the history.
@@ -31,7 +35,11 @@ const {readFileSync}=require('node:fs');const {resolve}=require('node:path');con
       if(['get_config','get_local_config'].includes(cmd))return config;
       if(['get_data','refresh_data'].includes(cmd))return structuredClone(window.__data);
       if(cmd==='get_conversation')return {...structuredClone(find(window.__data,args.conversation_id)),messages_loaded:true};
-      if(cmd==='save_data'){try{return saveData(args);}catch(error){window.__saveErrors.push(error);throw error;}}
+      if(cmd==='save_data'){try{
+        const saved=saveData(args);
+        if(window.__holdSave){window.__holdSave=false;return new Promise(resolve=>window.__releaseSave=()=>resolve(saved));}
+        return saved;
+      }catch(error){window.__saveErrors.push(error);throw error;}}
       if(cmd==='list_shells')return [];
       if(cmd==='chat'){
         // Like chat_inner, the backend stores the user turn only when the answer is saved.
@@ -40,7 +48,9 @@ const {readFileSync}=require('node:fs');const {resolve}=require('node:path');con
           stored.messages=[...stored.messages,{role:'user',content:args.content},{role:'assistant',content:text}];
           stored.updated_at=Date.now();stored.revision='r'+(++revision);
           delete window.__pending[args.conversation_id];
-          resolve({data:structuredClone(window.__data),messages:structuredClone(stored.messages),usage:{total_tokens:12}});
+          const result={data:structuredClone(window.__data),messages:structuredClone(stored.messages),usage:{total_tokens:12}};
+          if(window.__holdReply){window.__holdReply=false;window.__releaseReply=()=>resolve(result);}
+          else resolve(result);
         }});
       }
     }}};
@@ -54,8 +64,23 @@ const {readFileSync}=require('node:fs');const {resolve}=require('node:path');con
 
   // A finished turn, then the next turn of the same open chat is still running.
   await row('a').locator('.tree-conv__title').click();
-  await send('Prima domanda');await pending('a');await finish('a','Prima risposta');
+  await send('Prima domanda');await pending('a');
+  await page.evaluate(()=>{
+    window.__title('a','Prima domanda','generating');
+    window.__holdSave=true;window.__saving=persist();
+    window.__holdReply=true;window.__pending.a.finish('Prima risposta');
+  });
+  await page.waitForFunction(()=>!!window.__releaseSave && !!window.__releaseReply);
+  await page.evaluate(()=>window.__title('a','Analisi del progetto','generated'));
+  assert.equal(await row('a').locator('.tree-conv__title').innerText(),'Analisi del progetto');
+  assert.equal(await page.locator('#conversation-title').innerText(),'Analisi del progetto');
+  assert.equal(await row('a').locator('.tree-conv__spinner').count(),1,'The title appears while the first response is still pending');
+  await page.evaluate(async()=>{window.__releaseSave();await window.__saving;});
+  assert.equal(await row('a').locator('.tree-conv__title').innerText(),'Analisi del progetto','A late sidebar save must not restore the generating title');
+  await page.evaluate(()=>window.__releaseReply());
   await page.locator('#messages').getByText('Prima risposta').waitFor();
+  assert.equal(await row('a').locator('.tree-conv__title').innerText(),'Analisi del progetto','A late turn response must not restore the generating title');
+  assert.equal(await page.evaluate(()=>state.runs.get('a').saved.title_state),'generated');
   await send('Seconda domanda');await pending('a');
 
   // Meanwhile a brand-new chat is created: its save must not carry A's unsaved turn.
@@ -84,8 +109,10 @@ const {readFileSync}=require('node:fs');const {resolve}=require('node:path');con
   assert.deepEqual(await saveErrors(),[],'A sidebar save must not carry the running turn of the open chat');
   assert.equal(await page.locator('.msg--error').count(),0);
   await row('a').getByText('Chat A rinominata').waitFor();
+  await page.evaluate(()=>window.__title('a','Titolo AI tardivo','generated'));
+  assert.equal(await row('a').locator('.tree-conv__title').innerText(),'Chat A rinominata','A manual title wins over a late AI result');
   await finish('b','Risposta locale');await page.locator('#messages').getByText('Risposta locale').waitFor();
   assert.equal(await page.locator('#messages .msg--user').count(),2);
 
-  assert.deepEqual(errors,[]);await browser.close();console.log('PASS: new-chat and sidebar saves never include the unsaved turn of a running chat.');
+  assert.deepEqual(errors,[]);await browser.close();console.log('PASS: concurrent titles survive late saves and turn responses; manual titles and unsaved history are preserved.');
 })().catch(e=>{console.error(e);process.exit(1);});

@@ -41,14 +41,19 @@ chiave sono descritti nel runbook; nessun segreto va inserito nel repository.
   il testo parziale resta visibile con un errore esplicito, non come risposta
   conclusa; eventuali chiamate a strumenti incomplete non vengono eseguite.
 - **Turno in corso**: il nome della chat nasce dal primo messaggio, subito, senza
-  aspettare la risposta, come titolo provvisorio. Dopo la prima risposta riuscita
-  una richiesta separata in background propone un titolo breve nella lingua
-  dell'utente, senza bloccare la chat: stesso modello, nessuno strumento, massimo
-  2.000 caratteri della domanda e 1.000 della risposta, output limitato a 128 token,
-  timeout 25 secondi. Sul provider DeepSeek ufficiale il thinking e disabilitato.
+  aspettare la risposta, come titolo provvisorio. All'avvio del primo turno una
+  richiesta separata in background propone un titolo breve nella lingua
+  dell'utente, in parallelo alla risposta: stesso modello, nessuno strumento,
+  massimo 2.000 caratteri del primo messaggio, timeout 25 secondi. Non aspetta
+  ragionamento, strumenti o conclusione del turno. Sul provider DeepSeek ufficiale
+  il thinking e disabilitato.
   `title_state` distingue pending/generating/generated/manual/failed; una
   prenotazione atomica evita chiamate duplicate e un titolo manuale non viene
-  sovrascritto. Nessun rinnovo automatico dei vecchi titoli o retry AI dopo errori:
+  sovrascritto. Titolo provvisorio, stato e modello vengono salvati prima del
+  tentativo AI, sotto il lock dei salvataggi. Eventi del titolo ricevuti durante
+  il turno non vengono annullati da risposte tardive del turno o della sidebar.
+  Stop o errori del turno non fermano ne rilanciano il titolo in background.
+  Nessun rinnovo automatico dei vecchi titoli o retry AI dopo errori:
   il titolo provvisorio resta visibile e viene segnalato il fallimento.
   Il titolo e condiviso con Mac e mobile, anche quando il turno nasce da remoto.
   Mentre il modello pensa il composer resta utilizzabile: con il
@@ -938,9 +943,9 @@ Invio automatico verificato con HTTP 204 e pubblicazione su Android. Nessuna
 istanza sempre accesa; 256 MiB/CPU frazionaria, max 3 istanze e build eliminate
 dopo un giorno. Le notifiche di fine risposta mostrano titolo della chat e primi
 200 caratteri della risposta conclusiva, escludendo ragionamento e anticipazioni
-prima degli strumenti, uguali su Windows e telefono. Per una nuova chat la sola
-notifica attende il tentativo di titolo AI; la risposta resta subito disponibile.
-Se il titolo non viene generato resta quello provvisorio. Stop ed errori usano
+prima degli strumenti, uguali su Windows e telefono. La notifica usa il titolo
+disponibile al completamento, senza attendere la richiesta AI parallela:
+se e ancora in corso o fallisce resta quello provvisorio. Stop ed errori usano
 un messaggio esplicito, non l'incipit del turno incompleto.
 
 ## Skill e stato dei processi — 18 ottobre 2026

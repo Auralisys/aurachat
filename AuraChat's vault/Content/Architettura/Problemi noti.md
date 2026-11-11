@@ -54,11 +54,12 @@ rossi, identici prima e dopo l'ultima correzione: `background-chats`,
 
 ## Titolo AI perso in corsa con il salvataggio — 2 novembre 2026
 
-Possibile, non riprodotto né corretto. Al primo messaggio la UI salva il titolo
-provvisorio senza attendere, mentre `chat_inner` imposta senza lock
-`title_state: pending` e `model` (`lib.rs:609-617`). Se il salvataggio termina
-dopo, `save_data` sostituisce la cache (`lib.rs:435-437`) e perde quei campi: la
-chat resta senza titolo AI. Dettagli del salvataggio in [[Desktop gateway - Tauri]].
+Risolto l'11 novembre 2026: `chat_inner` inizializza titolo provvisorio,
+`title_state: pending` e modello sotto `history_save_lock` e li persiste prima
+di avviare il titolo AI in parallelo al primo turno. La UI conserva il titolo
+aggiornato anche se un salvataggio o il risultato del turno arriva in ritardo.
+Regressioni native e UI per metadati, titolo durante il turno, risposte tardive
+e rinomine manuali. Dettagli in [[Desktop gateway - Tauri]].
 
 
 ## Lettura estesa dei vault

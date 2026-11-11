@@ -192,6 +192,9 @@ async function persist() {
         const target = conversationInData(data, id);if (target) Object.assign(target, structuredClone(run.saved));
       }
     }
+    for (const conversation of allConversations()) {
+      preserveConversationTitle(conversationInData(data, conversation.id), conversation);
+    }
     state.data = data;state.persistedData = structuredClone(data);
     renderSidebar();
     updateContextInfo();
@@ -1137,9 +1140,7 @@ async function requestChat(payload) {
     const saved = conversationInData(result.data, id);
     run.saved = {...saved, messages:result.messages, messages_loaded:true};
     const target = findConversation(id)?.conversation;
-    if (target?.title_state === 'manual' || (saved?.title_state === 'pending' && ['generating','generated','failed'].includes(target?.title_state))) {
-      run.saved.title = target.title;run.saved.title_state = target.title_state;
-    }
+    preserveConversationTitle(run.saved, target);
     // The open chat keeps its own array: a later push for the next turn must
     // never leak into data that sidebar saves send to save_data.
     if (target) Object.assign(target, structuredClone(run.saved));
