@@ -75,9 +75,10 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   await page.locator('#activity-panel-content .activity-row').first().waitFor();
   assert.equal(await page.locator('#activity-panel-content .activity-row__title').innerText(),'report.md');
   assert.equal(await page.locator('#activity-panel-content .activity-row.is-pending').count(),0);
-  await page.click('#activity-close');
+  await page.click('#browser-close');
   await page.evaluate(()=>__events['agent-activity']({payload:{conversation_id:'c',id:'a',title:'Aggiorna note',status:'running',summary:'Modifica del file in corso',task:'Aggiorna note.md',model:'deepseek-flash',content:'Prima parte.',reasoning_content:'Verifico il contenuto originale.',activity:[{kind:'tool',id:'tool-a',action:'edit_project_file',path:'note.md',status:'completed',output:'written',arguments:{path:'note.md'}}]}}));
-  await page.locator('[data-activity-focus="all:agents"]').click();await page.locator('#activity-panel-content').getByRole('button',{name:/Aggiorna note/}).click();
+  await page.locator('[data-activity-focus="group:agents"]').click();await page.locator('#activity-panel-content').getByRole('button',{name:/Aggiorna note/}).click();
+  await page.locator('.agent-work > summary').click();
   await page.locator('.agent-detail-history > details > summary').click();
   await page.evaluate(()=>{window.__historyNode=document.querySelector('.agent-detail-history > details');});
   await page.evaluate(()=>__events['agent-activity']({payload:{conversation_id:'c',id:'a',status:'running',content:'Prima parte. Seconda parte.',reasoning_content:'Verifico il contenuto originale. Ora applico la modifica.'}}));
@@ -90,7 +91,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   await page.evaluate(()=>__events['agent-activity']({payload:{conversation_id:'c',id:'a',status:'running',summary:'Late'}}));
   assert.equal(await page.locator('.agent-detail-status').innerText(),locales['activity.cancelled']);
   await page.emulateMedia({reducedMotion:'reduce'});assert.equal(await page.locator('.msg--stream .turn-history[data-live-history] > summary > svg').first().evaluate(el=>getComputedStyle(el).animationName),'none');
-  await page.click('#activity-close');await page.click('#sidebar-collapse');await page.setViewportSize({width:700,height:820});
+  await page.click('#browser-close');await page.click('#sidebar-collapse');await page.setViewportSize({width:700,height:820});
   await page.evaluate(()=>__emitApproval({id:'write-3',conversation_id:'c',turn_id:'t',status:'pending',reviewer:'user',action:{kind:'write',path:'C:/work/AuraChat/note.md',content:'Nuovo contenuto'},created_at:Date.now()}));
   await page.locator('.approval-card').waitFor();await page.screenshot({path:resolve(shots,'approval-compact.png')});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   await page.getByRole('button',{name:'Rifiuta',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.approval-card').length===0);

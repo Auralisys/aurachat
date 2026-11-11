@@ -134,14 +134,26 @@ nessun globo per aprire il pannello. Il riepilogo riserva una colonna da 280 px
 a destra della conversazione, ridimensionando messaggi e composer senza coprirli.
 Si apre entrando in una conversazione gia avviata; chiuderlo manualmente lo
 mantiene nascosto durante gli aggiornamenti della stessa chat.
-Mostra **Modifiche**, **Output**, **Fonti** e, quando presenti, **Agenti** e **Shell**.
+Mostra **Modifiche**, **Output**, **Fonti** e, quando presenti, **Subagenti** e **Shell**.
 Il nome del progetto identifica il contesto; il menu offre le viste complete
 e Nascondi. I pulsanti **+** aggiungono una fonte o preparano una richiesta di
 output senza inviarla né sovrascrivere una bozza.
 
-Il pannello laterale ospita schede browser e le viste Git, Output, Fonti, Agenti
-e Shell già esistenti. **+** apre una nuova scheda con indirizzo e accesso a Git;
-Git richiede una chat di progetto con una cartella locale. Ogni vista strumenti
+Il pannello laterale è il centro operativo della chat: schede browser e viste
+Modifiche (Git), Shell, Subagenti, Output e Fonti. **+** apre una **Nuova scheda**
+con barra indirizzi e tre sezioni:
+- **Strumenti**: una scheda per vista con stato sintetico (per esempio «+3 −1»,
+  «2 in esecuzione», «3 file», «Ancora niente») e scorciatoia
+  **Ctrl+Shift+G/S/A/O/F** (anche Cmd+Shift), attiva nella vista chat anche a
+  pannello chiuso. Modifiche richiede una chat di progetto con cartella locale:
+  altrimenti è disattivata e una nota spiega perché;
+- **Suggeriti**: fino a quattro pagine, prima i link delle Fonti della chat e poi
+  le più visitate;
+- **Recenti**: cronologia locale per account (`aurachat.browserHistory:<utente>`,
+  massimo 60 pagine, 5 per pagina con frecce e cancellazione). Il favicon è
+  richiesto solo per gli host già visitati; fino al caricamento resta l'iniziale.
+
+Le viste elenco non mostrano intestazione propria: il titolo è nella scheda. Ogni vista strumenti
 riutilizza la propria scheda e segue la conversazione corrente; i browser
 rimangono aperti passando tra chat. Espandi usa tutto lo spazio di lavoro,
 Nascondi torna alla chat senza chiudere le schede. Sotto i 1000 px chat e pannello
@@ -394,13 +406,16 @@ condivide il contesto e le root autorizzate e inoltra risultato, reasoning e
 strumenti eseguiti. Ogni chiamata attende il risultato; sono ammesse fino a
 quattro deleghe per turno e i figli non possono delegare a loro volta.
 
-La card elenca solo gli agenti attivi (in esecuzione o in attesa), fino a due,
-sotto il riepilogo testuale senza icona «N in esecuzione · M totali».
-Quando non ce ne sono, rimangono solo il riepilogo e **Visualizza tutti**, che
-apre l'elenco completo con gli agenti conclusi, falliti e interrotti.
-Ogni riga combina orb di stato, titolo, ultima attività (o riepilogo), stato
-e tempo trascorso. Il dettaglio separa intestazione con stato, chip di modello,
-ragionamento e numero di strumenti, quindi Incarico, Cronologia e Risultato.
+Nel riepilogo la sezione **Subagenti** mostra fino a due agenti attivi
+(orb animato e titolo), poi righe compatte con orb di stato: «+N in esecuzione»,
+«N completati», «N non riusciti», «N interrotti»; un clic apre la vista.
+La vista **Subagenti** divide **Attivi · N** (con «Nessun subagente al lavoro.»
+se vuota) e **Conclusi · N**; ogni riga combina orb, titolo, ultima attività,
+stato e tempo trascorso. Il dettaglio ha un'intestazione con orb, titolo, modello
+e pulsante di arresto; sotto, una disclosure chiusa «Al lavoro · 12s» (o «Durata
+lavoro: 1m 04s» a fine lavoro) contiene Incarico, cronologia di ragionamento e
+attività e numero di strumenti, seguita dal risultato in Markdown con copia e
+lettura ad alta voce. Escape torna all'elenco, poi chiude la scheda.
 
 Verifica: `node tests/activity-panel.cjs` con Playwright in `NODE_PATH` (servizi
 nativi simulati) copre artefatti con filtri e scarto della prosa, trail shell con

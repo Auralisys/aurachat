@@ -146,6 +146,7 @@ function renderBrowser() {
   panel.setAttribute('aria-busy', String(!!(browser && tab.loading)));
   $('#browser-progress').hidden = !browser || !tab.loading;
   $('#browser-empty').hidden = !browser || tab.page || tab.opening;
+  if (!$('#browser-empty').hidden) renderNewTab();
   const address = $('#browser-address');
   const value = tab?.address ?? tab?.url ?? '';
   if (address.value !== value) address.value = value;
@@ -155,6 +156,153 @@ function renderBrowser() {
   git.disabled = !gitProject()?.source_folders?.length;
   $('#panel-git-note').hidden = !git.disabled;
   syncBrowser();
+}
+
+// ===== New tab page =====
+// History stays on this device, scoped to the signed-in account.
+const BROWSER_HISTORY = {limit:60, page:5};
+const newTabView = {page:0, signature:''};
+
+function browserHistoryKey() { return `aurachat.browserHistory:${browserPage.owner || 'local'}`; }
+
+function browserHistory() {
+  try {
+    const list = JSON.parse(localStorage.getItem(browserHistoryKey()) || '[]');
+    return Array.isArray(list) ? list.filter(entry => typeof entry?.url === 'string' && /^https?:/i.test(entry.url)) : [];
+  } catch (_) {return [];}
+}
+
+function saveBrowserHistory(list) {
+  try {localStorage.setItem(browserHistoryKey(), JSON.stringify(list.slice(0, BROWSER_HISTORY.limit)));}
+  catch (error) {console.warn('Browser history could not be saved:', error);}
+}
+
+function recordBrowserVisit(tab) {
+  if (!/^https?:/i.test(tab.url || '')) return;
+  const list = browserHistory(), index = list.findIndex(entry => entry.url === tab.url);
+  const entry = index >= 0 ? list.splice(index, 1)[0] : {url:tab.url, title:'', visits:0};
+  if (tab.recordedUrl !== tab.url) entry.visits = (Number(entry.visits) || 0) + 1;
+  entry.title = tab.title || entry.title || '';entry.last = Date.now();
+  tab.recordedUrl = tab.url;
+  saveBrowserHistory([entry, ...list]);
+}
+
+function pageHost(url) {
+  try {return new URL(url).hostname.replace(/^www\./, '');} catch (_) {return url;}
+}
+
+// Only visited hosts are asked for a favicon; unvisited chat links get a monogram.
+function pageIcon(url, visited) {
+  const box = activityText('span', '', 'newtab-favicon');box.setAttribute('aria-hidden', 'true');
+  const host = pageHost(url);
+  box.append(activityText('span', (host[0] || '?').toUpperCase(), 'newtab-favicon__letter'));
+  if (!visited) return box;
+  let origin;
+  try {origin = new URL(url).origin;} catch (_) {return box;}
+  // The monogram stays until the favicon really loads, so slow or missing icons never leave an empty box.
+  const img = new Image();img.alt = '';img.decoding = 'async';img.referrerPolicy = 'no-referrer';
+  img.onload = () => {if (img.naturalWidth) box.replaceChildren(img);};
+  img.src = `${origin}/favicon.ico`;
+  return box;
+}
+
+function relativeTime(time) {
+  const seconds = Math.round((time - Date.now()) / 1000);
+  const format = new Intl.RelativeTimeFormat(document.documentElement.lang || undefined, {numeric:'auto'});
+  for (const [unit, size] of [['day', 86400], ['hour', 3600], ['minute', 60]]) {
+    if (Math.abs(seconds) >= size) return format.format(Math.round(seconds / size), unit);
+  }
+  return format.format(0, 'minute');
+}
+
+function panelToolInfo(section, items) {
+  if (section === 'git') {
+    const data = gitView.data;
+    if (!gitProject()?.source_folders?.length) return '';
+    if (!data) return gitView.loading ? t('git.loading') : '';
+    return data.added || data.removed || data.files?.length ? gitStats(data) : t('panel.no_changes');
+  }
+  const list = items[section];
+  if (!list.length) return t('panel.none_yet');
+  if (['agents','shells'].includes(section)) {
+    const active = list.filter(item => ['running','waiting'].includes(item.status)).length;
+    return active ? t('panel.running').replace('{count}', String(active)) : t('panel.all_done');
+  }
+  return countLabel(section === 'outputs' ? 'panel.files' : 'panel.sources', list.length);
+}
+
+function renderNewTab() {
+  const items = activityItems();
+  for (const info of document.querySelectorAll('[data-panel-info]')) {
+    const value = panelToolInfo(info.dataset.panelInfo, items);
+    const key = typeof value === 'string' ? value : value.textContent;
+    if (info.dataset.value === key) continue;
+    info.dataset.value = key;info.replaceChildren(value);
+  }
+  const history = browserHistory();
+  const links = items.sources.filter(item => item.kind !== 'image' && /^https?:/.test(safeActivityURL(item.url) || ''));
+  const visited = new Set(history.map(entry => pageHost(entry.url)));
+  const suggested = [];
+  for (const entry of [...links.map(item => ({url:item.url, title:item.title})), ...[...history].sort((a, b) => (b.visits || 0) - (a.visits || 0))]) {
+    if (suggested.length < 4 && !suggested.some(item => item.url === entry.url)) suggested.push(entry);
+  }
+  const pages = Math.max(1, Math.ceil(history.length / BROWSER_HISTORY.page));
+  newTabView.page = Math.min(newTabView.page, pages - 1);
+  const recent = history.slice(newTabView.page * BROWSER_HISTORY.page, (newTabView.page + 1) * BROWSER_HISTORY.page);
+  const signature = JSON.stringify([document.documentElement.lang, Math.floor(Date.now() / 60000), newTabView.page, suggested, recent, history.length]);
+  if (signature === newTabView.signature) return;
+  newTabView.signature = signature;
+  $('#panel-suggested').hidden = !suggested.length;
+  $('#panel-suggested-list').replaceChildren(...suggested.map(entry => {
+    const tile = activityText('button', '', 'newtab-tile');tile.type = 'button';tile.title = entry.url;
+    tile.onclick = () => openBrowser(entry.url);
+    const text = activityText('span', '', 'newtab-tile__text');
+    text.append(activityText('span', entry.title || pageHost(entry.url), 'newtab-tile__title'), activityText('span', pageHost(entry.url), 'newtab-tile__host'));
+    tile.append(pageIcon(entry.url, visited.has(pageHost(entry.url))), text);
+    return tile;
+  }));
+  $('#panel-recent-list').replaceChildren(...recent.map(entry => {
+    const item = document.createElement('li');
+    const row = activityText('button', '', 'newtab-recent__row');row.type = 'button';row.title = entry.url;
+    row.onclick = () => openBrowser(entry.url);
+    const text = activityText('span', '', 'newtab-recent__text');
+    text.append(activityText('span', entry.title || pageHost(entry.url), 'newtab-recent__title'), activityText('span', pageHost(entry.url), 'newtab-recent__host'));
+    const time = activityText('time', relativeTime(entry.last || Date.now()), 'newtab-recent__time');
+    time.dateTime = new Date(entry.last || Date.now()).toISOString();
+    row.append(pageIcon(entry.url, true), text, time);item.append(row);
+    return item;
+  }));
+  $('#panel-recent-empty').hidden = !!history.length;
+  $('#panel-recent-clear').hidden = !history.length;
+  $('#panel-recent-newer').hidden = $('#panel-recent-older').hidden = pages < 2;
+  $('#panel-recent-newer').disabled = newTabView.page === 0;
+  $('#panel-recent-older').disabled = newTabView.page >= pages - 1;
+}
+
+function pageRecent(step) {
+  newTabView.page = Math.max(0, newTabView.page + step);renderNewTab();
+}
+
+function setupNewTab() {
+  for (const tool of document.querySelectorAll('[data-panel-tool]')) tool.onclick = () => openActivity(tool.dataset.panelTool);
+  $('#panel-recent-newer').replaceChildren(browserIcon('ChevronUp'));
+  $('#panel-recent-older').replaceChildren(browserIcon('ChevronDown'));
+  $('#panel-recent-clear').replaceChildren(browserIcon('Trash2'));
+  $('#panel-recent-newer').onclick = () => pageRecent(-1);
+  $('#panel-recent-older').onclick = () => pageRecent(1);
+  $('#panel-recent-clear').onclick = () => {
+    try {localStorage.removeItem(browserHistoryKey());} catch (_) {}
+    newTabView.page = 0;renderNewTab();$('#browser-address').focus();
+  };
+  document.addEventListener('keydown', event => {
+    if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey || event.repeat) return;
+    // Synthetic and assistive input can arrive without a physical code.
+    const letter = /^Key[A-Z]$/.test(event.code) ? event.code.slice(3) : event.key?.length === 1 ? event.key.toUpperCase() : '';
+    const section = {G:'git', S:'shells', A:'agents', O:'outputs', F:'sources'}[letter];
+    if (!section || $('#view-chat').hidden || !$('#settings-overlay').hidden || $('.main').inert || document.querySelector('dialog[open]')) return;
+    if (section === 'git' && !gitProject()?.source_folders?.length) return;
+    event.preventDefault();openActivity(section);
+  });
 }
 
 function rememberPanelTab(tab) {
@@ -201,7 +349,9 @@ function openPanelSection(section, selected = null) {
   tab.selected = selected;activity.selected = selected;
   if (section !== 'outputs') tab.filter = activity.filter = 'all';
   renderActivity();$('#activity-panel-content').scrollTop = tab.scroll;
-  $('#activity-panel-title').focus();
+  // List views are titled by their tab; a detail view has its own heading.
+  if (selected) $('#activity-panel-title').focus();
+  else $(`#panel-tab-${tab.id}`)?.focus({preventScroll:true});
 }
 
 async function closePanelTab(tab = activePanelTab()) {
@@ -370,8 +520,7 @@ async function setupBrowser() {
   $('#browser-close').onclick = closeBrowser;
   $('#panel-add-tab').onclick = () => newPanelTab();
   $('#panel-expand').onclick = () => {browserPage.expanded = !browserPage.expanded;renderBrowser();};
-  $('#panel-open-git').onclick = () => openActivity('git');
-  $('#panel-open-browser').onclick = () => {$('#browser-address').focus();$('#browser-address').select();};
+  setupNewTab();
   $('#browser-back').onclick = () => browserAction('back');
   $('#browser-forward').onclick = () => browserAction('forward');
   $('#browser-reload').onclick = () => browserAction(activePanelTab()?.loading ? 'stop' : 'reload');
@@ -409,6 +558,7 @@ async function setupBrowser() {
     tab.title = typeof payload.title === 'string' ? payload.title : '';
     tab.loading = !!payload.loading;
     if (tab.loading) setBrowserStatus('', tab);
+    else recordBrowserVisit(tab);
     renderBrowser();
   });
   await appWindow.listen('browser-blocked', ({payload}) => {

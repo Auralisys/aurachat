@@ -325,25 +325,73 @@ function agentLine(agent) {
   return typeof progressLabel === 'function' ? progressLabel(last) : activityStatus(agent);
 }
 
+function agentOrb(status) {
+  const orb = activityText('span', '', `agent-orb agent-orb--${status}`);
+  orb.setAttribute('aria-hidden', 'true');
+  return orb;
+}
+
+function agentElapsed(agent, className = '') {
+  const elapsed = activityText('span', '', `agent-elapsed ${className}`.trim());
+  elapsed.dataset.agentId = agent.id;
+  return elapsed;
+}
+
+// The orb carries the state visually; assistive tech reads the label instead.
 function agentRow(agent, compact = false) {
   const row = activityRowBase('agents', agent);
   row.classList.add('activity-row--agent');
-  const orb = activityText('span', '', `agent-orb agent-orb--${agent.status}`);
-  orb.append(icon('agents'));orb.setAttribute('aria-hidden', 'true');
-  row.append(orb);
+  row.append(agentOrb(agent.status));
   const text = activityText('span', '', 'activity-row__text');
   const title = activityText('span', agent.title || t('activity.agent'), 'activity-row__title');
   title.classList.toggle('is-working-text', agent.status === 'running');
-  text.append(title);
-  if (!compact) text.append(activityText('span', agentLine(agent), 'activity-row__summary'));
+  text.append(title, activityText('span', activityStatus(agent), 'sr-only'));
   row.append(text);
-  if (!compact) {
-    const meta = activityText('span', '', 'activity-row__meta');
-    meta.append(activityStatusPill(activityStatus(agent), agent.status));
-    const elapsed = activityText('span', '', 'agent-elapsed');elapsed.dataset.agentId = agent.id;meta.append(elapsed);
-    row.append(meta);
-  }
+  if (!compact) row.append(agentElapsed(agent));
   return row;
+}
+
+function countLabel(key, count) {
+  return t(`${key}_${count === 1 ? 'one' : 'many'}`).replace('{count}', String(count));
+}
+
+function renderAgentSummary(group, agents) {
+  const active = agents.filter(agent => ['running','waiting'].includes(agent.status));
+  for (const agent of active.slice(0, 2)) group.append(agentRow(agent, true));
+  const lines = [];
+  if (active.length > 2) lines.push(['running', t('activity.more_running').replace('{count}', String(active.length - 2))]);
+  for (const status of ['completed','failed','cancelled']) {
+    const count = agents.filter(agent => agent.status === status).length;
+    if (count) lines.push([status, countLabel(`activity.${status}`, count)]);
+  }
+  if (!lines.length) return;
+  const summary = activityText('button', '', 'activity-agents-summary');summary.type = 'button';
+  summary.dataset.activityFocus = 'all:agents';summary.onclick = () => openActivity('agents');
+  for (const [status, label] of lines) {
+    const line = activityText('span', '', 'agent-status-line');
+    line.append(agentOrb(status), activityText('span', label));
+    summary.append(line);
+  }
+  group.append(summary);
+}
+
+// Images read faster as thumbnails; documents and links keep their rows.
+function renderSourceSummary(group, sources) {
+  const images = sources.filter(item => item.kind === 'image' && (item.image || safeActivityURL(item.url)));
+  if (images.length) {
+    const strip = activityText('div', '', 'activity-thumbs');
+    for (const item of images.slice(0, 4)) {
+      const thumb = activityText('button', '', 'activity-thumbs__item');thumb.type = 'button';
+      thumb.dataset.activityFocus = `sources:${item.id}`;thumb.title = item.title;thumb.setAttribute('aria-label', item.title);
+      thumb.onclick = () => openActivity('sources', item.id);
+      const img = document.createElement('img');img.alt = '';img.decoding = 'async';
+      img.src = item.image ? imageURL(item.image) || '' : safeActivityURL(item.url);
+      thumb.append(img);strip.append(thumb);
+    }
+    if (images.length > 4) strip.append(activityText('span', `+${images.length - 4}`, 'activity-thumbs__more'));
+    group.append(strip);
+  }
+  for (const item of sources.filter(item => !images.includes(item)).slice(0, 3)) group.append(sourceRow(item, true));
 }
 
 function shellRow(shell, compact = false) {
@@ -422,7 +470,7 @@ function renderActivity() {
     const header = activityText('div', '', 'activity-group__header');
     const title = activityText('button', '', 'activity-group__title');title.type = 'button';
     title.dataset.activityFocus = `group:${section}`;
-    title.append(activityText('span', t(`activity.${section}`)), activityText('span', String(items[section].length)));
+    title.append(activityText('span', t(`activity.${section}`)));
     title.onclick = () => openActivity(section);header.append(title);
     if (section === 'sources') header.append(activityButton(t('activity.add_source'), 'plus', () => $('#composer-attach').click()));
     if (section === 'outputs') header.append(activityButton(t('activity.create_output'), 'plus', () => {
@@ -431,55 +479,64 @@ function renderActivity() {
       composerStatus(t('activity.output_hint'));
     }));
     group.append(header);
-    if (section === 'agents' && items.agents.length) {
-      const active = items.agents.filter(a => ['running','waiting'].includes(a.status));
-      group.append(activityText('p', `${active.length} ${t('activity.running_count')} · ${items.agents.length} ${t('activity.total')}`, 'activity-agents-summary'));
-      for (const agent of active.slice(0, 2)) group.append(agentRow(agent, true));
-    } else {
-      for (const item of orderedItems(section, items).slice(0, 3)) group.append(activityRow(item, section, true));
-    }
+    if (section === 'agents') renderAgentSummary(group, items.agents);
+    else if (section === 'sources') renderSourceSummary(group, items.sources);
+    else for (const item of orderedItems(section, items).slice(0, 3)) group.append(activityRow(item, section, true));
     if (!items[section].length) group.append(activityText('p', t(`activity.empty_${section}`), 'activity-empty'));
-    if ((['sources','agents'].includes(section) && items[section].length) || (['outputs','shells'].includes(section) && items[section].length > 3)) {
-      const all = activityText('button', t(section === 'agents' ? 'activity.view_all_agents' : 'activity.view_all'), 'activity-view-all');all.type = 'button';all.onclick = () => openActivity(section);group.append(all);
+    if ((section === 'sources' && items[section].length) || (['outputs','shells'].includes(section) && items[section].length > 3)) {
+      const all = activityText('button', t('activity.view_all'), 'activity-view-all');all.type = 'button';all.onclick = () => openActivity(section);group.append(all);
       all.dataset.activityFocus = `all:${section}`;
     }
     card.append(group);
   }
+  const header = $('#activity-panel .activity-panel__header');
   if (!activity.section || !browserPage.open) {restoreFocus();return;}
   if (activity.section === 'git') {
-    $('#activity-panel-title').textContent = t('git.changes');
-    $('#activity-back').hidden = true;$('#activity-tabs').hidden = true;
+    header.hidden = true;
     renderGitPanel($('#activity-panel-content'));restoreFocus();return;
   }
   const section = activity.section, selected = items[section].find(item => item.id === activity.selected);
+  // Lists are titled by their tab; only a detail view needs its own header.
+  header.hidden = !selected;
   $('#activity-panel-title').textContent = selected
     ? (section === 'shells' ? shellCommand(selected) : selected.title || t(`activity.${section}`))
     : t(`activity.${section}`);
   $('#activity-back').hidden = !selected;
-  const tabs = $('#activity-tabs');tabs.replaceChildren();tabs.hidden = !!selected;
-  for (const name of sections.includes(section) ? sections : [...sections, section]) {
-    const tab = activityText('button', `${t(`activity.${name}`)} · ${items[name].length}`);tab.type = 'button';
-    tab.dataset.activityFocus = `tab:${name}`;
-    tab.setAttribute('aria-current', String(name === section));tab.onclick = () => openActivity(name);tabs.append(tab);
+  const agent = section === 'agents' ? selected : null;
+  $('#activity-panel-orb').hidden = !agent;
+  if (agent) $('#activity-panel-orb').className = `agent-orb agent-orb--${agent.status}`;
+  const meta = $('#activity-panel-meta');
+  meta.textContent = agent ? [agent.model, agent.reasoning].filter(Boolean).join(' · ') : '';
+  meta.hidden = !meta.textContent;
+  const stop = $('#activity-panel-stop');
+  stop.hidden = !agent || !['running','waiting'].includes(agent.status);
+  if (agent) {
+    const label = t(agent.stop_pending ? 'activity.stopping' : 'activity.stop_agent');
+    stop.disabled = !!agent.stop_pending;stop.title = label;stop.setAttribute('aria-label', label);
+    stop.dataset.activityFocus = `stop-agent:${agent.id}`;stop.onclick = () => stopActivityAgent(agent);
   }
   const content = $('#activity-panel-content');const scroll = content.scrollTop;
-  if (section === 'agents' && selected) {renderAgentDetail(content,selected);content.scrollTop = scroll;updateActivityTimers();restoreFocus();return;}
+  if (agent) {renderAgentDetail(content,agent);content.scrollTop = scroll;updateActivityTimers();restoreFocus();return;}
   content.dataset.agentId = '';content.replaceChildren();
   if (selected) {
     if (section === 'shells') renderShellDetail(content, selected);
     else if (section === 'outputs') renderArtifactDetail(content, selected);
     else renderReferenceDetail(content, selected);
   } else {
-    if (!items[section].length) content.append(activityText('p', t(`activity.empty_${section}`), 'activity-empty'));
+    if (!items[section].length && section !== 'agents') content.append(activityText('p', t(`activity.empty_${section}`), 'activity-empty'));
     if (section === 'outputs') {
       if (items.outputs.length) content.append(artifactFilterBar(items.outputs));
       const artifacts = items.outputs.filter(item => activity.filter === 'all' || artifactType(item) === activity.filter);
       for (const item of [...artifacts].reverse()) content.append(artifactRow(item));
     } else if (section === 'agents') {
-      for (const [key, agents] of [['active', items.agents.filter(a => a.status === 'running' || a.status === 'waiting')], ['finished', items.agents.filter(a => a.status !== 'running' && a.status !== 'waiting')]]) {
-        if (!agents.length) continue;
-        content.append(activityText('h3', `${t(`activity.${key}`)} · ${agents.length}`, 'activity-list-heading'));
-        for (const agent of agents) content.append(agentRow(agent));
+      const active = items.agents.filter(a => ['running','waiting'].includes(a.status));
+      const finished = items.agents.filter(a => !['running','waiting'].includes(a.status));
+      content.append(activityText('h3', `${t('activity.active')} · ${active.length}`, 'activity-list-heading'));
+      if (!active.length) content.append(activityText('p', t('activity.no_active_agents'), 'activity-empty activity-empty--list'));
+      for (const item of active) content.append(agentRow(item));
+      if (finished.length) {
+        content.append(activityText('h3', `${t('activity.finished')} · ${finished.length}`, 'activity-list-heading'));
+        for (const item of finished) content.append(agentRow(item));
       }
     } else if (section === 'shells') {
       const groups = sortShells(items.shells);
@@ -570,52 +627,44 @@ async function stopActivityAgent(agent) {
 function renderAgentDetail(content, agent) {
   if (content.dataset.agentId !== agent.id) {
     content.dataset.agentId = agent.id;content.replaceChildren();
-    const head = activityText('div','','agent-detail-head');
-    const orb = activityText('span','',`agent-orb agent-orb--${agent.status}`);
-    orb.append(icon('agents'));orb.setAttribute('aria-hidden','true');
-    const titles = activityText('div','','agent-detail-titles');
-    titles.append(activityText('span', agent.title || t('activity.agent'), 'agent-detail-title'), activityText('span','','agent-detail-status'));
-    head.append(orb, titles);
-    const chips = activityText('div','','agent-detail-chips');
-    const meta = activityText('div','','activity-detail-meta');
-    const stop = activityText('button',t('activity.stop_agent'),'activity-stop');stop.type = 'button';stop.dataset.activityFocus = `stop-agent:${agent.id}`;
-    meta.append(stop);
-    const summary = activityText('p','','activity-detail-summary');
-    const taskTitle = activityText('h3',t('activity.task'),'activity-section-title');
-    const task = activityText('p',agent.task || '','activity-task');
-    const historyTitle = activityText('h3',t('activity.history'),'activity-section-title agent-history-title');
-    const history = activityText('div','','agent-detail-history');
-    const bodyTitle = activityText('h3',t('activity.result'),'activity-section-title');
-    const body = activityText('div','','markdown agent-stream-content');
-    content.append(head,chips,meta,summary,taskTitle,task,historyTitle,history,bodyTitle,body);
+    // Built once per agent so the disclosure keeps its open state across live updates.
+    const work = document.createElement('details');work.className = 'agent-work';
+    const summary = document.createElement('summary');
+    summary.append(activityText('span','','agent-work__label'), agentElapsed(agent), activityText('span','','agent-detail-status'), icon('chevron'));
+    const body = activityText('div','','agent-work__body');
+    const task = activityText('div','','agent-work__task');
+    task.append(activityText('span',t('activity.task'),'agent-work__caption'), activityText('p','','activity-task'));
+    body.append(task, activityText('div','','agent-detail-history'), activityText('p','','agent-work__tools'));
+    work.append(summary, body);
+    const actions = activityText('div','','agent-detail-actions');
+    const current = () => activityAgentMap().get(agent.id)?.content || '';
+    actions.append(messageAction('copy','chat.copy',button => copyText(current(),button)), messageAction('speaker','chat.read_aloud',button => readMessage(current(),button)));
+    content.append(work, activityText('p','','activity-detail-summary'), activityText('div','','markdown agent-stream-content'), actions);
   }
-  const head = content.querySelector('.agent-detail-head');
-  head.querySelector('.agent-orb').className = `agent-orb agent-orb--${agent.status}`;
-  head.querySelector('.agent-detail-title').textContent = agent.title || t('activity.agent');
+  const live = ['running','waiting'].includes(agent.status);
+  content.querySelector('.agent-work__label').textContent = live ? `${t('activity.working')} · ` : t('activity.work_duration');
   const status = content.querySelector('.agent-detail-status');
   status.textContent = activityStatus(agent);status.dataset.status = agent.status;
-  status.className = `agent-detail-status activity-status activity-status--${agent.status}`;
-  const chips = content.querySelector('.agent-detail-chips');chips.replaceChildren();
+  status.className = `agent-detail-status activity-status activity-status--${agent.status}${['running','completed'].includes(agent.status) ? ' sr-only' : ''}`;
+  const task = content.querySelector('.agent-work__task');
+  task.hidden = !agent.task;task.querySelector('.activity-task').textContent = agent.task || '';
   const tools = (agent.activity || []).filter(item => item.kind === 'tool').length;
-  for (const value of [agent.model, agent.reasoning, tools ? `${tools} ${t('activity.tools')}` : '']) {
-    if (value) chips.append(activityText('span', value, 'activity-chip'));
-  }
-  const elapsed = activityText('span','','agent-elapsed agent-detail-elapsed');elapsed.dataset.agentId = agent.id;chips.append(elapsed);
+  const toolsLine = content.querySelector('.agent-work__tools');
+  toolsLine.textContent = tools ? `${tools} ${t('activity.tools')}` : '';toolsLine.hidden = !tools;
   const summary = content.querySelector('.activity-detail-summary');
   summary.textContent = agent.summary === 'agent_cancelled' ? t('activity.cancelled') : agent.summary || agentLine(agent);
-  summary.classList.toggle('is-working-text',agent.status === 'running');
-  const stop = content.querySelector('.activity-stop');
-  stop.hidden = !['running','waiting'].includes(agent.status);stop.disabled = !!agent.stop_pending;
-  stop.textContent = t(agent.stop_pending ? 'activity.stopping' : 'activity.stop_agent');stop.onclick = () => stopActivityAgent(agent);
+  summary.classList.toggle('is-working-text', agent.status === 'running');
+  // The final answer speaks for itself; live and failed runs keep their latest step in view.
+  summary.hidden = agent.status === 'completed' && !!agent.content;
   const list = [...(agent.reasoning_content ? [{kind:'reasoning',text:agent.reasoning_content}] : []),...(agent.activity || [])];
   const history = content.querySelector('.agent-detail-history');
-  content.querySelector('.agent-history-title').hidden = !list.length;
-  if (list.length) {const details = progressHistory(list,['running','waiting'].includes(agent.status),history.firstElementChild);if (!details.parentElement) history.append(details);}
+  if (list.length) {const details = progressHistory(list,live,history.firstElementChild);if (!details.parentElement) history.append(details);}
   else history.replaceChildren();
   const body = content.querySelector('.agent-stream-content');
   if (body._raw !== (agent.content || '')) {body._raw = agent.content || '';body.innerHTML = markdownHTML(body._raw);
     body.querySelectorAll('a').forEach(link => link.onclick = async event => {event.preventDefault();if (!/^https?:$/.test(link.protocol)) return;try {await invoke('open_external_url',{url:link.href});}catch(_){composerStatus(t('chat.link_failed'));}});
   }
+  content.querySelector('.agent-detail-actions').hidden = !agent.content || live;
 }
 
 function updateActivityTimers() {
@@ -703,7 +752,6 @@ async function setupActivity() {
   $('#activity-toggle').onclick = () => {
     activity.visible = !activity.visible;renderActivity();
   };
-  $('#activity-close').onclick = closeActivityPanel;
   $('#activity-back').onclick = () => openActivity(activity.section);
   $('#activity-dock').onkeydown = e => {
     if (e.key !== 'Escape') return;

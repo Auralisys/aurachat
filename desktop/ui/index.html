@@ -147,18 +147,37 @@
           <p id="browser-status" class="browser-status" role="status" hidden></p>
           <div id="browser-view" class="browser-view">
             <div id="browser-empty" class="browser-empty">
-              <h2 data-i18n="panel.tools"></h2>
-              <div class="panel-tools">
-                <button id="panel-open-git" type="button"><svg data-icon="git" aria-hidden="true"></svg><span data-i18n="git.changes"></span></button>
-                <button id="panel-open-browser" type="button"><svg data-icon="globe" aria-hidden="true"></svg><span data-i18n="browser.title"></span></button>
-              </div>
-              <p id="panel-git-note" data-i18n="panel.git_note" hidden></p>
-              <p data-i18n="browser.empty"></p>
+              <section class="newtab-section" aria-labelledby="panel-tools-title">
+                <h2 id="panel-tools-title" data-i18n="panel.tools"></h2>
+                <div class="panel-tools">
+                  <button id="panel-open-git" type="button" data-panel-tool="git"><svg data-icon="git" aria-hidden="true"></svg><span class="panel-tool__text"><span class="panel-tool__title" data-i18n="git.changes"></span><span class="panel-tool__info" data-panel-info="git"></span></span><kbd>Ctrl+Shift+G</kbd></button>
+                  <button type="button" data-panel-tool="shells"><svg data-icon="terminal" aria-hidden="true"></svg><span class="panel-tool__text"><span class="panel-tool__title" data-i18n="activity.shells"></span><span class="panel-tool__info" data-panel-info="shells"></span></span><kbd>Ctrl+Shift+S</kbd></button>
+                  <button type="button" data-panel-tool="agents"><svg data-icon="agents" aria-hidden="true"></svg><span class="panel-tool__text"><span class="panel-tool__title" data-i18n="activity.agents"></span><span class="panel-tool__info" data-panel-info="agents"></span></span><kbd>Ctrl+Shift+A</kbd></button>
+                  <button type="button" data-panel-tool="outputs"><svg data-icon="file" aria-hidden="true"></svg><span class="panel-tool__text"><span class="panel-tool__title" data-i18n="activity.outputs"></span><span class="panel-tool__info" data-panel-info="outputs"></span></span><kbd>Ctrl+Shift+O</kbd></button>
+                  <button type="button" data-panel-tool="sources"><svg data-icon="sources" aria-hidden="true"></svg><span class="panel-tool__text"><span class="panel-tool__title" data-i18n="activity.sources"></span><span class="panel-tool__info" data-panel-info="sources"></span></span><kbd>Ctrl+Shift+F</kbd></button>
+                </div>
+                <p id="panel-git-note" data-i18n="panel.git_note" hidden></p>
+              </section>
+              <section id="panel-suggested" class="newtab-section" aria-labelledby="panel-suggested-title" hidden>
+                <h2 id="panel-suggested-title" data-i18n="panel.suggested"></h2>
+                <div id="panel-suggested-list" class="newtab-suggested"></div>
+              </section>
+              <section class="newtab-section" aria-labelledby="panel-recent-title">
+                <div class="newtab-section__header">
+                  <h2 id="panel-recent-title" data-i18n="panel.recent"></h2>
+                  <div class="newtab-pager">
+                    <button id="panel-recent-newer" type="button" class="icon-button" data-i18n-aria-label="panel.newer" data-i18n-title="panel.newer" hidden></button>
+                    <button id="panel-recent-older" type="button" class="icon-button" data-i18n-aria-label="panel.older" data-i18n-title="panel.older" hidden></button>
+                    <button id="panel-recent-clear" type="button" class="icon-button" data-i18n-aria-label="panel.clear_history" data-i18n-title="panel.clear_history" hidden></button>
+                  </div>
+                </div>
+                <ol id="panel-recent-list" class="newtab-recent"></ol>
+                <p id="panel-recent-empty" class="newtab-empty" data-i18n="panel.recent_empty"></p>
+              </section>
             </div>
           </div>
           <section id="activity-panel" class="activity-panel" hidden>
-            <header class="activity-panel__header"><button id="activity-back" class="icon-button" data-i18n-aria-label="ui.back"><svg data-icon="back" aria-hidden="true"></svg></button><h2 id="activity-panel-title" tabindex="-1"></h2><button id="activity-close" class="icon-button" data-i18n-aria-label="modal.close"><svg data-icon="close" aria-hidden="true"></svg></button></header>
-            <nav id="activity-tabs" class="activity-tabs" data-i18n-aria-label="activity.title"></nav>
+            <header class="activity-panel__header" hidden><button id="activity-back" class="icon-button" data-i18n-aria-label="ui.back"><svg data-icon="back" aria-hidden="true"></svg></button><span id="activity-panel-orb" class="agent-orb" aria-hidden="true" hidden></span><h2 id="activity-panel-title" tabindex="-1"></h2><span id="activity-panel-meta" class="activity-panel__meta" hidden></span><button id="activity-panel-stop" type="button" class="icon-button agent-stop" hidden><svg data-icon="stop" aria-hidden="true"></svg></button></header>
             <div id="activity-panel-content" class="activity-panel__content"></div>
           </section>
           </div>
@@ -184,7 +203,7 @@
     <dialog id="help-dialog" class="help-dialog" aria-labelledby="help-title">
       <h2 id="help-title" data-i18n="menu.help"></h2>
       <p data-i18n="help.intro"></p>
-      <dl><div><dt data-i18n="sidebar.new_chat"></dt><dd><kbd>Ctrl + N</kbd></dd></div><div><dt data-i18n="ui.collapse"></dt><dd><kbd>Ctrl + B</kbd></dd></div><div><dt data-i18n="titlebar.settings"></dt><dd><kbd>Ctrl + ,</kbd></dd></div><div><dt data-i18n="help.send"></dt><dd><kbd>Enter</kbd></dd></div><div><dt data-i18n="help.new_line"></dt><dd><kbd>Shift + Enter</kbd></dd></div></dl>
+      <dl><div><dt data-i18n="sidebar.new_chat"></dt><dd><kbd>Ctrl + N</kbd></dd></div><div><dt data-i18n="ui.collapse"></dt><dd><kbd>Ctrl + B</kbd></dd></div><div><dt data-i18n="titlebar.settings"></dt><dd><kbd>Ctrl + ,</kbd></dd></div><div><dt data-i18n="help.send"></dt><dd><kbd>Enter</kbd></dd></div><div><dt data-i18n="help.new_line"></dt><dd><kbd>Shift + Enter</kbd></dd></div><div><dt data-i18n="help.panel_git"></dt><dd><kbd>Ctrl + Shift + G</kbd></dd></div><div><dt data-i18n="help.panel_shells"></dt><dd><kbd>Ctrl + Shift + S</kbd></dd></div><div><dt data-i18n="help.panel_agents"></dt><dd><kbd>Ctrl + Shift + A</kbd></dd></div><div><dt data-i18n="help.panel_outputs"></dt><dd><kbd>Ctrl + Shift + O</kbd></dd></div><div><dt data-i18n="help.panel_sources"></dt><dd><kbd>Ctrl + Shift + F</kbd></dd></div></dl>
       <form method="dialog"><button class="btn btn--primary" data-i18n="modal.close"></button></form>
     </dialog>
     <div id="settings-overlay" class="overlay" hidden>

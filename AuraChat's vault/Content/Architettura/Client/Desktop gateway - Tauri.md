@@ -799,3 +799,35 @@ risposta» (`app.js`) e riquadro prezzi per modello nell'editor del provider
 
 Verifica: `desktop/tests/usage-panel.cjs`, `desktop/tests/settings-flow.cjs` e test
 Rust su conteggio, sconto, prezzi e round trip Firestore.
+
+## Pannello laterale come centro operativo
+
+Richiesta: il pannello a schede raccoglie tutto il lavoro della chat (browser,
+Shell, Modifiche, Subagenti, Output e Fonti) con subagenti e nuova scheda in
+stile ChatGPT/Codex.
+
+Riepilogo (`activity.js`): la sezione **Subagenti** mostra fino a due agenti attivi
+con orb animato, poi righe compatte con orb di stato («+N in esecuzione»,
+«N completati», «N non riusciti», «N interrotti») che aprono la vista. Le immagini
+nelle Fonti diventano miniature (massimo quattro e «+N»), gli altri elementi
+restano righe. I titoli di gruppo non mostrano conteggi.
+
+Vista Subagenti: **Attivi · N** (con stato vuoto esplicito) e **Conclusi · N**.
+Le viste elenco non hanno intestazione propria; il dettaglio mostra orb, titolo,
+modello e arresto, poi una disclosure `details.agent-work` chiusa («Al lavoro · 12s»
+o «Durata lavoro: 1m 04s») con Incarico, cronologia e numero di strumenti, quindi
+risultato Markdown con copia e lettura. Lo stato testuale resta per screen reader
+quando l'orb basta; Escape torna all'elenco e poi chiude la scheda.
+
+Nuova scheda (`browser.js`, `index.html`): griglia **Strumenti** con stato
+sintetico (diff Git, esecuzioni attive, numero di file o fonti, «Ancora niente») e
+scorciatoie Ctrl/Cmd+Shift+G/S/A/O/F, attive nella vista chat anche a pannello
+chiuso e ignorate sotto dialog, impostazioni o app bloccata. Modifiche è disattivata
+senza cartella di progetto locale, con nota esplicativa. **Suggeriti** unisce fino
+a quattro link delle Fonti e pagine più visitate; **Recenti** legge la cronologia
+locale per account `aurachat.browserHistory:<utente>` (60 voci, 5 per pagina,
+cancellabile). Ogni navigazione http/https aggiorna titolo, visite e orario. I
+favicon si chiedono solo per host già visitati, con iniziale finché non caricano.
+
+Verifica: `desktop/tests/activity-panel.cjs`, `panel-tabs.cjs`,
+`operations-flow.cjs` e `git-panel.cjs`.
