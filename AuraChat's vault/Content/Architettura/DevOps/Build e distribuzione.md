@@ -83,6 +83,28 @@ Le regressioni `background-chats.cjs` e `history-save.cjs` sono passate con
 servizi nativi simulati; nessun invio reale al provider dalla Prod durante
 questa verifica. Dettagli del comportamento in [[Desktop gateway - Tauri]].
 
+### Installazione locale Windows — cronologia riusata, 12 novembre 2026
+
+Seconda build **0.1.6** dello stesso giorno, con il rendering incrementale della
+cronologia all'invio, installata con `install-prod.ps1 -SkipBuild` dopo aver
+controllato che l'app non avesse turni in corso. App riaperta e chat lunga
+riaperta senza errori; l'agente non ha inviato messaggi, l'utente ha poi provato
+un invio reale con esito positivo. Nessun incremento di versione o upload.
+
+Se `ORT_LIB_PATH` punta a un `onnxruntime.dll` esterno (lo eredita per esempio un
+processo avviato dall'app GitHub Copilot), `ort-sys` fallisce il link: va rimossa
+dall'ambiente della build.
+
+Ricevuta validata con `node desktop\scripts\release.cjs --skip-build`.
+Fingerprint dei sorgenti desktop:
+`97864356567b41c811b5244e1f906cc238290d016bd7baf5a869408da62fec83`.
+
+SHA-256 verificati dopo l'installazione:
+- Installer `AuraChat_0.1.6_x64-setup.exe`:
+  `0e1f5cf78ea08ecd4d1139144a7ac53637be9a97d74d3f18a230744929144083`.
+- Eseguibile installato, senza normalizzazione:
+  `2c61a77cb1702f2c6627dac5fca4c7dd0093a03ac003b32f69f8c95e6b74cbed`.
+
 ## Limiti
 
 La firma dell'updater non sostituisce la firma del sistema operativo: su Windows

@@ -52,6 +52,14 @@ superati, non per regressioni. L'avvio chiama `refresh_data`, gestito solo da
 rossi, identici prima e dopo l'ultima correzione: `background-chats`,
 `lazy-history`, `sidebar-selection`, `ui-smoke` e `skills`.
 
+Aggiornamento 12 novembre 2026: `background-chats`, `lazy-history` e le altre
+suite eseguite (`history-save`, `chat-reading`, `chat-progress`, `chat-tools`,
+`pending-guidance`, `permissions`, `questions`, `composer-stop`,
+`image-attachments`, `voice-flow`, `activity-panel`, `image-annotations`) sono
+verdi. Restano in timeout `ui-smoke.cjs` (riga 85) e `sidebar-selection.cjs`
+(riga 54), negli stessi punti anche su `fd7a8dd` e `7fb417e`, quindi non dovuti
+alle ultime modifiche; `skills.cjs` non è stato rieseguito.
+
 ## Titolo AI perso in corsa con il salvataggio — 2 novembre 2026
 
 Risolto l'11 novembre 2026: `chat_inner` inizializza titolo provvisorio,
@@ -109,6 +117,17 @@ aggiunti loader immediato e annullamento durante la preparazione. Questi interve
 non risolvono il limite della fonemizzazione. Le prove reali verificano campioni
 audio e ritmo, non garantiscono pronuncia corretta o naturalezza percepita.
 Dettagli e gestione del modello in [[Desktop gateway - Tauri]].
+
+## Blocco della UI all'invio — 12 novembre 2026
+
+Risolto. Con cronologie lunghe la UI si bloccava prima di mostrare il fumetto
+dell'utente e di nuovo dopo **Preparazione invio…**: `renderMessages`
+ricostruiva l'intera cronologia due volte per invio e `chat-scroll.js` forzava un
+layout per ogni dettaglio chiuso. Ora i messaggi invariati riusano il loro nodo e
+lo scroll viene ripristinato solo per i dettagli aperti; nel benchmark simulato il
+fumetto appare in circa 55 ms con 60 turni (prima 1,5 s) e 98 ms con 120 (prima
+5,4 s). Provato dall'utente con un invio reale sulla Prod installata: esito
+positivo. Dettagli in [[Desktop gateway - Tauri]].
 
 ## Script e installer — 22 ottobre 2026
 

@@ -95,8 +95,13 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   await row('a').locator('.tree-conv__title').click();assert.equal(await row('a').locator('.tree-conv__unread').count(),0);assert.match(await page.locator('#messages').innerText(),/Risposta A/);
   assert.equal(await row(c).locator('.tree-conv__unread').count(),1);
   await row(c).locator('.tree-conv__title').click();assert.match(await page.locator('#messages').innerText(),/Risposta C/);assert.equal(await row(c).locator('.tree-conv__unread').count(),0);
-  await row('a').locator('.tree-conv__title').click();await page.fill('#composer-input','Richiesta fallita');await page.click('#composer-send');
-  await row('a').locator('.tree-conv__spinner').waitFor();await row('b').locator('.tree-conv__title').click();
+  await row('a').locator('.tree-conv__title').click();
+  // Sending must keep the rendered history: rebuilding long chats froze the UI before the bubble painted.
+  await page.evaluate(()=>document.querySelectorAll('#messages > .msg').forEach(node=>{node.__kept=true;}));
+  await page.fill('#composer-input','Richiesta fallita');await page.click('#composer-send');
+  await row('a').locator('.tree-conv__spinner').waitFor();
+  assert.deepEqual(await page.evaluate(()=>[...document.querySelectorAll('#messages > .msg')].map(node=>!!node.__kept)),[true,true,false,false]);
+  await row('b').locator('.tree-conv__title').click();
   await page.evaluate(()=>{
     window.__events['chat-progress']({payload:{conversation_id:'a',kind:'__delta',text:'Risposta interrotta da conservare'}});
     window.__pending.a.reject(new Error('Background failure'));

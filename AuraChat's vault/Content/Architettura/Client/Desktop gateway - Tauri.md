@@ -385,6 +385,31 @@ Eseguibile installato confrontato con la build e app riaperta; ricevuta e hash
 in [[Build e distribuzione]]. Le regressioni browser usano servizi nativi
 simulati: non e stato inviato un messaggio di prova al provider dalla Prod.
 
+### Cronologia riusata all'invio — 12 novembre 2026
+
+Il blocco segnalato dopo la 0.1.6 non dipendeva dai controlli asincroni ma dal
+rendering: ogni `renderMessages` svuotava `#messages` e ricostruiva tutta la
+cronologia due volte per invio, prima del fumetto in preparazione e prima della
+chiamata `chat`. In `chat-scroll.js`, `afterRender` ripristinava anche ogni
+dettaglio chiuso alternando letture e scritture di `scrollTop`: un layout forzato
+per riga di attività. Con 60 turni da 20 attività il fumetto appariva dopo circa
+1,5 s; con 120 turni dopo circa 5,4 s.
+
+Ora snapshot e ripristino riguardano solo `.turn-history[open]` e
+`.turn-step[open]`, perché quelli chiusi ricalcolano lo scroll al `toggle`.
+`renderMessages` riusa il nodo di ogni messaggio invariato tramite una copia
+strutturale che condivide le stringhe: copre cloni, risultati nativi e feedback
+modificato sul posto. La chiave include anche indice, ultima risposta e retry; i
+pulsanti dipendenti da `busy` si aggiornano senza ricostruire. Bozze, coda,
+guida pendente e stream restano nodi nuovi e vengono riconciliati con
+`reconcileChildren`. Con lo stesso benchmark simulato il fumetto appare in circa
+55 ms con 60 turni e circa 98 ms con 120 turni. `background-chats.cjs` verifica
+che inviare non ricrei i nodi della cronologia. Poiché i nodi restano, stato del
+pulsante di copia e di lettura vocale, focus e menu aperti non vengono più
+azzerati dai ridisegni. Provato dall'utente con un invio reale sulla Prod
+installata: esito positivo. Installazione locale e hash in
+[[Build e distribuzione]].
+
 ## Finestra, MCP e strumenti di progetto — 22 ottobre 2026
 
 **Controlli finestra e Git annidato** (`d440cf0`). Su Windows i pulsanti

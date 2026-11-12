@@ -46,6 +46,9 @@ chiave sono descritti nel runbook; nessun segreto va inserito nel repository.
   restano disponibili. Anche una chat nuova appare prima del salvataggio.
   Il modello parte solo dopo i controlli; in caso di errore il messaggio e gli
   allegati restano nella coda originale, con errore esplicito e **Riprendi coda**.
+  I messaggi già mostrati e invariati mantengono il proprio DOM: inviare in una
+  chat lunga non ricostruisce Markdown, attività e icone della cronologia; si
+  ripristinano solo i dettagli aperti.
 - **Turno in corso**: il nome della chat nasce dal primo messaggio, subito, senza
   aspettare la risposta, come titolo provvisorio. All'avvio del primo turno una
   richiesta separata in background propone un titolo breve nella lingua

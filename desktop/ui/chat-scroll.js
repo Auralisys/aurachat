@@ -54,7 +54,9 @@ const chatScroll = {
   snapshot() {
     const box = $('#messages'), top = box.getBoundingClientRect().top;
     const anchor = [...box.children].find(node => node.dataset.messageIndex != null && node.getBoundingClientRect().bottom > top + 1);
-    const details = [...box.querySelectorAll('.turn-history,.turn-step')].map(node => ({
+    // Closed disclosures are the rebuilt default and size their scroll on toggle; restoring
+    // each one would force a layout per activity row on long histories.
+    const details = [...box.querySelectorAll('.turn-history[open],.turn-step[open]')].map(node => ({
       message:node.closest('.msg')?.dataset.messageIndex,
       part:node.closest('.turn-history')?.dataset.partKey,
       step:node.dataset.stepId, open:node.open,
@@ -83,9 +85,10 @@ const chatScroll = {
       const history = [...message?.querySelectorAll('.turn-history') || []].find(node => node.dataset.partKey === detail.part);
       const node = detail.step == null ? history : [...history?.querySelectorAll('.turn-step') || []].find(row => row.dataset.stepId === detail.step);
       if (node) {
-        const content = node.lastElementChild;
-        if (detail.open && content._reasoning != null) renderMarkdown(content,content._reasoning);
-        content._restored = detail.open;node.open = detail.open;
+        const content = node.lastElementChild, reopened = detail.open && !node.open;
+        // A reused node is already open: no toggle will consume the restored flag.
+        if (reopened && content._reasoning != null) renderMarkdown(content,content._reasoning);
+        content._restored = reopened;node.open = detail.open;
         restored.push({content,detail});
       }
     }

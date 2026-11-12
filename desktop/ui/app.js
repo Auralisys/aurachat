@@ -1184,25 +1184,58 @@ function messageEl(m, index) {
     el.appendChild(attachments);
   }
   const actions = document.createElement('div');actions.className = 'msg-actions';
+  // Reused history nodes follow busy changes without being rebuilt.
+  el._busyControls = [];
   if (m.content) actions.appendChild(messageAction('copy','chat.copy',button => copyText(m.content,button)));
   if (role === 'assistant') {
     if ('AudioContext' in window || ('speechSynthesis' in window && typeof SpeechSynthesisUtterance === 'function')) actions.appendChild(messageAction('speaker','chat.read_aloud',button => readMessage(m.content,button)));
     for (const [glyph,key,value] of [['thumbUp','chat.helpful',true],['thumbDown','chat.not_helpful',false]]) {
       const button = messageAction(glyph,key,() => setMessageFeedback(index,value));
-      button.setAttribute('aria-pressed',String(m.feedback === value));button.disabled = state.busy;actions.appendChild(button);
+      button.setAttribute('aria-pressed',String(m.feedback === value));button.disabled = state.busy;actions.appendChild(button);el._busyControls.push(button);
     }
     const latest = state.messages.findLastIndex(message => message.role === 'assistant') === index;
-    if (latest) {const retry = messageAction('retry','chat.regenerate',() => regenerateReply());retry.disabled = state.busy;actions.appendChild(retry);}
+    if (latest) {const retry = messageAction('retry','chat.regenerate',() => regenerateReply());retry.disabled = state.busy;actions.appendChild(retry);el._busyControls.push(retry);}
     const more = messageAction('more','sidebar.options',button => showTreeMenu(actions,button,t('chat.message_options'),[
       ['copy','chat.copy',() => copyText(m.content)],
       ...(latest ? [['retry','chat.regenerate',regenerateReply]] : []),
     ]));configureMenuTrigger(more);actions.appendChild(more);
   } else if (role === 'user') {
-    const edit = messageAction('rename','chat.edit',() => editMessage(index));edit.disabled = state.busy;actions.appendChild(edit);
+    const edit = messageAction('rename','chat.edit',() => editMessage(index));edit.disabled = state.busy;actions.appendChild(edit);el._busyControls.push(edit);
   } else if (state.failedSend) actions.appendChild(messageAction('retry','chat.retry',() => {
     setComposerText(state.failedSend.content);state.attachments = structuredClone(state.failedSend.attachments);renderDraft();autoGrow();send();
   }));
   el.appendChild(actions);return el;
+}
+
+// Unchanged history keeps its DOM. Rebuilding a long chat re-parses every Markdown
+// block and activity row, which froze the UI before a sent bubble could paint.
+const renderedMessages = {conversation:undefined, entries:[]};
+
+// Messages can be cloned, replaced by the native result or edited in place (feedback):
+// compare against a structural copy that shares the immutable strings.
+function messageSnapshot(value) {
+  if (!value || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(messageSnapshot);
+  return Object.fromEntries(Object.entries(value).map(([key,item]) => [key,messageSnapshot(item)]));
+}
+
+function sameMessageValue(a, b) {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return false;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every(key => Object.hasOwn(b,key) && sameMessageValue(a[key],b[key]));
+}
+
+function renderedMessage(message, index, latest) {
+  const failed = message.role === 'error' && !!state.failedSend;
+  const entry = renderedMessages.entries[index];
+  if (entry && entry.latest === latest && entry.failed === failed && sameMessageValue(entry.message,message)) {
+    entry.node._busyControls.forEach(button => {button.disabled = state.busy;});
+    return entry.node;
+  }
+  const node = messageEl(message,index);node.dataset.messageIndex = String(index);
+  renderedMessages.entries[index] = {message:messageSnapshot(message), node, latest, failed};
+  return node;
 }
 
 function renderMessages() {
@@ -1222,24 +1255,30 @@ function renderMessages() {
   const computer = remoteComputerIcon(state.activeConversationId);
   if (computer) {computer.id = 'conversation-remote';$('#conversation-title').before(computer);}
   $('#conversation-options').disabled = !state.activeConversationId || state.busy || queuedTurns.preparing.has(state.activeConversationId);
-  box.innerHTML = '';
   renderThinkingStatus();
   if (empty) {
+    renderedMessages.entries = [];
     box.innerHTML = emptyHTML();
     chatScroll.afterRender(reading);
     return;
   }
-  state.messages.forEach((message,index) => {
-    const node = messageEl(message,index);node.dataset.messageIndex = String(index);box.appendChild(node);
-  });
+  if (renderedMessages.conversation !== state.activeConversationId || box.querySelector(':scope > .empty')) {
+    renderedMessages.conversation = state.activeConversationId;renderedMessages.entries = [];box.replaceChildren();
+  }
+  const latest = state.messages.findLastIndex(message => message.role === 'assistant');
+  const nodes = state.messages.map((message,index) => renderedMessage(message,index,index === latest));
+  renderedMessages.entries.length = state.messages.length;
   if (state.busy) {
     const pending = document.createElement('article');pending.className = 'msg msg--assistant msg--stream';
     pending.dataset.messageIndex = String(state.messages.length);
     pending.setAttribute('aria-label', t('chat.assistant'));
-    const body = document.createElement('div');body.className = 'msg__text markdown';pending.append(body);box.append(pending);
-    updateLiveTurn();
+    const body = document.createElement('div');body.className = 'msg__text markdown';pending.append(body);nodes.push(pending);
   }
-  renderQueuedMessages(box, state.activeConversationId);
+  const queued = document.createDocumentFragment();
+  renderQueuedMessages(queued, state.activeConversationId);
+  nodes.push(...queued.children);
+  reconcileChildren(box,nodes);
+  if (state.busy) updateLiveTurn();
   renderThinkingStatus();
   chatScroll.afterRender(reading);
   updateThinkingTimer();
