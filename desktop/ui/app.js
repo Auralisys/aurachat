@@ -999,10 +999,39 @@ async function setMessageFeedback(index, value) {
   renderMessages();
 }
 
-function readAloudButton(button, active) {
-  const label = t(active ? 'chat.stop_read_aloud' : 'chat.read_aloud');
+function readAloudText(content) {
+  const root = document.createElement('div');root.innerHTML = markdownHTML(content);
+  const text = node => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent.replace(/\s+/g,' ');
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    if (node.tagName === 'BR' || node.tagName === 'HR') return '\n';
+    const value = node.tagName === 'TR'
+      ? [...node.children].map(cell => text(cell).trim()).join(', ')
+      : [...node.childNodes].map(text).join('');
+    return node.matches('p,li,h1,h2,h3,h4,blockquote,pre,tr,details,summary') ? `\n${value}\n` : value;
+  };
+  // Line breaks alone are folded into spaces by the phonemizer.
+  return text(root).split(/\n+/).map(line => line.replace(/\s+/g,' ').trim()).filter(Boolean)
+    .map(line => /[.!?;:,\u2026]["'\u00bb\u201d\u2019)\]]*$/.test(line) ? line : `${line}.`).join('\n');
+}
+
+function readAloudButton(button, phase = 'idle') {
+  const active = phase !== 'idle';
+  const loading = phase === 'loading' || phase === 'synthesizing';
+  const label = t(loading ? 'chat.cancel_read_aloud' : active ? 'chat.stop_read_aloud' : 'chat.read_aloud');
   button.replaceChildren(icon(active ? 'stop' : 'speaker'));
   button.title = label;button.setAttribute('aria-label',label);
+  button.classList.toggle('is-loading',loading);
+  button.setAttribute('aria-busy',String(loading));
+  if (loading) {
+    if (!button._readAloudStatus) {
+      const status = document.createElement('span');status.className = 'read-aloud-status';
+      status.setAttribute('role','status');button.after(status);button._readAloudStatus = status;
+    }
+    button._readAloudStatus.textContent = t(phase === 'loading' ? 'voice.tts_loading' : 'voice.tts_busy');
+  } else {
+    button._readAloudStatus?.remove();button._readAloudStatus = null;
+  }
 }
 
 function finishReadAloud(request) {
@@ -1010,7 +1039,7 @@ function finishReadAloud(request) {
   readAloud.source = null;
   if (readAloud.context) readAloud.context.close().catch(() => {});
   readAloud.context = null;
-  if (readAloud.button) readAloudButton(readAloud.button,false);
+  if (readAloud.button) readAloudButton(readAloud.button);
   readAloud.button = null;
 }
 
@@ -1023,8 +1052,8 @@ function stopReadAloud() {
   readAloud.source = null;
   if (readAloud.context) readAloud.context.close().catch(() => {});
   readAloud.context = null;
-  speechSynthesis?.cancel();
-  if (readAloud.button) readAloudButton(readAloud.button,false);
+  window.speechSynthesis?.cancel();
+  if (readAloud.button) readAloudButton(readAloud.button);
   readAloud.button = null;
 }
 
@@ -1034,6 +1063,9 @@ function systemReadAloud(text, button, request) {
     finishReadAloud(request);composerStatus(t('chat.voice_unavailable'));return;
   }
   const utterance = new SpeechSynthesisUtterance(text);utterance.lang = lang;
+  utterance.onstart = () => {
+    if (request === readAloud.request) readAloudButton(button,'playing');
+  };
   utterance.onend = () => finishReadAloud(request);
   utterance.onerror = event => {
     finishReadAloud(request);
@@ -1048,17 +1080,23 @@ async function readMessage(content, button) {
     stopReadAloud();
     if (sameButton) return;
   }
-  const text = document.createElement('div');text.innerHTML = markdownHTML(content);
+  const text = readAloudText(content);
   const request = ++readAloud.request;
-  readAloud.button = button;readAloudButton(button,true);
+  readAloud.button = button;readAloudButton(button,'loading');
+  let context = null;
   try {
+    // Unlock during the click, not after model loading loses user activation.
+    context = 'AudioContext' in window ? new AudioContext() : null;
+    readAloud.context = context;
+    if (context) await context.resume();
+    if (request !== readAloud.request) return;
     await invoke('prepare_tts_model');
     if (request !== readAloud.request) return;
-    const audio = await invoke('synthesize_tts',{text:text.textContent,voice:selectedTtsVoice()});
+    readAloudButton(button,'synthesizing');
+    const audio = await invoke('synthesize_tts',{text,voice:selectedTtsVoice()});
     if (request !== readAloud.request) return;
     if (!audio?.samples?.length || !audio.sample_rate) throw new Error('tts_audio_invalid');
-    const context = new AudioContext();
-    readAloud.context = context;
+    if (!context) throw new Error('tts_audio_unavailable');
     const buffer = context.createBuffer(1,audio.samples.length,audio.sample_rate);
     buffer.copyToChannel(Float32Array.from(audio.samples),0);
     const source = context.createBufferSource();
@@ -1066,11 +1104,15 @@ async function readMessage(content, button) {
     source.connect(context.destination);readAloud.source = source;
     await context.resume();
     if (request !== readAloud.request) return;
+    readAloudButton(button,'playing');
     source.start();
   } catch (error) {
     if (request !== readAloud.request) return;
     if (String(error).includes('tts_model_missing')) {
-      systemReadAloud(text.textContent,button,request);
+      context?.close().catch(() => {});
+      if (readAloud.context === context) readAloud.context = null;
+      readAloudButton(button,'synthesizing');
+      systemReadAloud(text,button,request);
       return;
     }
     finishReadAloud(request);

@@ -202,6 +202,7 @@
   "chat.copy_code": "Copy code",
   "chat.read_aloud": "Read aloud",
   "chat.stop_read_aloud": "Stop reading",
+  "chat.cancel_read_aloud": "Cancel audio preparation",
   "chat.helpful": "Helpful response",
   "chat.not_helpful": "Unhelpful response",
   "chat.regenerate": "Regenerate response",

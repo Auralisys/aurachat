@@ -97,6 +97,19 @@ disabilitati. Annullare una trascrizione continua ad attendere il blocco ONNX gi
 in corso (il risultato viene scartato), ma questo non riguarda più il primo avvio.
 Dettagli in [[Desktop gateway - Tauri]] e [[UI desktop - Refactor flat]].
 
+## Qualità della lettura italiana — 12 novembre 2026
+
+La lettura locale Kokoro produce audio, ma la qualità italiana è stata giudicata
+insoddisfacente dall'utente. `kokoro-micro` 1.3.0 converte il testo in fonemi con
+regole approssimate: accenti delle parole e distinzione delle vocali aperte/chiuse
+non sono equivalenti alla pipeline di riferimento Kokoro con eSpeak NG.
+
+Corretti il rallentamento forzato al 65% e le pause mancanti fra blocchi Markdown;
+aggiunti loader immediato e annullamento durante la preparazione. Questi interventi
+non risolvono il limite della fonemizzazione. Le prove reali verificano campioni
+audio e ritmo, non garantiscono pronuncia corretta o naturalezza percepita.
+Dettagli e gestione del modello in [[Desktop gateway - Tauri]].
+
 ## Script e installer — 22 ottobre 2026
 
 - `install-prod.sh` e `package-installer.sh` (macOS) sono controllati solo con

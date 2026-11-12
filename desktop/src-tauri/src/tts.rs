@@ -25,6 +25,8 @@ const FILES: &[(&str, u64, &str)] = &[
     ),
 ];
 const SAMPLE_RATE: u32 = 24_000;
+// kokoro-micro 1.3.0 multiplies this by 0.65; Kokoro's reference rate is 1.0.
+const SYNTHESIS_SPEED: f32 = 1.0 / 0.65;
 const MAX_TEXT_CHARS: usize = 8_000;
 const VOICES: &[&str] = &["if_sara", "im_nicola"];
 
@@ -344,7 +346,7 @@ impl Tts {
         let audio = model
             .as_ref()
             .ok_or("tts_engine")?
-            .synthesize_with_options(&text, Some(&voice), 1.0, 1.0, None)
+            .synthesize_with_options(&text, Some(&voice), SYNTHESIS_SPEED, 1.0, None)
             .map_err(|error| format!("tts_engine: {error}"))?;
         if audio.is_empty() || audio.iter().any(|sample| !sample.is_finite()) {
             return Err("tts_audio_invalid".into());
@@ -406,17 +408,24 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "downloads 354 MB into a temporary folder and runs real CPU synthesis"]
+    #[ignore = "real synthesis: uses AURACHAT_TTS_TEST_CONFIG_DIR or downloads 354 MB into a temporary folder"]
     fn real_download_and_synthesis() {
-        let root = std::env::temp_dir().join("aurachat-tts-smoke");
+        let installed = std::env::var_os("AURACHAT_TTS_TEST_CONFIG_DIR");
+        let root = installed.as_ref().map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join(format!("aurachat-tts-smoke-{}", std::process::id())));
         let service = Tts::new(&root);
-        tauri::async_runtime::block_on(
-            service.download(|s| eprintln!("Model {} / {}", s.downloaded, s.total)),
-        )
-        .unwrap();
+        if installed.is_none() {
+            tauri::async_runtime::block_on(
+                service.download(|s| eprintln!("Model {} / {}", s.downloaded, s.total)),
+            )
+            .unwrap();
+        }
         assert!(service.status().ready);
         let text = "Buongiorno, questa è una prova della voce italiana di AuraChat.";
+        service.prepare_with_progress(|_| {}).unwrap();
         for voice in VOICES {
+            let slow_samples = service.model.lock().unwrap().as_ref().unwrap()
+                .synthesize_with_options(text, Some(voice), 1.0, 1.0, None).unwrap().len();
             for attempt in 1..=2 {
                 let started = std::time::Instant::now();
                 let audio = service
@@ -426,15 +435,19 @@ mod tests {
                 let rms = (audio.samples.iter().map(|s| s * s).sum::<f32>()
                     / audio.samples.len() as f32)
                     .sqrt();
+                let duration_ratio = audio.samples.len() as f32 / slow_samples as f32;
                 eprintln!(
-                    "{voice} #{attempt}: {seconds:.1}s of audio in {:?}, rms {rms:.3}",
+                    "{voice} #{attempt}: {seconds:.1}s of audio in {:?}, rms {rms:.3}, duration vs old rate {duration_ratio:.2}",
                     started.elapsed()
                 );
                 assert_eq!(audio.sample_rate, SAMPLE_RATE);
                 assert!((2.5..15.0).contains(&seconds));
                 assert!(rms > 0.01);
+                assert!((0.5..0.85).contains(&duration_ratio), "must remove the forced slowdown");
             }
         }
-        fs::remove_dir_all(root).unwrap();
+        if installed.is_none() {
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 }

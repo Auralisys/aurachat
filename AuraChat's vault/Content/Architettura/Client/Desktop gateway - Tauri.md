@@ -168,6 +168,42 @@ Dettagli UI in [[UI desktop - Refactor flat]]. Test browser con AudioWorklet
 reale e microfono simulato; trascrizione CPU di un campione pubblico verificata.
 Il microfono fisico e il dialogo permessi del WebView restano da provare manualmente.
 
+### Lettura ad alta voce con Kokoro — 12 novembre 2026
+
+`desktop/src-tauri/src/tts.rs` gestisce Kokoro-82M ONNX e le voci italiane
+`if_sara` e `im_nicola` (~337 MiB complessivi). Impostazioni → Voce offre
+download riprendibile da revisione fissata, verifica SHA-256, stato installato,
+caricamento in memoria al primo uso, scelta della voce e rimozione. Testo e audio
+restano sul dispositivo; inferenza su CPU, pesi e libreria Apache 2.0.
+Se il modello non è installato, la lettura usa la voce di sistema.
+
+La lettura parte dall'altoparlante sotto la risposta, anche nel dettaglio dei
+subagenti, non da una richiesta scritta in chat. `readAloudText` in `app.js`
+estrae il testo dal Markdown sanificato e conserva pause fra titoli, paragrafi,
+liste e righe delle tabelle. L'`AudioContext` viene creato e sbloccato durante il
+clic, prima delle attese native, per evitare il blocco autoplay di WebView2.
+
+Il pulsante mostra subito un loader e lo stato «Caricamento del modello locale…»,
+poi «Sintesi vocale in corso…»; diventa «Interrompi lettura» quando parte l'audio.
+Durante l'attesa resta utilizzabile per annullare, anche da tastiera. Il risultato
+di una richiesta annullata viene scartato, senza interrompere il blocco ONNX già
+in corso. Fine lettura, annullamento ed errori ripristinano il pulsante; il loader
+rispetta la preferenza di movimento ridotto.
+
+La velocità passata a `kokoro-micro` 1.3.0 è `1.0 / 0.65`, compensando il
+rallentamento interno per ottenere la velocità standard del modello: nessuna
+accelerazione della riproduzione o modifica del sample rate (24 kHz).
+La fonemizzazione italiana resta approssimativa; vedi [[Problemi noti]].
+
+Verifiche: `desktop/tests/chat-tools.cjs` copre le fasi del loader, annullamento,
+errori, attivazione audio al clic e pause del testo, con servizi nativi simulati;
+`activity-panel.cjs` copre il pannello condiviso. Il test Rust ignorato
+`tts::tests::real_download_and_synthesis` verifica entrambe le voci e il rapporto
+di durata rispetto al vecchio ritmo. `AURACHAT_TTS_TEST_CONFIG_DIR` permette di
+usare in sola lettura i pesi già installati, evitando download e rimozione.
+Build Windows 0.1.6 aggiornata e installata sul PC; naturalezza della voce non
+considerata risolta dalla sola verifica dei campioni audio.
+
 ### Origine e coda della dettatura — 29 ottobre 2026
 
 `desktop/ui/voice.js` fissa chat, account e lingua nella registrazione prima

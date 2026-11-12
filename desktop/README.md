@@ -651,6 +651,17 @@ o `im_nicola` la sintesi resta sul dispositivo. Se Kokoro non è installato, la
 lettura continua a usare la voce di sistema. Modello, voci e libreria sono Apache 2.0.
 La lettura si avvia dal pulsante altoparlante «Leggi ad alta voce» sotto la risposta,
 non da una richiesta scritta in chat; viene letto il testo senza i marcatori Markdown.
+Durante caricamento e sintesi il pulsante mostra un loader con lo stato del lavoro
+e permette di annullare la lettura; un risultato arrivato dopo l'annullamento non viene riprodotto.
+Titoli, paragrafi, liste e righe delle tabelle mantengono le pause anche senza
+punteggiatura finale. La velocita di sintesi compensa il fattore 0,65 di
+`kokoro-micro` 1.3.0 per usare il ritmo standard del modello, senza accelerare
+la riproduzione o alterare il tono. La fonemizzazione italiana della libreria
+resta basata su regole approssimate: accenti e pronunce non equivalgono alla
+pipeline di riferimento Kokoro con eSpeak NG.
+Il test reale `tts::tests::real_download_and_synthesis` accetta
+`AURACHAT_TTS_TEST_CONFIG_DIR` per riusare i pesi gia installati in sola lettura
+e confrontare la durata con il vecchio ritmo, senza riscaricarli.
 Il registratore AudioWorklet cattura mono, ricampiona a 16 kHz e conserva l'audio
 solo in memoria. Limite due minuti, inferenza in blocchi fino a 30 secondi.
 La lingua segue italiano/inglese dell'interfaccia. Registrazione con forma

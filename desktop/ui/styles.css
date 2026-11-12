@@ -526,6 +526,13 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 .message-action { display:grid; place-items:center; width:28px; height:28px; padding:5px; border-radius:7px; color:var(--c-text-muted); flex:none; }
 .message-action .ui-icon { width:16px; height:16px; }
 .message-action:hover,.message-action[aria-pressed="true"] { background:var(--c-hover); color:var(--c-text); }
+.message-action.is-loading { position:relative; color:var(--c-glow); }
+.message-action.is-loading .ui-icon { width:10px; height:10px; }
+.message-action.is-loading::after { content:''; position:absolute; inset:3px; border:2px solid var(--c-soft-border); border-top-color:currentColor; border-radius:50%; pointer-events:none; }
+.msg-actions:has(.read-aloud-status) { flex-wrap:wrap; }
+.read-aloud-status { margin-inline:4px 8px; color:var(--c-text-muted); font-size:12px; }
+@media (prefers-reduced-motion:no-preference) { .message-action.is-loading::after { animation:mic-spin .85s linear infinite; } }
+.is-backgrounded .message-action.is-loading::after { animation-play-state:paused; }
 .msg--user .msg-actions { position:absolute; top:100%; right:0; opacity:0; margin-top:4px; }
 .msg--user:hover .msg-actions,.msg--user:focus-within .msg-actions { opacity:1; }
 .context-info { position:relative; flex:none; }
