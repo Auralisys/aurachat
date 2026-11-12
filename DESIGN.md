@@ -100,3 +100,16 @@ bianco), righe etichetta/valore e righe per modello con tag «sconto 50%». Nume
 in `k`/`M` con valore esatto nel tooltip, USD con due cifre significative.
 Nelle impostazioni ogni modello ha un riquadro prezzi richiudibile con chip di
 stato, riepilogo e campi con suffisso USD (una colonna sotto 600 px).
+
+Il saldo dell'account appartiene alla API key e non alla chat, quindi ha un blocco
+separato in fondo al popover, sotto un filetto: titolo «Saldo DeepSeek» a
+sinistra, azione di aggiornamento a destra, stessa griglia etichetta/valore e
+cifre tabulari; «Ricaricato» e «Bonus» rientrano sotto «Disponibile». A credito
+esaurito compare la pillola rosata «Credito insufficiente», con una nota, e
+«Ricarica su DeepSeek» diventa l'unico pulsante pieno (viola); negli altri stati è
+un pulsante con bordo sottile. Lo stesso blocco, in un riquadro con bordo sottile
+e senza altri contenitori annidati, sta nell'editor del provider sotto la API key:
+è l'unico accesso sotto 600 px, dove il pulsante dell'intestazione è nascosto. Il
+popover arriva a 680 px (o all'altezza della finestra meno 120 px) prima di
+scorrere. Se il browser non si apre, l'indirizzo di ricarica compare sotto il
+pulsante e viene portato in vista.

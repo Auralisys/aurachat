@@ -34,7 +34,7 @@ chiave sono descritti nel runbook; nessun segreto va inserito nel repository.
 - **Onboarding dell'inferenza a preset**: *DeepSeek* (basta la key, endpoint e
   modello precompilati) o *Avanzato* (base_url + modello + key custom).
 - **Impostazioni** con navigazione laterale e ricerca: Generali, Account, Provider di modelli e Voce. Account mostra identità e disconnessione, senza parametri Firebase. I provider hanno una API key dedicata e uno o più modelli con URL base indipendenti. La key non torna mai nella UI: il backend espone solo `api_key_set: true/false`. Ogni modello può avere un prezzo per 1M token; i modelli DeepSeek ufficiali usano il listino incluso.
-- **Utilizzo e costo stimato**: il pulsante nell'intestazione della chat mostra token (in `k`/`M`) e costo stimato in USD della conversazione, con dettaglio per cache, uscita, ragionamento e modello (vedi «Utilizzo e costo stimato»).
+- **Utilizzo e costo stimato**: il pulsante nell'intestazione della chat mostra token (in `k`/`M`) e costo stimato in USD della conversazione, con dettaglio per cache, uscita, ragionamento e modello. In fondo al popover e nell'editor del provider c'è anche il saldo dell'account DeepSeek con il pulsante di ricarica (vedi «Utilizzo e costo stimato»).
 - **Chat**: invia la cronologia della conversazione attiva a `<base_url>/v1/chat/completions`
   (formato OpenAI-compatible, streaming SSE) e mostra la risposta.
   Se il provider termina per limite di output (`length`) o filtro (`content_filter`),
@@ -44,7 +44,13 @@ chiave sono descritti nel runbook; nessun segreto va inserito nel repository.
   aspettare la risposta, come titolo provvisorio. All'avvio del primo turno una
   richiesta separata in background propone un titolo breve nella lingua
   dell'utente, in parallelo alla risposta: stesso modello, nessuno strumento,
-  massimo 2.000 caratteri del primo messaggio, timeout 25 secondi. Non aspetta
+  massimo 2.000 caratteri del primo messaggio con una richiesta, inclusi i commenti sulle immagini,
+  timeout 25 secondi. Anche un'immagine annotata senza testo nella chat usa i
+  commenti per il titolo provvisorio e quello generato, senza inviare i pixel
+  alla richiesta del titolo. Il titolo descrive azione e oggetto della richiesta:
+  i nomi dei file non vengono usati come titolo o inviati come contesto al generatore.
+  Se arrivano solo allegati senza richiesta o commenti, resta `Chat` fino al
+  primo messaggio che indica il compito. Non aspetta
   ragionamento, strumenti o conclusione del turno. Sul provider DeepSeek ufficiale
   il thinking e disabilitato.
   `title_state` distingue pending/generating/generated/manual/failed; una
@@ -627,7 +633,8 @@ il salvataggio avviene dal primo messaggio. Test dedicato:
 
 La conversazione usa una colonna di lettura da 760 px, carattere di sistema,
 Markdown sanificato, blocchi di codice copiabili e azioni sui messaggi:
-copia, modifica, rigenera, feedback e lettura tramite le voci del sistema.
+copia, modifica, rigenera, feedback e lettura (voce locale Kokoro se installata,
+altrimenti le voci del sistema).
 Il titolo apre le azioni della conversazione e i token stanno nel dettaglio
 contesto. Il pulsante + sceglie fino a quattro file di testo (128 KiB ciascuno,
 256 KiB complessivi) e fino a otto immagini, che si possono anche incollare con
@@ -637,6 +644,13 @@ Impostazioni → Voce gestisce Cohere Transcribe INT4 (~2 GB): download da una
 revisione immutabile, controllo SHA-256, interruzione/ripresa e rimozione locale.
 Il modello usa ONNX Runtime su CPU, senza Python, chiavi o servizi di trascrizione.
 Con il modello installato la verifica SHA-256 e il caricamento dei pesi partono da soli all'apertura dell'app: il microfono mostra un loader sull'icona, resta disabilitato finché il modello non è in memoria e diventa utilizzabile subito dopo. Impostazioni → Voce espone lo stesso stato (“Preparazione del modello locale…”), quindi non serve più cliccare il microfono per scoprirlo; su CPU i tempi dipendono dall'hardware.
+La stessa sezione gestisce Kokoro-82M per la lettura delle risposte: modello ONNX
+e voci italiane (~337 MiB), download riprendibile, verifica SHA-256, caricamento
+alla prima lettura e rimozione. Il modello gira localmente su CPU; con `if_sara`
+o `im_nicola` la sintesi resta sul dispositivo. Se Kokoro non è installato, la
+lettura continua a usare la voce di sistema. Modello, voci e libreria sono Apache 2.0.
+La lettura si avvia dal pulsante altoparlante «Leggi ad alta voce» sotto la risposta,
+non da una richiesta scritta in chat; viene letto il testo senza i marcatori Markdown.
 Il registratore AudioWorklet cattura mono, ricampiona a 16 kHz e conserva l'audio
 solo in memoria. Limite due minuti, inferenza in blocchi fino a 30 secondi.
 La lingua segue italiano/inglese dell'interfaccia. Registrazione con forma
@@ -1270,8 +1284,45 @@ accetta valori tra 0 e 10.000 (`invalid_pricing`); `PublicConfig` espone il prez
 personalizzato di ogni modello e `known_pricing` (host, modello, prezzo, fattore
 di sconto).
 
+**Saldo dell'account.** Il credito rimasto appartiene alla API key e non alla
+chat, quindi ha un blocco proprio, «Saldo DeepSeek», separato da «Questa chat»:
+in fondo al popover Utilizzo (dopo «Modifica prezzi») e nell'editor del provider,
+sotto il campo API key. Il pulsante nell'intestazione non cambia. Il blocco
+compare solo per i provider con una key salvata e almeno un modello
+sull'endpoint ufficiale `api.deepseek.com` (`PublicProvider.balance`); il nome
+è quello scelto per il provider. `provider_balance` (`balance.rs`) legge
+`GET https://api.deepseek.com/user/balance` con la key del provider: la key resta
+nel backend e non parte mai verso altri host, anche se il modello passa da un
+proxy. Alla UI arrivano solo gli importi per valuta (`total`, `topped_up`,
+`granted`, di solito CNY o USD), `is_available` e l'indirizzo di ricarica. Gli
+errori sono codici stabili, mai testo del provider: `invalid_provider`,
+`balance_unsupported`, `no_api_key`, `balance_unauthorized` (401/403, la key non
+è accettata) e `balance_unavailable` (rete, timeout di 15 s, HTTP o risposta
+inattesi).
+
+`ui/balance.js` legge il saldo solo quando serve, cioè all'apertura del popover
+o dell'editor, e lo riusa per 60 s. Dopo ogni turno del modello, o dopo aver
+salvato un provider, il valore in cache è considerato scaduto: resta a video
+finché non arriva il nuovo, poi si aggiorna da solo; il pulsante di aggiornamento
+forza la lettura. Stati: caricamento, importo (con «Ricaricato» e «Bonus» quando
+esistono entrambi), credito esaurito (`is_available: false`, con la ricarica come
+azione principale), nessun credito riportato ed errore con «Riprova». Se la
+lettura fallisce ma ce n'era una precedente, restano l'ultimo importo, l'orario e
+l'errore.
+
+**Ricarica.** DeepSeek non documenta alcuna API di pagamento, quindi il
+pagamento si completa sempre sul web. «Ricarica su DeepSeek» apre
+`https://platform.deepseek.com/top_up` nel browser di sistema con
+`open_external_url`; se il browser non si apre, sotto il pulsante compare
+l'indirizzo da copiare. Quando il popover scorre, la nota con l'indirizzo viene
+portata in vista.
+
 Verifica: `desktop/tests/usage-panel.cjs` (formati k/M e USD, riepilogo, righe,
 modelli senza prezzo, ultima risposta, chat precedenti, chiusura con Esc e clic
-esterno, collegamento ai prezzi), `desktop/tests/settings-flow.cjs` (listino,
-prezzo incompleto o non valido, prezzo personalizzato salvato e riaperto) e test
-Rust su conteggio, sconto orario, prezzi e round trip Firestore.
+esterno, collegamento ai prezzi, saldo: lettura alla prima apertura, cache,
+aggiornamento dopo una risposta, errore, credito esaurito, «Riprova», collegamento
+di ricarica e riquadro nell'editor del provider), `desktop/tests/settings-flow.cjs`
+(listino, prezzo incompleto o non valido, prezzo personalizzato salvato e
+riaperto) e test Rust su conteggio, sconto orario, prezzi, round trip Firestore,
+lettura del saldo (risposta, codici d'errore, key come bearer) e provider che ne
+espongono il saldo.

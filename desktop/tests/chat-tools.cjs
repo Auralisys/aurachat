@@ -7,15 +7,31 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  const locales=JSON.parse(readFileSync(resolve(__dirname,'../ui/locales/it.json'),'utf8'));
  await page.addInitScript(({locales})=>{
   window.__store={projects:[],conversations:[{id:'c',title:'test ciao',created_at:1,updated_at:1,context_tokens:97,messages:[{role:'user',content:'test ciao'},{role:'assistant',content:'Ciao! Test ricevuto. Come posso aiutarti?'}]}]};
-  window.__calls=[];window.__copied=[];window.__spoken=[];
+  window.__calls=[];window.__copied=[];window.__spoken=[];window.__ttsStarted=[];window.__ttsInstalled=false;
+  window.__ttsStatus={ready:false,busy:false,loading:false,loaded:false,downloaded:0,total:353746785};
   Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>window.__copied.push(text)}});
   window.SpeechSynthesisUtterance=class{constructor(text){this.text=text;}};
   Object.defineProperty(window,'speechSynthesis',{configurable:true,value:{speaking:false,cancel(){this.speaking=false;},speak(utterance){window.__spoken.push(utterance.text);queueMicrotask(()=>utterance.onend?.());}}});
+  window.AudioContext=class{
+   constructor(){this.destination={};}
+   createBuffer(_channels,length,sampleRate){window.__ttsStarted.push({length,sampleRate});return{copyToChannel(){}};}
+   createBufferSource(){return{connect(){},start(){queueMicrotask(()=>this.onended?.());},stop(){},onended:null};}
+   resume(){return Promise.resolve();}
+   close(){return Promise.resolve();}
+  };
 
   const config={firebase_email:'demo@example.com',firebase_project_id:'demo',firebase_api_key:'demo',firebase_auth_set:true,api_key_set:true,models:['deepseek-flash'],active_model:'deepseek-flash'};
   window.__TAURI__={window:{getCurrentWindow:()=>({minimize(){},close(){},async listen(){return()=>{};}})},core:{invoke:async(cmd,args)=>{
    window.__calls.push({cmd,args});
    if(cmd==='speech_model_status')return {ready:false,busy:false,downloaded:0,total:1994857346};
+   if(cmd==='tts_model_status')return window.__ttsStatus;
+   if(cmd==='download_tts_model'){window.__ttsStatus={...window.__ttsStatus,ready:true,downloaded:window.__ttsStatus.total};return window.__ttsStatus;}
+   if(cmd==='remove_tts_model'){window.__ttsStatus={...window.__ttsStatus,ready:false,downloaded:0,loaded:false};return window.__ttsStatus;}
+   if(cmd==='prepare_tts_model'){if(!window.__ttsInstalled)throw new Error('tts_model_missing');return;}
+   if(cmd==='synthesize_tts'){
+    if(typeof args?.text!=='string'||!args.text.trim())throw new Error('tts_invalid_text');
+    return {sample_rate:24000,samples:[0.1,0.2]};
+   }
    if(cmd==='get_locale')return JSON.stringify(locales);
    if(['get_local_config','get_config'].includes(cmd))return config;
    if(['get_data','refresh_data'].includes(cmd))return structuredClone(window.__store);
@@ -39,7 +55,13 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  assert.match(await page.locator('.msg__text').first().evaluate(el=>getComputedStyle(el).fontFamily),/Segoe UI/);
  assert.equal(await page.locator('.msg__meta').count(),0);
  await page.getByRole('button',{name:'Copia messaggio',exact:true}).last().click();assert.equal(await page.evaluate(()=>window.__copied.at(-1)),'Ciao! Test ricevuto. Come posso aiutarti?');
- await page.getByRole('button',{name:'Leggi ad alta voce',exact:true}).click();assert.equal(await page.evaluate(()=>window.__spoken.length),1);
+ await page.getByRole('button',{name:'Leggi ad alta voce',exact:true}).click();await page.waitForFunction(()=>window.__spoken.length===1);
+ assert.equal(await page.evaluate(()=>window.__spoken[0]?.trim()),'Ciao! Test ricevuto. Come posso aiutarti?');
+ await page.evaluate(()=>window.__ttsInstalled=true);
+ await page.getByRole('button',{name:'Leggi ad alta voce',exact:true}).click();await page.waitForFunction(()=>window.__ttsStarted.length===1);
+ assert.deepEqual(await page.evaluate(()=>window.__ttsStarted[0]),{length:2,sampleRate:24000});
+ assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='synthesize_tts').at(-1).args.text.trim()),'Ciao! Test ricevuto. Come posso aiutarti?');
+ assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='synthesize_tts').at(-1).args.voice),'if_sara');
  await page.getByRole('button',{name:'Risposta utile',exact:true}).click();
  assert.equal(await page.getByRole('button',{name:'Risposta utile',exact:true}).getAttribute('aria-pressed'),'true');
  assert.equal(await page.evaluate(()=>window.__store.conversations[0].messages[1].feedback),true);
@@ -50,6 +72,10 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  assert.equal(await page.locator('.markdown strong').innerText(),'importante');assert.equal(await page.locator('.markdown ul li').count(),2);
  assert.equal(await page.locator('.markdown img,.markdown script,.markdown [onerror],.markdown a[href^="javascript:"]').count(),0);
  assert.equal(await page.evaluate(()=>!!window.__xss),false);
+ await page.getByRole('button',{name:'Leggi ad alta voce',exact:true}).click();await page.waitForFunction(()=>window.__ttsStarted.length===2);
+ const spokenMarkdown=await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='synthesize_tts').at(-1).args.text);
+ assert.match(spokenMarkdown,/Una risposta leggibile/);assert.match(spokenMarkdown,/Testo importante e una fonte/);
+ assert.doesNotMatch(spokenMarkdown,/<[^>]*>|\*\*|## |\[fonte\]/);
  await page.getByRole('button',{name:'Copia codice',exact:true}).click();assert.match(await page.evaluate(()=>window.__copied.at(-1)),/console.log/);
  await page.getByRole('link',{name:'fonte',exact:true}).click();await page.waitForFunction(()=>window.__calls.some(c=>c.cmd==='browser_open'));
  assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='browser_open').at(-1).args.url),'https://example.com/');
@@ -76,7 +102,11 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  assert.equal(request.attachments[0].name,'notes.md');assert.equal(request.attachments[0].content,'Private text selected by the user.');
  assert.equal(await page.locator('.message-attachments .attachment-chip').innerText(),'notes.md');
  assert.equal(await page.getByText('Private text selected by the user.',{exact:true}).count(),0);
- await page.click('#nav-home');await page.click('#composer-mic');await page.locator('#settings-voice').waitFor({state:'visible'});assert.equal(await page.locator('#composer-input').textContent(),'');await page.click('#modal-close');
+ await page.click('#nav-home');await page.click('#composer-mic');await page.locator('#settings-voice').waitFor({state:'visible'});assert.equal(await page.locator('#composer-input').textContent(),'');
+ assert.equal(await page.locator('#settings-voice [data-i18n="voice.tts_title"]').innerText(),'Lettura ad alta voce · Kokoro');
+ assert.equal(await page.locator('#tts-voice option').count(),2);assert.equal(await page.locator('#tts-download').isVisible(),true);
+ await page.click('#tts-download');await page.waitForFunction(()=>window.__ttsStatus.ready);assert.equal(await page.locator('#tts-remove').isVisible(),true);
+ await page.click('#tts-remove');await page.waitForFunction(()=>!window.__ttsStatus.ready);assert.equal(await page.locator('#tts-remove').isVisible(),false);await page.click('#modal-close');
  await page.evaluate(()=>window.__nextFiles=Array.from({length:5},()=>({name:'x.txt',content:'x'})));await page.click('#composer-attach');await page.locator('#composer-status').waitFor({state:'visible'});
  assert.equal(await page.locator('#composer-attachments').isVisible(),false);
  await page.click('#nav-home');await page.evaluate(()=>delete window.__nextFiles);await page.click('#composer-attach');await page.fill('#composer-input','Riassumi queste note e proponi i prossimi passi.');

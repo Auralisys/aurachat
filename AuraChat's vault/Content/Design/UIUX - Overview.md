@@ -151,4 +151,7 @@ sostituzione della palette Auralisys, dei permessi o delle funzioni di AuraChat.
 - Utilizzo e costi: pulsante nell'intestazione con token in `k`/`M` e costo
   stimato in USD; popover con barra cache / ingresso nuovo / uscita, ragionamento,
   richieste e righe per modello (tag sconto o «Senza prezzo»). Prezzi per modello
-  nell'editor del provider, con listino DeepSeek come segnaposto.
+  nell'editor del provider, con listino DeepSeek come segnaposto. Il saldo
+  DeepSeek dell'account (che dipende dalla API key, non dalla chat) sta in un
+  blocco separato in fondo al popover e nell'editor del provider, con il pulsante
+  «Ricarica su DeepSeek» che apre la pagina web di ricarica.

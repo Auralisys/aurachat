@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="updates.css" />
     <link rel="stylesheet" href="annotations.css" />
     <link rel="stylesheet" href="browser.css" />
+    <link rel="stylesheet" href="balance.css" />
   </head>
   <body>
     <div class="backdrop" aria-hidden="true"></div>
@@ -228,8 +229,13 @@
         </div>
         <section id="settings-general" hidden><h3 data-i18n="ui.appearance"></h3><p data-i18n="ui.appearance_note"></p><div class="preference-row"><span data-i18n="ui.theme"></span><span data-i18n="ui.dark"></span></div><div class="preference-row"><span data-i18n="ui.language"></span><span id="settings-language"></span></div><div class="preference-row"><span data-i18n="ui.motion"></span><span data-i18n="ui.static"></span></div></section><section id="settings-voice" hidden>
 <h3 data-i18n="voice.title"></h3><p data-i18n="voice.note"></p>
-<div class="voice-model-card"><strong>Cohere Transcribe</strong><span class="voice-model-detail" data-i18n="voice.model_detail"></span><p id="voice-model-status" role="status"></p>
+<div class="voice-model-card"><strong data-i18n="voice.transcribe_title"></strong><span class="voice-model-detail" data-i18n="voice.model_detail"></span><p id="voice-model-status" role="status"></p>
 <progress id="voice-model-progress" hidden></progress><div class="voice-model-actions"><button id="voice-download" class="primary" data-i18n="voice.download"></button><button id="voice-download-cancel" hidden data-i18n="voice.pause"></button><button id="voice-remove" hidden data-i18n="voice.remove"></button></div><p id="voice-error" class="form-error" role="alert"></p></div>
+<div class="voice-model-card"><strong data-i18n="voice.tts_title"></strong><span class="voice-model-detail" data-i18n="voice.tts_detail"></span>
+<label class="voice-tts-choice"><span data-i18n="voice.tts_voice"></span><select id="tts-voice"><option value="if_sara" data-i18n="voice.tts_sara"></option><option value="im_nicola" data-i18n="voice.tts_nicola"></option></select></label>
+<p id="tts-model-status" role="status"></p><progress id="tts-model-progress" hidden></progress>
+<div class="voice-model-actions"><button id="tts-download" class="primary" data-i18n="voice.tts_download"></button><button id="tts-download-cancel" hidden data-i18n="voice.pause"></button><button id="tts-remove" hidden data-i18n="voice.remove"></button></div><p id="tts-error" class="form-error" role="alert"></p>
+<p class="voice-privacy" data-i18n="voice.tts_privacy"></p><a class="voice-source" href="https://huggingface.co/hexgrad/Kokoro-82M" target="_blank" rel="noopener" data-i18n="voice.tts_source"></a></div>
 <p class="voice-privacy" data-i18n="voice.privacy"></p><a class="voice-source" href="https://huggingface.co/cstr/cohere-transcribe-onnx-int4" target="_blank" rel="noopener" data-i18n="voice.source"></a></section><section id="settings-account" hidden>
           <div class="settings-section-head"><div><h3 data-i18n="settings.connected_account"></h3><p data-i18n="settings.account_note"></p></div></div>
           <div class="connected-account"><span class="avatar settings-avatar" id="settings-account-avatar" aria-hidden="true"></span><div><strong id="settings-account-name"></strong><span id="settings-account-email"></span></div><span class="settings-status"><svg data-icon="check" aria-hidden="true"></svg><span data-i18n="settings.signed_in"></span></span></div>
@@ -270,6 +276,7 @@
     <script src="chat-progress.js"></script>
     <script src="icons.js"></script>
     <script src="settings.js"></script>
+    <script src="balance.js"></script>
     <script src="composer.js"></script>
     <script src="skills.js"></script>
     <script src="queue.js"></script>

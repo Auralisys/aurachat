@@ -7,6 +7,7 @@ mod window_state;
 mod mcp;
 mod skills;
 mod speech;
+mod tts;
 mod media;
 mod project_files;
 mod git;
@@ -19,6 +20,7 @@ mod questions;
 mod companion;
 mod updates;
 mod browser;
+mod balance;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,6 +64,7 @@ fn platform_icons_keep_windows_transparent_and_macos_background() {
 
 pub struct AppState {
     speech: std::sync::Arc<speech::Speech>,
+    tts: std::sync::Arc<tts::Tts>,
     config: Mutex<AppConfig>,
     config_dir: PathBuf,
     user: Mutex<Option<UserConfig>>,
@@ -161,16 +164,51 @@ async fn transcribe_audio(state: tauri::State<'_, AppState>, samples: Vec<f32>, 
     let speech = state.speech.clone();
     tauri::async_runtime::spawn_blocking(move || speech.transcribe(samples, language)).await.map_err(|e| e.to_string())?
 }
+#[tauri::command]
+fn tts_model_status(state: tauri::State<'_, AppState>) -> tts::ModelStatus { state.tts.status() }
+#[tauri::command]
+async fn download_tts_model(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<tts::ModelStatus, String> {
+    let result = state.tts.download(|status| { let _ = app.emit("tts-model-progress", status); }).await;
+    let _ = app.emit("tts-model-progress", state.tts.status());
+    companion::notify(&app,"tts-download",&data::now_millis().to_string(),"","Modello vocale",if result.is_ok(){"Il download è terminato."}else{"Il download non è stato completato."});
+    result
+}
+#[tauri::command]
+fn cancel_tts_download(state: tauri::State<'_, AppState>) { state.tts.cancel(); }
+#[tauri::command]
+async fn remove_tts_model(state: tauri::State<'_, AppState>) -> Result<tts::ModelStatus, String> {
+    let tts = state.tts.clone();
+    tauri::async_runtime::spawn_blocking(move || tts.remove()).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn prepare_tts_model(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let tts = state.tts.clone();
+    let worker = tts.clone();
+    let progress_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || worker.prepare_with_progress(|status| {
+        let _ = progress_app.emit("tts-model-progress", status);
+    })).await.map_err(|e| e.to_string())?;
+    let _ = app.emit("tts-model-progress", tts.status());
+    result
+}
+#[tauri::command]
+async fn synthesize_tts(app: tauri::AppHandle, state: tauri::State<'_, AppState>, text: String, voice: String) -> Result<tts::Audio, String> {
+    let tts = state.tts.clone();
+    let worker = tts.clone();
+    let progress_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || worker.synthesize_with_progress(text, voice, |status| {
+        let _ = progress_app.emit("tts-model-progress", status);
+    })).await.map_err(|e| e.to_string())?;
+    let _ = app.emit("tts-model-progress", tts.status());
+    result
+}
 
 fn clean(s: &str) -> String {
     s.trim().to_string()
 }
 
 fn first_title(content: &str, attachments: &[Attachment]) -> String {
-    match attachments.first() {
-        Some(file) if content.trim().is_empty() => truncate_title(&file.name),
-        _ => truncate_title(content),
-    }
+    truncate_title(&llm::title_text(content, attachments))
 }
 
 fn truncate_title(s: &str) -> String {
@@ -360,6 +398,18 @@ async fn remove_provider(state: tauri::State<'_, AppState>, id: String) -> Resul
     state.firestore.save_user(&uid, &auth, &user).await?;
     *state.user.lock().unwrap() = Some(user.clone());
     Ok(PublicConfig::from_parts(&state.config.lock().unwrap(), &user))
+}
+
+/// Saldo dell'account di un provider: dipende dalla key, non dalla chat aperta.
+#[tauri::command(rename_all = "snake_case")]
+async fn provider_balance(state: tauri::State<'_, AppState>, provider_id: String) -> Result<balance::Balance, String> {
+    let auth = firebase_auth(&state)?;
+    let uid = ensure_uid(&state, &auth).await?;
+    let user = load_user_cached(&state, &auth, &uid).await?;
+    let provider = user.providers.get(&provider_id).ok_or("invalid_provider")?;
+    let url = user.balance_url(&provider_id).ok_or("balance_unsupported")?;
+    if provider.api_key.trim().is_empty() { return Err("no_api_key".into()); }
+    balance::fetch(&state.client, url, &provider.api_key).await
 }
 
 #[tauri::command]
@@ -780,9 +830,16 @@ fn prepare_title_job(conversation:&mut data::Conversation,message:&ChatMessage,m
         }
     }
     let job=if conversation.title_state.as_deref()==Some("pending") {
-        let mut job=conversation.clone();
-        if job.messages.is_empty() {job.messages.push(message.clone());}
-        Some(job)
+        let first=conversation.messages.iter().chain(std::iter::once(message))
+            .find(|item|item.role=="user" && !llm::title_text(&item.content,&item.attachments).is_empty())
+            .cloned();
+        first.map(|first| {
+            let title=first_title(&first.content,&first.attachments);
+            if conversation.title!=title {conversation.title=title;changed=true;}
+            let mut job=conversation.clone();
+            job.messages=vec![first];
+            job
+        })
     } else {None};
     (changed,job)
 }
@@ -792,10 +849,30 @@ mod title_tests {
     use super::*;
 
     #[test]
+    fn title_job_uses_image_comments_without_message_text() {
+        let message:ChatMessage=serde_json::from_value(serde_json::json!({
+            "role":"user","content":" ","attachments":[
+                {"name":"overview.png","mime_type":"image/png","data":"image-not-sent-to-title"},
+                {"name":"detail.png","mime_type":"image/png","data":"image-not-sent-to-title","annotation":{
+                    "version":1,"source":"image","width":200,"height":100,
+                    "comments":[{"id":"c1","x":0.5,"y":0.5,"text":" Rimuovi l'icona filtri "}]
+                }}
+            ]
+        })).unwrap();
+        let mut conversation:data::Conversation=serde_json::from_value(serde_json::json!({
+            "id":"chat","title":"Chat","created_at":1,"updated_at":1,"context_tokens":0
+        })).unwrap();
+        let (changed,job)=prepare_title_job(&mut conversation,&message,"selected-model");
+        assert!(changed);assert!(conversation.messages.is_empty());
+        assert_eq!(conversation.title,"Rimuovi l'icona filtri");
+        assert_eq!(job.unwrap().messages[0].attachments.len(),2);
+    }
+
+    #[test]
     fn title_job_uses_the_first_message_without_saving_an_unfinished_turn() {
         for input in [
             serde_json::json!({"role":"user","content":"  Analizza il progetto\n e proponi miglioramenti  "}),
-            serde_json::json!({"role":"user","content":"","attachments":[{"name":"diagramma.png","mime_type":"image/png"}]}),
+            serde_json::json!({"role":"user","content":"Semplifica il diagramma","attachments":[{"name":"diagramma.png","mime_type":"image/png"}]}),
         ] {
             let message:ChatMessage=serde_json::from_value(input).unwrap();
             let mut conversation:data::Conversation=serde_json::from_value(serde_json::json!({
@@ -811,6 +888,31 @@ mod title_tests {
             assert_eq!(job.messages.len(),1);
             assert_eq!(serde_json::to_value(&job.messages[0]).unwrap(),serde_json::to_value(&message).unwrap());
         }
+    }
+
+    #[test]
+    fn title_job_waits_for_a_task_instead_of_using_filenames() {
+        let image:ChatMessage=serde_json::from_value(serde_json::json!({
+            "role":"user","content":"","attachments":[{"name":"private-project-screenshot.png","data":"image-data","mime_type":"image/png"}]
+        })).unwrap();
+        let mut conversation:data::Conversation=serde_json::from_value(serde_json::json!({
+            "id":"chat","title":"Chat","created_at":1,"updated_at":1,"context_tokens":0
+        })).unwrap();
+        let (changed,job)=prepare_title_job(&mut conversation,&image,"selected-model");
+        assert!(changed);assert!(job.is_none());assert_eq!(conversation.title,"Chat");
+        assert_eq!(conversation.title_state.as_deref(),Some("pending"));
+        conversation.messages.push(image);
+        conversation.messages.push(serde_json::from_value(serde_json::json!({
+            "role":"assistant","content":"Image description unavailable"
+        })).unwrap());
+        let task:ChatMessage=serde_json::from_value(serde_json::json!({
+            "role":"user","content":"Rimuovi l'icona filtri"
+        })).unwrap();
+        let (changed,job)=prepare_title_job(&mut conversation,&task,"selected-model");
+        assert!(changed);assert_eq!(conversation.title,"Rimuovi l'icona filtri");
+        let job=job.unwrap();
+        assert_eq!(job.messages.len(),1);assert_eq!(job.messages[0].content,task.content);
+        assert_eq!(conversation.messages.len(),2);
     }
 
     #[test]
@@ -860,10 +962,8 @@ async fn generate_chat_title(app:&tauri::AppHandle,owner:&str,conversation:&data
     let config=user.models.get(model).ok_or("model_not_found")?;
     let key=user.model_key(config);
     if !change_auto_title(app,owner,conversation,"pending",&conversation.title,"generating").await? {return Ok(());}
-    let prompt=conversation.messages.iter().find(|message|message.role=="user").map(|message| {
-        if message.content.trim().is_empty() {message.attachments.iter().map(|file|if file.is_image() {format!("image: {}",file.name)} else {file.name.clone()}).collect::<Vec<_>>().join(", ")}
-        else {message.content.clone()}
-    }).unwrap_or_default();
+    let prompt=conversation.messages.iter().find(|message|message.role=="user")
+        .map(|message|llm::title_text(&message.content,&message.attachments)).unwrap_or_default();
     match llm::conversation_title(&state.client,&config.base_url,&config.model,key,&prompt).await {
         Ok(title)=>{change_auto_title(app,owner,conversation,"generating",&title,"generated").await?;Ok(())},
         Err(error)=>{
@@ -1313,6 +1413,7 @@ pub fn run() {
             let folder_access = FolderAccess::load(&config_dir)?;
             app.manage(AppState {
                 speech: std::sync::Arc::new(speech::Speech::new(&config_dir)),
+                tts: std::sync::Arc::new(tts::Tts::new(&config_dir)),
                 config: Mutex::new(config),
                 folder_access: Mutex::new(folder_access),
                 permissions: Mutex::new(permissions::Permissions::load(&config_dir)?),
@@ -1378,6 +1479,7 @@ pub fn run() {
             save_config,
             save_provider,
             remove_provider,
+            provider_balance,
             logout,
             set_model,
             set_conversation_model,
@@ -1413,6 +1515,7 @@ pub fn run() {
             ,browser::browser_open, browser::browser_bounds, browser::browser_action, browser::browser_close, browser::browser_capture
             ,list_shells, stop_shell
             ,speech_model_status, download_speech_model, cancel_speech_download, remove_speech_model, prepare_speech_model, transcribe_audio
+            ,tts_model_status, download_tts_model, cancel_tts_download, remove_tts_model, prepare_tts_model, synthesize_tts
             ,pause_dictation_media, resume_dictation_media
         ])
         .build(tauri::generate_context!())

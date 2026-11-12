@@ -40,7 +40,7 @@ function selectSettingsTab(tab) {
   settingsTab = tab;
   for (const name of ['general', 'account', 'inference', 'voice', 'skills']) $('#settings-' + name).hidden = tab !== name;
   if (tab === 'account') renderSettingsAccount();
-  if (tab === 'voice') refreshSpeechModel();
+  if (tab === 'voice') { refreshSpeechModel(); refreshTtsModel(); }
   if (tab === 'inference') renderProviders();
   if (tab === 'skills') refreshSkillSettings(true);
   $('#settings-title').textContent = t('ui.' + tab);
@@ -206,6 +206,7 @@ function editProvider(provider) {
   key.querySelector('input').placeholder = provider?.api_key_set ? t('settings.key_keep') : t('settings.key_placeholder');
   key.querySelector('input').autocomplete = 'new-password';
   key.append(settingsElement('span', 'field__note', t('settings.key_note'))); form.append(key);
+  appendProviderBalance(form, provider);
   const heading = settingsElement('div', 'provider-model-heading');
   heading.append(settingsElement('h4', '', t('settings.models_title')));
   const count = settingsElement('span', 'model-count'); count.id = 'provider-model-count'; heading.append(count);
@@ -268,6 +269,7 @@ async function persistProvider(command, payload, form) {
     state.config = await invoke(command, payload);
     providerDirty = false; providerSaving = false; discardProviderEditor();
     populateModelSelect(); renderProviders(); $('#add-provider').focus();
+    resetBalances();
   } catch (e) { error.textContent = localizeError(e); error.hidden = false; }
   finally { providerSaving = false; controls.forEach(el => el.disabled = false); form.removeAttribute('aria-busy'); }
 }

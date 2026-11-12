@@ -3,6 +3,7 @@
 
 const { invoke } = window.__TAURI__.core;
 const appWindow = window.__TAURI__.window.getCurrentWindow();
+const readAloud = { request: 0, button: null, source: null, context: null };
 
 // Il backend sopprime le notifiche di fine turno solo se questa chat è aperta
 // e la finestra è a fuoco; in tray/minimizzata la notifica arriva comunque.
@@ -998,13 +999,83 @@ async function setMessageFeedback(index, value) {
   renderMessages();
 }
 
-function readMessage(content, button) {
-  if (speechSynthesis.speaking) {speechSynthesis.cancel();button.replaceChildren(icon('speaker'));return;}
+function readAloudButton(button, active) {
+  const label = t(active ? 'chat.stop_read_aloud' : 'chat.read_aloud');
+  button.replaceChildren(icon(active ? 'stop' : 'speaker'));
+  button.title = label;button.setAttribute('aria-label',label);
+}
+
+function finishReadAloud(request) {
+  if (request !== readAloud.request) return;
+  readAloud.source = null;
+  if (readAloud.context) readAloud.context.close().catch(() => {});
+  readAloud.context = null;
+  if (readAloud.button) readAloudButton(readAloud.button,false);
+  readAloud.button = null;
+}
+
+function stopReadAloud() {
+  readAloud.request++;
+  if (readAloud.source) {
+    readAloud.source.onended = null;
+    try { readAloud.source.stop(); } catch (_) {}
+  }
+  readAloud.source = null;
+  if (readAloud.context) readAloud.context.close().catch(() => {});
+  readAloud.context = null;
+  speechSynthesis?.cancel();
+  if (readAloud.button) readAloudButton(readAloud.button,false);
+  readAloud.button = null;
+}
+
+function systemReadAloud(text, button, request) {
+  if (request !== readAloud.request) return;
+  if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance !== 'function') {
+    finishReadAloud(request);composerStatus(t('chat.voice_unavailable'));return;
+  }
+  const utterance = new SpeechSynthesisUtterance(text);utterance.lang = lang;
+  utterance.onend = () => finishReadAloud(request);
+  utterance.onerror = event => {
+    finishReadAloud(request);
+    if (!['canceled','interrupted'].includes(event.error)) composerStatus(t('chat.voice_unavailable'));
+  };
+  speechSynthesis.speak(utterance);
+}
+
+async function readMessage(content, button) {
+  if (readAloud.button) {
+    const sameButton = readAloud.button === button;
+    stopReadAloud();
+    if (sameButton) return;
+  }
   const text = document.createElement('div');text.innerHTML = markdownHTML(content);
-  const utterance = new SpeechSynthesisUtterance(text.textContent);utterance.lang = lang;
-  utterance.onend = () => button.replaceChildren(icon('speaker'));
-  utterance.onerror = event => {button.replaceChildren(icon('speaker'));if (!['canceled','interrupted'].includes(event.error)) composerStatus(t('chat.voice_unavailable'));};
-  button.replaceChildren(icon('stop'));speechSynthesis.speak(utterance);
+  const request = ++readAloud.request;
+  readAloud.button = button;readAloudButton(button,true);
+  try {
+    await invoke('prepare_tts_model');
+    if (request !== readAloud.request) return;
+    const audio = await invoke('synthesize_tts',{text:text.textContent,voice:selectedTtsVoice()});
+    if (request !== readAloud.request) return;
+    if (!audio?.samples?.length || !audio.sample_rate) throw new Error('tts_audio_invalid');
+    const context = new AudioContext();
+    readAloud.context = context;
+    const buffer = context.createBuffer(1,audio.samples.length,audio.sample_rate);
+    buffer.copyToChannel(Float32Array.from(audio.samples),0);
+    const source = context.createBufferSource();
+    source.buffer = buffer;source.onended = () => finishReadAloud(request);
+    source.connect(context.destination);readAloud.source = source;
+    await context.resume();
+    if (request !== readAloud.request) return;
+    source.start();
+  } catch (error) {
+    if (request !== readAloud.request) return;
+    if (String(error).includes('tts_model_missing')) {
+      systemReadAloud(text.textContent,button,request);
+      return;
+    }
+    finishReadAloud(request);
+    composerStatus(t('voice.tts_error'));
+  }
 }
 
 function editMessage(index) {
@@ -1034,7 +1105,7 @@ function messageEl(m, index) {
   const actions = document.createElement('div');actions.className = 'msg-actions';
   if (m.content) actions.appendChild(messageAction('copy','chat.copy',button => copyText(m.content,button)));
   if (role === 'assistant') {
-    if ('speechSynthesis' in window && typeof SpeechSynthesisUtterance === 'function') actions.appendChild(messageAction('speaker','chat.read_aloud',button => readMessage(m.content,button)));
+    if ('AudioContext' in window || ('speechSynthesis' in window && typeof SpeechSynthesisUtterance === 'function')) actions.appendChild(messageAction('speaker','chat.read_aloud',button => readMessage(m.content,button)));
     for (const [glyph,key,value] of [['thumbUp','chat.helpful',true],['thumbDown','chat.not_helpful',false]]) {
       const button = messageAction(glyph,key,() => setMessageFeedback(index,value));
       button.setAttribute('aria-pressed',String(m.feedback === value));button.disabled = state.busy;actions.appendChild(button);
@@ -1156,7 +1227,7 @@ async function requestChat(payload) {
     return false;
   }
   finally {
-    run.pending = false;run.submitting = false;stopTimer();
+    run.pending = false;run.submitting = false;stopTimer();invalidateBalances();
     if (state.activeConversationId !== id && findConversation(id)) state.unread.add(id);
     if (state.activeConversationId === id) {
       state.messages = run.messages;state.lastUsage = run.usage;state.failedSend = run.failedSend;
@@ -1770,6 +1841,7 @@ function updateContextInfo() {
     list.append(usageRow(t('usage.last_context'), formatTokens(legacy), exactTokens(legacy)));
     section.append(list, usageElement('p', 'usage-note', t('usage.legacy_note')));
     panel.append(section);
+    appendPopoverBalance(panel, details.open);
     return;
   }
   const footer = usageElement('footer', 'usage-footer');
@@ -1780,6 +1852,7 @@ function updateContextInfo() {
   prices.onclick = () => { details.open = false; openSettings(); selectSettingsTab('inference'); };
   footer.append(prices);
   panel.append(footer);
+  appendPopoverBalance(panel, details.open);
 }
 
 function closeUsagePanel(restoreFocus) {
@@ -1932,6 +2005,7 @@ async function init() {
   // Form
   $('#onboarding-form-slot').innerHTML = formHTML(t('form.submit_onboarding'));
   setupSettings();
+  setupBalance();
 
   // Sidebar
   $('#btn-new-project').addEventListener('click', newProject);
@@ -2240,7 +2314,8 @@ function setupShell() {
   });
   document.addEventListener('click', e => {
     if (!e.target.closest('.model-select, .composer__project, .permission-control')) closeChoiceMenus();
-    if (!e.target.closest('.context-info')) closeUsagePanel(false);
+    // composedPath still includes the popover when the clicked control was re-rendered while handling the click.
+    if (!e.composedPath().includes($('#context-info'))) closeUsagePanel(false);
     if (!e.target.closest('.rail__footer')) {
       $('#account-menu').hidden = true;
       $('#account-button').setAttribute('aria-expanded', 'false');

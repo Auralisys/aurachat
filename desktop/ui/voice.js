@@ -1,4 +1,4 @@
-const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: null, capture: null, mediaOperation: null, transcribing: false, jobs: [], worker: null, downloading: false, loading: false, loaded: false, nativeOperation: null, conversationId: null };
+const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: null, capture: null, mediaOperation: null, transcribing: false, jobs: [], worker: null, downloading: false, loading: false, loaded: false, ttsDownloading: false, nativeOperation: null, conversationId: null };
 
 function voiceBusy(id) {
   return ((voice.pending || voice.recording) && voice.conversationId === id)
@@ -19,6 +19,13 @@ function voiceError(error) {
   const code = String(error);
   for (const key of ['speech_busy','speech_model_missing','speech_silence','speech_invalid_audio','speech_checksum']) {
     if (code.includes(key)) return t('voice.' + key);
+  }
+  for (const key of ['tts_busy','tts_model_missing','tts_checksum','tts_voice_missing','tts_invalid_text','tts_audio_invalid','tts_text_too_long']) {
+    if (code.includes(key)) {
+      if (key === 'tts_checksum') return t('voice.tts_checksum');
+      if (key === 'tts_text_too_long') return t('voice.tts_text_too_long');
+      return t('voice.tts_error');
+    }
   }
   if (code.includes('NotAllowed') || code.includes('PermissionDenied')) return t('voice.permission');
   return t('voice.error');
@@ -43,6 +50,32 @@ function renderSpeechModel(status) {
 async function refreshSpeechModel() {
   try { renderSpeechModel(await invoke('speech_model_status')); }
   catch (_) { $('#voice-model-status').textContent = t('voice.error'); }
+}
+
+function selectedTtsVoice() {
+  const selected = $('#tts-voice')?.value;
+  return selected === 'im_nicola' ? selected : 'if_sara';
+}
+
+function renderTtsModel(status) {
+  if (!status) return;
+  const percent = Math.floor(100 * status.downloaded / status.total);
+  $('#tts-model-progress').value = status.downloaded;
+  $('#tts-model-progress').max = status.total;
+  $('#tts-model-progress').hidden = status.ready || !status.downloaded;
+  const label = !status.ready ? '' : status.loading ? 'voice.tts_loading' : status.busy ? 'voice.tts_busy' : status.loaded ? 'voice.tts_loaded' : 'voice.tts_ready';
+  $('#tts-model-status').textContent = label ? t(label) : status.downloaded ? `${t('voice.tts_downloaded')} ${percent}% · ${(status.downloaded/1048576).toFixed(0)} / ${(status.total/1048576).toFixed(0)} MiB` : t('voice.tts_not_installed');
+  $('#tts-download').hidden = status.ready || voice.ttsDownloading;
+  $('#tts-download').disabled = status.busy || status.loading;
+  $('#tts-download').textContent = t(status.downloaded ? 'voice.tts_resume' : 'voice.tts_download');
+  $('#tts-download-cancel').hidden = !voice.ttsDownloading;
+  $('#tts-remove').hidden = !status.downloaded;
+  $('#tts-remove').disabled = status.busy || status.loading || voice.ttsDownloading;
+}
+
+async function refreshTtsModel() {
+  try { renderTtsModel(await invoke('tts_model_status')); }
+  catch (_) { $('#tts-model-status').textContent = t('voice.tts_error'); }
 }
 
 // The weights stay in memory: loading them at startup keeps the first microphone
@@ -335,6 +368,9 @@ function drainTranscriptions() {
 
 function setupLocalVoice() {
   voiceUi();
+  const savedTtsVoice = localStorage.getItem('aurachat.tts.voice');
+  $('#tts-voice').value = savedTtsVoice === 'im_nicola' ? 'im_nicola' : 'if_sara';
+  $('#tts-voice').onchange = () => localStorage.setItem('aurachat.tts.voice', selectedTtsVoice());
   $('.voice-source').onclick = async event => {
     event.preventDefault();
     try { await invoke('open_external_url', { url: event.currentTarget.href }); }
@@ -358,7 +394,25 @@ function setupLocalVoice() {
     $('#voice-error').textContent = '';
     try { voice.loaded = false; renderSpeechModel(await invoke('remove_speech_model')); } catch (error) { $('#voice-error').textContent = voiceError(error); }
   };
+  $('#tts-download').onclick = async () => {
+    if (voice.ttsDownloading) return;
+    voice.ttsDownloading = true; $('#tts-error').textContent = ''; await refreshTtsModel();
+    try { renderTtsModel(await invoke('download_tts_model')); }
+    catch (error) { if (!String(error).includes('tts_cancelled')) $('#tts-error').textContent = voiceError(error); }
+    finally { voice.ttsDownloading = false; await refreshTtsModel(); }
+  };
+  $('#tts-download-cancel').onclick = async () => {
+    $('#tts-download-cancel').disabled = true;
+    try { await invoke('cancel_tts_download'); }
+    finally { $('#tts-download-cancel').disabled = false; }
+  };
+  $('#tts-remove').onclick = async () => {
+    $('#tts-error').textContent = '';
+    try { renderTtsModel(await invoke('remove_tts_model')); }
+    catch (error) { $('#tts-error').textContent = voiceError(error); }
+  };
   appWindow.listen('speech-model-progress', event => renderSpeechModel(event.payload)).catch(() => {});
+  appWindow.listen('tts-model-progress', event => renderTtsModel(event.payload)).catch(() => {});
   appWindow.listen('dictation-cancel', () => cancelVoice(true)).catch(error => console.error('Dictation close listener failed', error));
   window.addEventListener('pagehide', () => cancelVoice(true));
   // Installed model: warm it up right away so the microphone is never a guessing game.

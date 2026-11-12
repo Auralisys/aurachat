@@ -797,8 +797,25 @@ UI: pulsante Utilizzo nell'intestazione con popover «Questa chat» / «Ultima
 risposta» (`app.js`) e riquadro prezzi per modello nell'editor del provider
 (`settings.js`). Le chat precedenti mostrano solo i token di contesto.
 
-Verifica: `desktop/tests/usage-panel.cjs`, `desktop/tests/settings-flow.cjs` e test
-Rust su conteggio, sconto, prezzi e round trip Firestore.
+Saldo dell'account (richiesta: sapere il credito rimasto, non solo l'utilizzo della
+chat): appartiene alla API key, quindi sta in un blocco separato in fondo al popover
+e nell'editor del provider, sotto la API key (`ui/balance.js`, `ui/balance.css`).
+Solo DeepSeek espone un endpoint con una key normale (`GET /user/balance`); gli
+altri provider non vengono interrogati. `PublicProvider.balance` (`config.rs`) è
+vero per i provider con almeno un modello su `api.deepseek.com` e la key va solo
+verso quell'host. `provider_balance` (`balance.rs`, `lib.rs`) restituisce importi per
+valuta (`total`, `topped_up`, `granted`), `is_available` e `top_up_url`; gli errori
+sono codici stabili (`invalid_provider`, `balance_unsupported`, `no_api_key`,
+`balance_unauthorized`, `balance_unavailable`), mai testo del provider. La UI legge
+il saldo all'apertura, lo riusa per 60 s e lo rilegge dopo un turno del modello o
+una modifica ai provider, mostrando intanto l'ultimo valore. DeepSeek non
+documenta alcuna API di pagamento: «Ricarica su DeepSeek» apre
+`https://platform.deepseek.com/top_up` nel browser con `open_external_url`, con
+l'indirizzo scritto sotto il pulsante se l'apertura fallisce.
+
+Verifica: `desktop/tests/usage-panel.cjs` (anche saldo, stati e ricarica),
+`desktop/tests/settings-flow.cjs` e test Rust su conteggio, sconto, prezzi, round trip
+Firestore e lettura del saldo.
 
 ## Pannello laterale come centro operativo
 

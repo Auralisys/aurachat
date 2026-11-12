@@ -153,6 +153,15 @@ fn deepseek_endpoint(url: &str) -> bool {
 }
 
 const DEEPSEEK_HOST: &str = "api.deepseek.com";
+/// Il saldo è dell'account e non della chat: la key parte solo verso l'host ufficiale, qualunque sia l'endpoint del modello.
+const DEEPSEEK_BALANCE_URL: &str = "https://api.deepseek.com/user/balance";
+/// DeepSeek non documenta un'API di pagamento: la ricarica si completa sulla piattaforma web.
+pub const DEEPSEEK_TOP_UP_URL: &str = "https://platform.deepseek.com/top_up";
+
+pub fn balance_url(base_url: &str) -> Option<&'static str> {
+    deepseek_endpoint(base_url).then_some(DEEPSEEK_BALANCE_URL)
+}
+
 const DEEPSEEK_FLASH_PRICE: ModelPricing = ModelPricing { input_cache_hit: 0.006, input_cache_miss: 0.30, output: 1.20 };
 /// Listino ufficiale (api-docs.deepseek.com/quick_start/pricing), valido solo sull'endpoint ufficiale.
 /// I nomi legacy di Flash sono serviti e fatturati come deepseek-flash.
@@ -222,6 +231,11 @@ impl UserConfig {
 
     pub fn model_key(&self, model: &ModelConfig) -> &str {
         self.providers.get(&model.provider_id).map(|p| p.api_key.as_str()).unwrap_or(&self.api_key)
+    }
+
+    /// Endpoint del saldo di un provider, se serve almeno un modello sull'endpoint ufficiale DeepSeek.
+    pub fn balance_url(&self, provider_id: &str) -> Option<&'static str> {
+        self.models.values().filter(|m| m.provider_id == provider_id).find_map(|m| balance_url(&m.base_url))
     }
 
     /// Prezzo effettivo di un modello servito da `base_url`: quello dell'utente, altrimenti il listino noto.
@@ -303,6 +317,8 @@ pub struct PublicProvider {
     pub name: String,
     pub kind: String,
     pub api_key_set: bool,
+    /// Il provider espone il saldo dell'account (`provider_balance`).
+    pub balance: bool,
     pub models: Vec<PublicModel>,
 }
 
@@ -350,6 +366,7 @@ impl PublicConfig {
             active_model: user.active_model.clone(),
             providers: user.providers.iter().map(|(id, provider)| PublicProvider {
                 id: id.clone(), name: provider.name.clone(), kind: provider.kind.clone(), api_key_set: !provider.api_key.is_empty(),
+                balance: user.balance_url(id).is_some(),
                 models: user.models.iter().filter(|(_, m)| &m.provider_id == id).map(|(id, m)| PublicModel {
                     id: id.clone(), model: m.model.clone(), base_url: m.base_url.clone(), pricing: m.pricing
                 }).collect(),
@@ -412,6 +429,23 @@ mod tests {
         assert!(deepseek_off_peak(DEEPSEEK_BASE_URL, at(5, 7)));
         assert!(deepseek_off_peak(DEEPSEEK_BASE_URL, at(6, 2)));
         assert!(!deepseek_off_peak("https://other.example/v1", at(5, 7)));
+    }
+
+    #[test]
+    fn balance_is_offered_only_for_providers_on_the_official_deepseek_endpoint() {
+        let mut user = UserConfig::default(); user.migrate_providers();
+        user.save_provider(provider_input("deepseek", Some("secret"), "deepseek-flash", "https://api.deepseek.com/v1/")).unwrap();
+        user.save_provider(provider_input("proxy", Some("other"), "deepseek-flash", "https://proxy.example/v1")).unwrap();
+        assert_eq!(balance_url(DEEPSEEK_BASE_URL), Some("https://api.deepseek.com/user/balance"));
+        assert_eq!(balance_url("https://api.deepseek.com/v1"), balance_url(DEEPSEEK_BASE_URL));
+        assert_eq!(balance_url("https://proxy.example/v1"), None);
+        assert_eq!(balance_url("https://api.deepseek.com.evil.example/v1"), None);
+        assert_eq!(user.balance_url("deepseek"), balance_url(DEEPSEEK_BASE_URL));
+        assert_eq!(user.balance_url("proxy"), None);
+        assert_eq!(user.balance_url("missing"), None);
+        let public = PublicConfig::from_parts(&AppConfig::default(), &user);
+        let offered = |id: &str| public.providers.iter().find(|p| p.id == id).unwrap().balance;
+        assert!(offered("deepseek") && !offered("proxy"));
     }
 
     #[test]
