@@ -55,10 +55,40 @@ bash desktop/scripts/package-installer.sh
   sequenza di comandi era già stata usata a mano per le reinstallazioni.
 - Script macOS: solo `bash -n` da Windows. **Non ancora eseguiti su un Mac.**
 
+### Installazione locale Windows — 12 novembre 2026
+
+Build **0.1.6** con il fumetto immediato e la preparazione asincrona dell'invio
+installata in `%LOCALAPPDATA%\AuraChat\aurachat.exe`. App riaperta e processo
+rispondente; `DirectML.dll` presente. Nessun incremento di versione o upload
+di una release: l'aggiornamento riguarda solo questo computer.
+
+La ricevuta `desktop/src-tauri/target/release/updater/build-receipt.json` e stata
+validata contro sorgenti, installer e firma con
+`node desktop\scripts\release.cjs --skip-build`, senza ricompilare o pubblicare.
+Fingerprint dei sorgenti desktop:
+`683d9faffb04a097b9ee9a73d09fc506de7f7d7e9f20d205a4630a76004ad701`.
+
+SHA-256 verificati dopo l'installazione:
+- Installer `AuraChat_0.1.6_x64-setup.exe`:
+  `a8ec01c97027268e416c32c5f61459cbe74d6bf3f218a1e5c9474262486ec31a`.
+- Eseguibile installato, senza normalizzazione:
+  `8aedb6278ded9cfb1baf2d5e624528080665b6814e7c199c7c3864709ac02544`.
+- Build ed eseguibile installato, normalizzando il marcatore Tauri come nello
+  script: entrambi
+  `d5c2140cd043c3322cf511992898621362fe1475b22eeef09376f230c0ba396d`.
+
+La sola data del file o il numero 0.1.6 non identificano questa build: il
+confronto normalizzato conferma che l'app installata contiene il nuovo binario.
+Le regressioni `background-chats.cjs` e `history-save.cjs` sono passate con
+servizi nativi simulati; nessun invio reale al provider dalla Prod durante
+questa verifica. Dettagli del comportamento in [[Desktop gateway - Tauri]].
+
 ## Limiti
 
-Installer non firmati: su Windows compare SmartScreen ("Ulteriori informazioni →
+La firma dell'updater non sostituisce la firma del sistema operativo: su Windows
+puo comparire SmartScreen ("Ulteriori informazioni →
 Esegui comunque"), su macOS serve tasto destro → Apri al primo avvio. Firma
-Authenticode, Developer ID e notarizzazione Apple non sono configurate. Versione
-fissa `0.1.0` in `src-tauri/tauri.conf.json`: va incrementata a mano prima di
-distribuire una nuova release. Vedi [[Problemi noti]].
+Authenticode, Developer ID e notarizzazione Apple non sono configurate.
+Versionamento e pubblicazione seguono `desktop/RELEASING.md`; una reinstallazione
+locale non incrementa la versione e non distribuisce un aggiornamento agli
+altri dispositivi. Vedi [[Problemi noti]].

@@ -365,6 +365,26 @@ messaggi della chat attiva e non sostituisce `state.messages` se la conversazion
 non è quella aperta. Il listener `companion-updated` fa ripartire la coda locale
 quando un turno avviato da un altro dispositivo termina.
 
+### Preparazione asincrona dell'invio — 12 novembre 2026
+
+`send` inserisce subito il messaggio nella coda della chat e svuota il composer.
+`flushQueue` mostra **Preparazione invio…** e concede un frame al rendering prima
+di salvare una nuova chat, individuare il gateway e verificare il consenso alle
+cartelle. Il lock e per conversazione, non globale: si puo navigare e scrivere
+altri messaggi mentre la preparazione attende. Testo, allegati e destinazione
+restano quelli dell'invio originale; il modello parte solo dopo i controlli.
+Gli errori lasciano il messaggio visibile e mettono la coda in pausa, ritentabile.
+Le nuove chat provvisorie sopravvivono a salvataggi/refresh precedenti; i
+salvataggi metadata sono serializzati con uno snapshot delle modifiche.
+`background-chats.cjs` e `history-save.cjs` coprono attese sospese, opportunita
+di paint prima del salvataggio, navigazione, FIFO, creazioni parallele e riprova.
+
+La correzione e inclusa nella build Windows 0.1.6 installata localmente il
+12 novembre 2026, senza incremento di versione o pubblicazione di una release.
+Eseguibile installato confrontato con la build e app riaperta; ricevuta e hash
+in [[Build e distribuzione]]. Le regressioni browser usano servizi nativi
+simulati: non e stato inviato un messaggio di prova al provider dalla Prod.
+
 ## Finestra, MCP e strumenti di progetto — 22 ottobre 2026
 
 **Controlli finestra e Git annidato** (`d440cf0`). Su Windows i pulsanti

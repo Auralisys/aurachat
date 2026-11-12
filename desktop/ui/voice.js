@@ -111,7 +111,7 @@ function voiceUi(message = '') {
   mic.hidden = active;
   $('.composer__toolbar .model-select').hidden = active;
   $('#composer-attach').hidden = active;
-  mic.disabled = active || loading || state.preparing || state.loadingConversation;
+  mic.disabled = active || loading || state.preparing || state.loadingConversation || queuedTurns.preparing.has(state.activeConversationId);
   mic.classList.toggle('is-loading', loading);
   mic.setAttribute('aria-pressed', String(!!voice.recording));
   const label = t(voice.recording ? 'voice.stop' : loading ? 'voice.loading_model' : 'chat.dictate');
@@ -199,7 +199,7 @@ function drawVoiceWave() {
 }
 
 async function startVoice() {
-  if (voice.pending || voice.loading || (voice.nativeOperation && voice.nativeOperation.command !== 'transcribe_audio') || voice.mediaOperation || state.preparing || state.loadingConversation) return;
+  if (voice.pending || voice.loading || (voice.nativeOperation && voice.nativeOperation.command !== 'transcribe_audio') || voice.mediaOperation || state.preparing || state.loadingConversation || queuedTurns.preparing.has(state.activeConversationId)) return;
   if (voice.recording) return stopVoice();
   if (voice.jobs.length >= 8) {composerStatus(t('voice.queue_full'));return;}
   const epoch = ++voice.epoch;

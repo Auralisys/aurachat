@@ -40,6 +40,12 @@ chiave sono descritti nel runbook; nessun segreto va inserito nel repository.
   Se il provider termina per limite di output (`length`) o filtro (`content_filter`),
   il testo parziale resta visibile con un errore esplicito, non come risposta
   conclusa; eventuali chiamate a strumenti incomplete non vengono eseguite.
+- **Invio immediato**: il fumetto compare prima dei salvataggi e dei controlli
+  remoti/cartelle, con stato **Preparazione invio…**. La preparazione e separata
+  per chat: navigazione, altre conversazioni e scrittura del prossimo messaggio
+  restano disponibili. Anche una chat nuova appare prima del salvataggio.
+  Il modello parte solo dopo i controlli; in caso di errore il messaggio e gli
+  allegati restano nella coda originale, con errore esplicito e **Riprendi coda**.
 - **Turno in corso**: il nome della chat nasce dal primo messaggio, subito, senza
   aspettare la risposta, come titolo provvisorio. All'avvio del primo turno una
   richiesta separata in background propone un titolo breve nella lingua

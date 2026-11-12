@@ -93,6 +93,7 @@
   "chat.queue_send": "Send and queue",
   "chat.guide": "Guide",
   "queue.queued": "Queued",
+  "queue.preparing": "Preparing to send…",
   "queue.actions": "Queued message actions",
   "queue.sending": "Sending…",
   "queue.steer": "Use as guide",

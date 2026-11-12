@@ -37,6 +37,7 @@ const state = {
   unread: new Set(),
   drafts: new Map(),
   queues: new Map(),
+  pendingConversations: new Map(),
   persistedData: null,
   resultEpoch: 0,
   get busy() { return !!this.runs.get(this.activeConversationId)?.pending; },
@@ -183,10 +184,34 @@ function appendConversationDraft(id, text) {
   state.drafts.set(id, draft);
 }
 
-async function persist() {
+function applyChatData(data) {
+  const baseline = structuredClone(data);
+  // A save or refresh can predate a chat created while that request was in flight.
+  for (const [id, pending] of state.pendingConversations) {
+    if (pending.owner !== state.config.firebase_email) {state.pendingConversations.delete(id);continue;}
+    const current = findConversation(id);
+    if (!current || conversationInData(data,id)) continue;
+    const container = current.project ? data.projects.find(project => project.id === current.project.id) : data;
+    if (container) (container.conversations ||= []).push(current.conversation);
+  }
+  state.data = data;state.persistedData = baseline;
+}
+
+let dataSave = Promise.resolve();
+function persist(options = {}) {
+  const owner = state.config.firebase_email;
+  const data = structuredClone(state.data), base = structuredClone(state.persistedData);
+  const save = dataSave.then(() => saveChatData(options,owner,data,base));
+  dataSave = save.catch(() => {});
+  return save;
+}
+
+async function saveChatData({throwOnError = false}, owner, desired, base) {
   try {
+    if (owner !== state.config.firebase_email) throw new Error('login_required');
     const epoch = state.resultEpoch;
-    const data = await invoke('save_data', { data: state.data, base: state.persistedData });
+    const data = await invoke('save_data', { data: desired, base });
+    if (owner !== state.config.firebase_email) throw new Error('login_required');
     // A background answer can arrive before this older save response.
     for (const [id, run] of state.runs) {
       if (run.completedEpoch > epoch && run.saved) {
@@ -196,17 +221,25 @@ async function persist() {
     for (const conversation of allConversations()) {
       preserveConversationTitle(conversationInData(data, conversation.id), conversation);
     }
-    state.data = data;state.persistedData = structuredClone(data);
+    for (const [id, pending] of state.pendingConversations) {
+      if (conversationInData(data,id)) pending.saved = true;
+    }
+    applyChatData(data);
     renderSidebar();
     updateContextInfo();
     return true;
   } catch (e) {
+    if (owner !== state.config.firebase_email) throw e;
     try {
-      state.data = await invoke('get_data');
-    } catch (_) {
-      state.data = { projects: [] };
+      const data = await invoke('get_data');
+      if (owner !== state.config.firebase_email) throw new Error('login_required');
+      applyChatData(data);
+    } catch (recoveryError) {
+      if (owner !== state.config.firebase_email) throw e;
+      console.error('Reloading chat data after a failed save failed',recoveryError);
     }
     renderSidebar();
+    if (throwOnError) throw e;
     showError(localizeError(e));
     return false;
   }
@@ -387,7 +420,7 @@ function showTreeMenu(row, trigger, heading, entries, point) {
     button.setAttribute('role', 'menuitem');
     const conversationId = row.closest('.tree-conv')?.dataset.conversationId;
     const projectId = row.closest('.tree-project')?.dataset.projectId;
-    button.disabled = disabled || state.preparing || !!state.runs.get(conversationId)?.pending || !!state.data.projects.find(p => p.id === projectId)?.conversations.some(c => state.runs.get(c.id)?.pending);
+    button.disabled = disabled || state.preparing || queuedTurns.preparing.has(conversationId) || !!state.runs.get(conversationId)?.pending || !!state.data.projects.find(p => p.id === projectId)?.conversations.some(c => state.runs.get(c.id)?.pending || queuedTurns.preparing.has(c.id));
     const label = document.createElement('span');label.textContent = t(key);
     button.append(icon(glyph), label);
     button.onclick = () => { closeTreeMenu(true);action(); };
@@ -715,14 +748,15 @@ function newChat(projectId = null) {
 }
 
 function deleteProject(id) {
-  if (state.data.projects.find(p => p.id === id)?.conversations.some(c => state.runs.get(c.id)?.pending)) return;
+  if (state.data.projects.find(p => p.id === id)?.conversations.some(c => state.runs.get(c.id)?.pending || queuedTurns.preparing.has(c.id))) return;
   state.data.projects = state.data.projects.filter((p) => p.id !== id);
   if (!findConversation(state.activeConversationId)) clearChat();
   persist();
 }
 
 function deleteConversation(id) {
-  if (state.runs.get(id)?.pending) return;
+  if (state.runs.get(id)?.pending || queuedTurns.preparing.has(id)) return;
+  state.pendingConversations.delete(id);state.queues.delete(id);
   state.data.conversations = (state.data.conversations || []).filter(c => c.id !== id);
   for (const project of state.data.projects) project.conversations = project.conversations.filter(c => c.id !== id);
   if (state.activeConversationId === id) clearChat();
@@ -738,6 +772,7 @@ function renameProject(id, name) {
 }
 
 function renameConversation(id, title) {
+  if (queuedTurns.preparing.has(id)) return;
   const c = findConversation(id);
   if (c) {
     c.conversation.title = title;
@@ -826,7 +861,7 @@ async function openConversation(id, refresh = true, section = null) {
       if(epoch===state.conversationLoadEpoch){state.loadingConversation=false;renderSidebar();renderMessages();voiceUi();}
     }
   }
-  if (epoch === state.conversationLoadEpoch) refreshRemoteTurn();
+  if (epoch === state.conversationLoadEpoch && !state.pendingConversations.has(id)) refreshRemoteTurn();
 }
 
 function preloadRecentConversations(excludeId) {
@@ -893,13 +928,17 @@ function navigateHistory(direction) {
   }
 }
 
-async function ensureConversation() {
+async function ensureConversation(optimistic = false) {
   if (state.activeConversationId) return;
   const project = state.data.projects.find(p => p.id === state.pendingProjectId);
   const now = Date.now();
   const conversation = { id:uid(), title:t('sidebar.new_chat'), messages:[], created_at:now, updated_at:now, context_tokens:0 };
+  if (optimistic) conversation.model = activeModel();
   (project ? project.conversations : (state.data.conversations ||= [])).push(conversation);
-  if (await persist()) await openConversation(conversation.id,false);
+  if (optimistic) {
+    state.pendingConversations.set(conversation.id,{owner:state.config.firebase_email,saved:false});
+    await openConversation(conversation.id,false);
+  } else if (await persist()) await openConversation(conversation.id,false);
 }
 
 // ===== Chat =====
@@ -1169,22 +1208,23 @@ function messageEl(m, index) {
 function renderMessages() {
   const reading = chatScroll.beforeRender();
   renderQuestions();
-  $('#model-select').disabled = state.busy || state.changingModel;
+  $('#model-select').disabled = state.busy || state.changingModel || queuedTurns.preparing.has(state.activeConversationId);
   $('#composer-attach').disabled = state.preparing || state.loadingConversation;
   voiceUi();
   renderActivity();
   const box = $('#messages');
   box.dataset.conversation = String(state.activeConversationId);
   $('.composer__project').hidden = state.activeConversationId !== null;
-  $('#view-chat').classList.toggle('is-empty', state.messages.length === 0 && !state.loadingConversation && !state.busy);
+  const empty = state.messages.length === 0 && !state.loadingConversation && !state.busy && !state.queues.get(state.activeConversationId)?.length;
+  $('#view-chat').classList.toggle('is-empty', empty);
   $('#conversation-title').textContent = activeConversation()?.conversation.title || t('sidebar.new_chat');
   $('#conversation-remote')?.remove();
   const computer = remoteComputerIcon(state.activeConversationId);
   if (computer) {computer.id = 'conversation-remote';$('#conversation-title').before(computer);}
-  $('#conversation-options').disabled = !state.activeConversationId || state.busy;
+  $('#conversation-options').disabled = !state.activeConversationId || state.busy || queuedTurns.preparing.has(state.activeConversationId);
   box.innerHTML = '';
   renderThinkingStatus();
-  if (state.messages.length === 0 && !state.busy && !state.loadingConversation) {
+  if (empty) {
     box.innerHTML = emptyHTML();
     chatScroll.afterRender(reading);
     return;
@@ -1230,7 +1270,7 @@ function stopTimer() {
 
 async function requestChat(payload) {
   const id = payload.conversation_id;
-  if (state.runs.get(id)?.pending || voiceBusy(id)) return false;
+  if (state.runs.get(id)?.pending || queuedTurns.preparing.has(id) || voiceBusy(id)) return false;
   // A queue can start a background conversation: never seed it (or the UI)
   // with the messages of the chat that happens to be open.
   const isActive = id === state.activeConversationId;
@@ -1269,6 +1309,7 @@ async function requestChat(payload) {
     return false;
   }
   finally {
+    state.pendingConversations.delete(id);
     run.pending = false;run.submitting = false;stopTimer();invalidateBalances();
     if (state.activeConversationId !== id && findConversation(id)) state.unread.add(id);
     if (state.activeConversationId === id) {
@@ -1284,7 +1325,7 @@ async function requestChat(payload) {
 }
 
 async function regenerateReply() {
-  if (state.busy || state.preparing || state.loadingConversation || !state.activeConversationId) return;
+  if (state.busy || state.preparing || queuedTurns.preparing.has(state.activeConversationId) || state.loadingConversation || !state.activeConversationId) return;
   try {await discoverRemoteTarget(state.activeConversationId);}
   catch (error) {composerStatus(localizeError(error));return;}
   if (state.busy) return;
@@ -1301,13 +1342,10 @@ function titleFromMessage(text, attachments) {
 
 function nameConversationFromMessage(id, text, attachments, editIndex) {
   const found = findConversation(id);
-  if (!found || found.conversation.title_state === 'manual' || editIndex !== null || state.messages.length) return;
+  if (!found || found.conversation.title_state === 'manual' || editIndex !== null || state.messages.length || state.queues.get(id)?.length) return;
   const title = titleFromMessage(text, attachments);
   if (found.conversation.title === title) return;
   found.conversation.title = title;
-  renderMessages();
-  renderSidebar();
-  persist();
 }
 
 // ===== Invio, coda e stop =====
@@ -1335,7 +1373,7 @@ function updateComposerControls() {
 }
 
 function canStartRequest(id) {
-  return !!id && !state.runs.get(id)?.pending && !state.preparing && !voiceBusy(id);
+  return !!id && !state.runs.get(id)?.pending && !queuedTurns.preparing.has(id) && !state.preparing && !voiceBusy(id);
 }
 
 async function dispatchMessage(id, message) {
@@ -1343,19 +1381,59 @@ async function dispatchMessage(id, message) {
     composerStatus();
     if (message.edit_index !== null && message.edit_index !== undefined) state.messages = state.messages.slice(0, message.edit_index);
     state.messages.push({role:'user', content:message.content, attachments:message.attachments});
-    renderMessages();
   }
   await requestChat({conversation_id:id, content:message.content, attachments:message.attachments, edit_index:message.edit_index});
 }
 
 // I messaggi accodati partono uno alla volta, appena la conversazione torna libera.
-function flushQueue(id = state.activeConversationId) {
+async function flushQueue(id = state.activeConversationId) {
   const queue = state.queues.get(id);
   if (queuedTurns.paused.has(id) || !queue?.length || !canStartRequest(id)) return;
-  const [message] = queue.splice(0, 1);
-  if (!queue.length) state.queues.delete(id);
+  const message = queue[0], owner = state.config.firebase_email;
+  queuedTurns.preparing.set(id,message);delete message.prepare_error;
+  refreshQueue(id);
+  const current = () => owner === state.config.firebase_email && !!findConversation(id) && state.queues.get(id)?.[0] === message;
+  let ready = false;
+  try {
+    // Let the optimistic bubble paint before IPC serialization and setup work.
+    // The timeout also releases sends when the window is minimized before the frame.
+    await new Promise(resolve => {
+      const frame = requestAnimationFrame(() => {clearTimeout(timeout);setTimeout(resolve,0);});
+      const timeout = setTimeout(() => {cancelAnimationFrame(frame);resolve();},50);
+    });
+    if (!current()) return;
+    if (state.pendingConversations.get(id)?.saved === false) await persist({throwOnError:true});
+    if (!current()) return;
+    await discoverRemoteTarget(id);
+    if (!current() || state.runs.get(id)?.pending) return;
+    const missingFolder = await missingProjectFolder(id);
+    if (!current()) return;
+    if (missingFolder) {
+      const path = await invoke('choose_project_folder',{project_id:missingFolder.project.id,lang});
+      if (!current()) return;
+      if (!path) throw new Error('folder_permission_required');
+      const project = findConversation(id)?.project;
+      if (project?.id !== missingFolder.project.id) throw new Error('project_not_found');
+      const index = project.source_folders.indexOf(missingFolder.path);
+      if (index >= 0) project.source_folders[index] = path;
+      else project.source_folders.push(path);
+      await persist({throwOnError:true});
+    }
+    if (!current() || state.runs.get(id)?.pending || voiceBusy(id)) return;
+    removeQueuedMessage(id,message);
+    ready = true;
+  } catch (error) {
+    if (current()) {
+      message.prepare_error = localizeError(error);
+      queuedTurns.paused.add(id);
+    }
+  } finally {
+    queuedTurns.preparing.delete(id);
+    if (!ready) refreshQueue(id);
+  }
+  if (!ready) return;
   clearQueuedStatus(id);
-  dispatchMessage(id, message);
+  return dispatchMessage(id, message);
 }
 
 async function stopChat() {
@@ -1368,16 +1446,14 @@ async function stopChat() {
   catch (e) {run.stopping = false;updateComposerControls();if (!errText(e).includes('chat_not_running')) composerStatus(localizeError(e));}
 }
 
-async function missingActiveProjectFolder() {
-  if (remoteTarget(state.activeConversationId)) return null;
-  try {
-    const project = activeConversation()?.project;
-    if (!project) return null;
-    if (!project.source_folders.length) return {project, path:null};
-    const granted = await invoke('project_folder_access',{project_id:project.id});
-    const path = project.source_folders.find(p => !granted.includes(p));
-    return path ? { project, path } : null;
-  } catch (_) { return null; }
+async function missingProjectFolder(id) {
+  if (remoteTarget(id)) return null;
+  const project = findConversation(id)?.project;
+  if (!project) return null;
+  if (!project.source_folders.length) return {project, path:null};
+  const granted = await invoke('project_folder_access',{project_id:project.id});
+  const path = project.source_folders.find(p => !granted.includes(p));
+  return path ? { project, path } : null;
 }
 
 async function send() {
@@ -1392,31 +1468,9 @@ async function send() {
   const input = $('#composer-input'), text = composerText().trim();
   const attachments = structuredClone(state.attachments), editIndex = state.editingMessageIndex;
   if (!text && !attachments.length) return;
-  if (!state.activeConversationId) {
-    state.preparing = true;$('#project-select').disabled = true;updateComposerControls();
-    try {await ensureConversation();}
-    finally {state.preparing=false;$('#project-select').disabled=false;updateComposerControls();}
-  }
+  if (!state.activeConversationId) await ensureConversation(true);
   const id = state.activeConversationId;
   if (!id) return;
-  state.preparing = true;updateComposerControls();
-  try {await discoverRemoteTarget(id);}
-  catch (error) {composerStatus(localizeError(error));return;}
-  finally {state.preparing = false;updateComposerControls();}
-  if (id !== state.activeConversationId) return;
-  const missingFolder = await missingActiveProjectFolder();
-  if (missingFolder) {
-    composerStatus(t('project.consent_required'));
-    try {
-      const path = await invoke('choose_project_folder',{project_id:missingFolder.project.id,lang});
-      if (!path) return;
-      const index = missingFolder.project.source_folders.indexOf(missingFolder.path);
-      if (index >= 0) missingFolder.project.source_folders[index] = path;
-      else missingFolder.project.source_folders.push(path);
-      if (!await persist()) return;
-      composerStatus();
-    } catch (e) { composerStatus(localizeError(e)); return; }
-  }
   setComposerText('');autoGrow();state.attachments=[];state.editingMessageIndex=null;renderDraft();composerStatus();
   // A withdrawn guide that was edited goes back to the running turn as guidance.
   const asGuide = state.guidanceDraft === id;state.guidanceDraft = null;
@@ -1425,8 +1479,10 @@ async function send() {
   const message = {content:text, attachments, edit_index:editIndex};
   chatScroll.follow();
   const existing = state.queues.get(id) || [];
-  if (existing.length || state.runs.get(id)?.pending) {
-    existing.push(message);state.queues.set(id, existing);
+  const waiting = existing.length || state.runs.get(id)?.pending;
+  existing.push(message);state.queues.set(id, existing);
+  renderSidebar();
+  if (waiting || queuedTurns.paused.has(id)) {
     composerStatus(t('chat.queued'));
     refreshQueue(id);
     if (asGuide && state.runs.get(id)?.pending) {steerQueuedMessage(id,message);return;}
@@ -1434,7 +1490,7 @@ async function send() {
     if (!state.runs.get(id)?.pending) flushQueue(id);
     return;
   }
-  await dispatchMessage(id, message);
+  await flushQueue(id);
 }
 
 function composerStatus(message = '') {$('#composer-status').textContent=message;$('#composer-status').hidden=!message;}
@@ -1588,7 +1644,7 @@ function populateModelSelect() {
 }
 
 async function onModelChange(model) {
-  if (state.busy || state.changingModel) return;
+  if (state.busy || state.changingModel || queuedTurns.preparing.has(state.activeConversationId)) return;
   const conversation = activeConversation()?.conversation;
   const current = activeModel();
   if (model === current) return;
@@ -1622,8 +1678,7 @@ async function applyConversationModel(model) {
   $('#composer-send').disabled = true;
   try {
     const data = await invoke('set_conversation_model', { conversation_id: id, model });
-    state.data = data;
-    state.persistedData = structuredClone(data);
+    applyChatData(data);
     const found = findConversation(id);
     if (found && state.activeConversationId === id) {
       state.messages = (found.conversation.messages || []).slice();
@@ -2000,7 +2055,7 @@ async function init() {
     const run = {pending:true, external:true, since:Date.now(), messages:[], usage:null};
     state.runs.set(id,run);
     try {
-      state.data = await invoke('get_data');state.persistedData = structuredClone(state.data);
+      applyChatData(await invoke('get_data'));
       const saved = findConversation(id)?.conversation;
       const history = saved?.messages || [];
       const prefix = Number.isInteger(payload.keep_count) ? history.slice(0,payload.keep_count) : history;
@@ -2015,7 +2070,7 @@ async function init() {
     if (state.preparing || [...state.runs.values()].some(run => run.pending && !run.external)) return;
     try {
       const data = await invoke('get_data');
-      state.data = data;state.persistedData = structuredClone(data);
+      applyChatData(data);
       if (state.activeConversationId && !findConversation(state.activeConversationId)) clearChat();
       const active = findConversation(state.activeConversationId)?.conversation;
       if (active?.messages_loaded) { restoreConversationHistory(state.activeConversationId,active);renderMessages();updateContextInfo(); }

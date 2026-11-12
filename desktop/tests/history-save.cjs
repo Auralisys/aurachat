@@ -36,6 +36,12 @@ const {readFileSync}=require('node:fs');const {resolve}=require('node:path');con
       if(['get_data','refresh_data'].includes(cmd))return structuredClone(window.__data);
       if(cmd==='get_conversation')return {...structuredClone(find(window.__data,args.conversation_id)),messages_loaded:true};
       if(cmd==='save_data'){try{
+        args=structuredClone(args);
+        if(window.__deferSave){
+          window.__deferSave=false;
+          window.__paintedBeforeSave=window.__painted;
+          await new Promise((resolve,reject)=>window.__saveWait={resolve,reject});
+        }
         const saved=saveData(args);
         if(window.__holdSave){window.__holdSave=false;return new Promise(resolve=>window.__releaseSave=()=>resolve(saved));}
         return saved;
@@ -114,5 +120,45 @@ const {readFileSync}=require('node:fs');const {resolve}=require('node:path');con
   await finish('b','Risposta locale');await page.locator('#messages').getByText('Risposta locale').waitFor();
   assert.equal(await page.locator('#messages .msg--user').count(),2);
 
+  // Creating a chat paints its bubble before saving metadata. A second chat
+  // can be created while that save waits, without disappearing on its response.
+  await page.click('#btn-new-chat');await page.fill('#composer-input','Creazione lenta');
+  await page.evaluate(()=>{
+    window.__deferSave=true;window.__painted=false;
+    document.querySelector('#composer-send').click();
+    requestAnimationFrame(()=>{window.__painted=document.querySelector('#messages').textContent.includes('Creazione lenta');});
+  });
+  await page.waitForFunction(()=>!!window.__saveWait);
+  const first=await page.evaluate(()=>state.activeConversationId);
+  assert.equal(await page.locator('#messages').getByText('Creazione lenta',{exact:true}).count(),1);
+  assert.equal(await page.evaluate(()=>window.__paintedBeforeSave),true,'The bubble must have a paint opportunity before persistence starts');
+  assert.equal(await page.evaluate(id=>!!window.__pending[id],first),false);
+  await page.click('#btn-new-chat');await send('Creazione parallela');
+  const second=await page.evaluate(()=>state.activeConversationId);
+  assert.notEqual(first,second);
+  assert.equal(await page.locator('#messages').getByText('Creazione parallela',{exact:true}).count(),1);
+  await page.evaluate(()=>window.__saveWait.resolve());
+  await pending(first);await pending(second);
+  assert.equal(await row(first).count(),1);assert.equal(await row(second).count(),1);
+  assert.deepEqual(await saveErrors(),[]);
+  await finish(first,'Prima creazione completata');await finish(second,'Seconda creazione completata');
+  await page.locator('#messages').getByText('Seconda creazione completata').waitFor();
+
+  // A failed creation is still recoverable in its original chat, not an error
+  // inserted into the conversation the user happens to be reading.
+  await page.click('#btn-new-chat');await page.fill('#composer-input','Creazione da riprovare');
+  await page.evaluate(()=>{window.__deferSave=true;window.__saveWait=null;document.querySelector('#composer-send').click();});
+  await page.waitForFunction(()=>!!window.__saveWait);
+  const failed=await page.evaluate(()=>state.activeConversationId);
+  await row('b').locator('.tree-conv__title').click();
+  await page.evaluate(()=>window.__saveWait.reject(new Error('Save temporarily unavailable')));
+  await page.waitForFunction(id=>queuedTurns.paused.has(id),failed);
+  assert.equal(await page.locator('.msg--error').count(),0);
+  await row(failed).locator('.tree-conv__title').click();
+  await page.locator('.queue-note').filter({hasText:'Save temporarily unavailable'}).waitFor();
+  await page.getByRole('button',{name:locales['queue.resume'],exact:true}).click();
+  await pending(failed);await finish(failed,'Creazione recuperata');
+  await page.locator('#messages').getByText('Creazione recuperata').waitFor();
+  assert.equal(await page.locator('#messages .msg--user').count(),1);
   assert.deepEqual(errors,[]);await browser.close();console.log('PASS: concurrent titles survive late saves and turn responses; manual titles and unsaved history are preserved.');
 })().catch(e=>{console.error(e);process.exit(1);});

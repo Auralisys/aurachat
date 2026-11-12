@@ -1,5 +1,5 @@
 // Local queues never replay after reload. Native history owns consumed guidance.
-const queuedTurns = {steering:new Map(), paused:new Set()};
+const queuedTurns = {steering:new Map(), preparing:new Map(), paused:new Set()};
 
 function sameGuidance(a, b) {
   return a?.content === b?.content && JSON.stringify(a?.attachments || []) === JSON.stringify(b?.attachments || []);
@@ -10,10 +10,10 @@ function removeQueuedMessage(id, message) {
   const index = queue?.indexOf(message) ?? -1;
   if (index < 0) return;
   queue.splice(index, 1);
-  if (!queue.length) state.queues.delete(id);
+  if (!queue.length) {state.queues.delete(id);queuedTurns.paused.delete(id);}
 }
 
-function queueLocked(id) {return queuedTurns.steering.has(id);}
+function queueLocked(id) {return queuedTurns.steering.has(id) || queuedTurns.preparing.has(id);}
 function clearQueuedStatus(id) {
   if (id === state.activeConversationId && !state.queues.get(id)?.length && $('#composer-status')?.textContent === t('chat.queued')) composerStatus();
 }
@@ -46,7 +46,10 @@ function queuedMessageEl(id, message) {
   const el = messageEl({...message, role:'user'}, -1);el.classList.add('msg--queued');
   el.dataset.queueId = message.queue_id;
   const meta = document.createElement('div');meta.className = 'msg__queue-meta';
-  const label = document.createElement('span');label.className = 'msg__state';label.textContent = t('queue.queued');
+  const label = document.createElement('span');label.className = 'msg__state';
+  const preparing = queuedTurns.preparing.get(id) === message;
+  label.textContent = t(preparing ? 'queue.preparing' : 'queue.queued');
+  if (preparing) label.setAttribute('role','status');
   el.querySelector('.msg-actions')?.remove();
   const locked = queueLocked(id) || state.preparing || state.loadingConversation;
   const more = messageAction('more','queue.actions', () => {
@@ -62,6 +65,9 @@ function queuedMessageEl(id, message) {
   meta.append(label, more);el.prepend(meta);
   if (message.steer_error) {
     const error = document.createElement('p');error.className = 'queue-note';error.setAttribute('role','status');error.textContent = t('queue.steer_failed');el.append(error);
+  }
+  if (message.prepare_error) {
+    const error = document.createElement('p');error.className = 'queue-note';error.setAttribute('role','alert');error.textContent = message.prepare_error;el.append(error);
   }
   return el;
 }

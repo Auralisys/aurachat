@@ -356,7 +356,7 @@ function releaseRemoteTurn(id) {
 async function refreshRemoteTurn(id = state.activeConversationId) {
   const owner = state.config?.firebase_email;
   const current = state.runs.get(id);
-  if (!id || !owner || remoteTurnSync.busy || state.loadingConversation || (current?.pending && !current.remote)) return;
+  if (!id || !owner || state.pendingConversations.get(id)?.saved === false || remoteTurnSync.busy || state.loadingConversation || (current?.pending && !current.remote)) return;
   remoteTurnSync.busy = true;
   const sameOwner = () => state.config?.firebase_email === owner;
   const stillActive = () => state.activeConversationId === id && sameOwner();
