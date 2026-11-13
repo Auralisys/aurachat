@@ -854,8 +854,31 @@ bridge visione, coda/guida, permessi, MCP e companion restano quelli di AuraChat
 Il companion riceve solo le traduzioni dei nuovi errori di risposta incompleta
 o filtrata, non questa revisione dell'interfaccia.
 
+`ui/chat-rail.js` sostituisce l'indicatore di scorrimento nativo con una rail di
+navigazione per le chat lunghe: un tick per ogni messaggio utente, centrato in
+verticale sulla finestra (senza sovrapporsi a intestazione e composer) e posto dove
+stava il thumb, cioe a destra dell'area messaggi e a sinistra del pannello attivita
+quando questo e aperto, con 6 px di respiro dal bordo (4 px sotto 850 px).
+Con il mouse sui tick, con la rotella o con il focus da tastiera si apre una card
+con il testo del messaggio, fino a tre miniature degli allegati e una riga con la
+data e l'ora a sinistra e la posizione contratta ("23/40", oppure "23-26/40" quando
+un tick raggruppa piu messaggi) all'estrema destra, sulla stessa linea di base.
+La card si apre con un effetto genie e i tick vicini al puntatore si ingrandiscono
+come nel Dock; con movimento ridotto restano solo dissolvenze. Clic e trascinamento
+portano al messaggio; frecce, Home, End, Invio ed Esc funzionano da tastiera. Se i
+messaggi sono troppi per lo spazio disponibile, ogni tick ne raggruppa piu di uno e
+la card mostra l'ora del primo. Nelle chat brevi o con un solo scambio la rail resta
+nascosta e rimane il thumb nativo. Per le date i messaggi nuovi portano il campo
+opzionale `created_at` (millisecondi Unix), che viaggia con la chat anche nella
+sincronizzazione cloud; le versioni precedenti lo ignorano. I messaggi gia presenti
+non hanno una data esatta: la card usa come approssimazione l'ora del primo evento
+registrato nella risposta (di norma pochi secondi dopo l'invio) e, se la risposta non
+ne ha, mostra solo la posizione. Il testo parlato dagli screen reader resta la forma
+estesa ("Messaggio 23 di 40").
+
 Verifiche: tests/chat-reading.cjs copre follow, memoria di lettura, dettagli
-annidati, stabilita del Markdown e layout compatto. Altri test:
+annidati, stabilita del Markdown e layout compatto; tests/chat-rail.cjs copre
+posizione, card, navigazione da mouse e tastiera e raggruppamento dei tick. Altri test:
 tests/operations-flow.cjs, permissions.cjs, chat-progress.cjs,
 activity-panel.cjs e suite di regressione UI. Questi test usano Edge reale e
 servizi nativi simulati. tests/run-native.ps1 compila ed esegue i test Rust,

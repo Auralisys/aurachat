@@ -410,6 +410,77 @@ azzerati dai ridisegni. Provato dall'utente con un invio reale sulla Prod
 installata: esito positivo. Installazione locale e hash in
 [[Build e distribuzione]].
 
+### Rail di navigazione delle chat lunghe — 13 novembre 2026
+
+Richiesta: nelle chat lunghe, al posto dell'indicatore di scorrimento verticale, un
+widget fisso di navigazione (come quello dell'app Copilot) con una card che compare
+scorrendo o passando il mouse, con effetto «genie». Correzione dell'utente: il
+widget deve stare al centro dello schermo sull'asse verticale (in orizzontale la
+posizione era giusta). Il «puntino viola chiaro in basso a destra» era il thumb
+nativo di `#messages` (4 px) della build precedente: ora è trasparente finché la
+rail è attiva.
+
+**Layout** (`chat-rail.js`, `chat-rail.css`). `<nav id="chat-rail">` è fratello di
+`#messages`, non figlio, perché `reconcileChildren` rimuove i nodi estranei. Un
+tick per ogni messaggio utente non accodato; se sono troppi ogni tick raggruppa un
+intervallo (`room = max(60, min(h−96, 0,72·h))`, `step = clamp(floor(room/n), 6,
+12)`, `size = ceil(n / max(2, floor(room/step)))`). La rail è nascosta con meno di due
+messaggi o se il contenuto eccede l'area di non più di 8 px: chat brevi e a scambio
+singolo mantengono la scrollbar nativa. Orizzontale: bordo destro dell'area
+messaggi, dove stava il thumb (a sinistra del dock attività quando è aperto), con
+`--rail-inset` = 6 px di respiro dal bordo (4 px sotto 850 px; prima erano ~4 px
+tra i tick e la card delle modifiche, nel riferimento ~9). Traccia e card si
+spostano insieme, così la distanza tick→card e `--pull` (origine del genie)
+restano invariati. Verticale: centro della finestra (`innerHeight/2`), limitato a
+stare ad almeno `min(24, (h−lunghezza)/2)` da intestazione e composer.
+
+**Interazione.** Mouse sui tick: card del tick sotto il puntatore e magnificazione
+alla Dock (`m = (1+cos(πd/60))/2` entro 60 px). Rotella o tastiera che scorrono la
+chat aprono per 900 ms la card del messaggio corrente, ma solo se lo scroll segue un
+input dell'utente entro 400 ms: follow, ripristino e salti restano silenziosi
+(`lastInput` parte da `-Infinity`, altrimenti uno scroll nei primi 400 ms di vita
+della pagina apriva la card). Clic e trascinamento portano al messaggio; frecce,
+Home, End, Invio ed Esc con un solo tab stop rotante. La card si apre con un genie
+(clip-path e scala dal tick, poi testo in dissolvenza) solo con
+`prefers-reduced-motion: no-preference`; altrimenti solo dissolvenze. Titolo =
+testo del messaggio; riga meta su un'unica linea di base (flex, `align-items:
+baseline`): data e ora a sinistra («Oggi, 10:35», «Ieri, 17:53»), posizione
+contratta all'estrema destra («23/40», «23–26/40» se il tick raggruppa più
+messaggi; `font-variant-numeric: tabular-nums`). Il testo per gli screen reader
+(`aria-label` del tick) resta la forma estesa «Messaggio 23 di 40» /
+«Messaggi 23–26 di 40», quindi `chat.rail_position` e `chat.rail_range` restano le
+sole chiavi di posizione. Fino a tre miniature con «+N».
+
+**Date dei messaggi.** `ChatMessage.created_at: Option<u64>` (`llm.rs`, millisecondi
+Unix, `serde(default, skip_serializing_if)`) è additivo: `prepare_turn` lo imposta
+sul nuovo messaggio utente (un retry conserva l'originale); riepilogo ask_user,
+segmenti dell'assistente, risposta finale e guida di `steer_chat` usano
+`data::now_millis()`. Le versioni precedenti lo ignorano (solo `mcp.rs` ha
+`deny_unknown_fields`) e `message_value()` di `firestore.rs` lo sincronizza senza
+modifiche. I messaggi già salvati non hanno una data esatta e non se ne inventa una:
+`sentAt()` in `chat-rail.js` usa `created_at` se presente; altrimenti l'istante più
+antico fra gli eventi di `activity` delle risposte che seguono (`at`, `started_at`
+o `created_at`, millisecondi Unix da `data::now_millis()`), fino al messaggio
+utente successivo. È un'approssimazione (di norma pochi secondi dopo l'invio);
+senza eventi la card mostra solo la posizione. `sameMessage`
+ignora `created_at` di primo livello, così il fumetto ottimistico
+(`created_at: Date.now()`) viene riusato dal salvataggio.
+
+**Trappole.** `#messages` è centrato con padding (contenuto limitato a 752 px): il
+`ResizeObserver` di `chat-scroll.js` sul content box non scatta quando dock o
+sidebar cambiano solo il border box, quindi la rail ne osserva uno proprio. Il thumb
+si nasconde con `::-webkit-scrollbar-thumb` trasparente, mai con `scrollbar-width` o
+`scrollbar-color`, che disattivano gli stili WebKit. Dopo un clic il focus passa a
+`#messages`: `focusout` richiama `schedule` perché il tab stop segua il tick
+corrente.
+
+Verifiche: `desktop/tests/chat-rail.cjs` (Edge reale, servizi nativi simulati)
+copre posizione e respiro dal bordo, centratura con finestra, dock e composer, card
+(data a sinistra e posizione contratta a destra sulla stessa linea di base, data
+propria o derivata dagli eventi della risposta), anteprime, raggruppamento,
+tastiera, scrub e chat brevi; i test Rust su `created_at` sono nei
+130 test della libreria (9 ignorati già prima). Più le suite di regressione UI.
+
 ## Finestra, MCP e strumenti di progetto — 22 ottobre 2026
 
 **Controlli finestra e Git annidato** (`d440cf0`). Su Windows i pulsanti

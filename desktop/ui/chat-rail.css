@@ -1,0 +1,55 @@
+/* Navigation rail for long chats (chat-rail.js): ticks replace the scroll thumb and a card previews the message under the pointer. */
+.messages.has-rail::-webkit-scrollbar-thumb,
+.messages.has-rail::-webkit-scrollbar-thumb:hover { background-color:transparent; }
+
+.chat-rail { position:absolute; z-index:1; pointer-events:none; --rail-edge:4px; --rail-inset:6px; --pull:34px; }
+.chat-rail__track { position:absolute; right:var(--rail-inset); width:36px; pointer-events:auto; touch-action:none; user-select:none; }
+.chat-rail__tick { position:relative; display:block; width:100%; height:var(--step,12px); padding:0; border:0; border-radius:3px; background:transparent; color:#75707c; transition:color var(--motion-state) var(--motion-ease); }
+.chat-rail__tick:hover { background:transparent; }
+.chat-rail__tick:focus-visible { outline-offset:-2px; }
+.chat-rail__tick::before { content:""; position:absolute; top:50%; right:var(--rail-edge); width:18px; height:2px; margin-top:-1px; border-radius:1px; background:currentColor; transform-origin:100% 50%; transform:scale(var(--b,.56), 1); }
+.chat-rail__tick.is-view { --b:.67; color:#a9a3b3; }
+.chat-rail__tick.is-current { --b:1; color:var(--c-glow); }
+.chat-rail__tick.is-hot { color:var(--c-text); }
+
+.chat-rail__card { position:absolute; top:0; right:calc(52px + var(--rail-inset)); width:min(300px, calc(100% - 96px - var(--rail-inset))); opacity:0; visibility:hidden; pointer-events:none; transform:translateY(var(--y,0px)); transition:opacity 80ms linear, visibility 0s linear 80ms; }
+.chat-rail__card.is-open { opacity:1; visibility:visible; transition:opacity 80ms linear, visibility 0s; }
+.chat-rail__body { filter:drop-shadow(0 14px 28px rgba(0, 0, 0, .42)); }
+.chat-rail__inner { padding:11px 14px; border-radius:var(--radius-xl); background:var(--c-panel); }
+.chat-rail__text { margin:0; overflow:hidden; color:var(--c-text); font-size:var(--fs-small); font-weight:600; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }
+.chat-rail__meta { display:flex; align-items:baseline; gap:12px; margin:2px 0 0; color:var(--c-text-muted); font-size:var(--fs-label); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.chat-rail__when { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.chat-rail__place { flex:none; margin-left:auto; }
+.chat-rail__thumbs { display:flex; align-items:center; gap:6px; margin-top:8px; }
+.chat-rail__thumbs img { width:40px; height:40px; border-radius:6px; background:var(--c-hover); object-fit:cover; }
+.chat-rail__more { padding:0 4px; color:var(--c-text-muted); font-size:var(--fs-label); font-variant-numeric:tabular-nums; }
+
+/* Dock-style magnification on the ticks and a genie-like card: it unfolds from the hovered tick, narrow end first. */
+@media (prefers-reduced-motion:no-preference) {
+  .chat-rail__tick::before { transform:scale(calc(var(--b,.56) * (1 + var(--m,0) * .9)), calc(1 + var(--m,0) * .5)); transition:transform var(--motion-state) var(--motion-ease); }
+  .chat-rail__track.is-tracking .chat-rail__tick::before { transition-duration:80ms; }
+  .chat-rail__card { transition:opacity 140ms ease-in, visibility 0s linear 140ms; }
+  .chat-rail__card.is-open { transition:opacity 120ms ease-out, visibility 0s; }
+  .chat-rail__card.is-open.is-gliding { transition:opacity 120ms ease-out, visibility 0s, transform 150ms var(--motion-ease); }
+  .chat-rail__body { transform-origin:100% 50%; transform:translateX(var(--pull)) scaleX(.16); transition:transform 140ms ease-in; }
+  .chat-rail__card.is-open > .chat-rail__body { transform:none; transition:transform 300ms var(--motion-ease); }
+  .chat-rail__inner { transform-origin:100% var(--oy,50%); transform:scaleY(.08); clip-path:polygon(0 0, 100% var(--oy,50%), 100% var(--oy,50%), 0 100%); transition:transform 140ms ease-in, clip-path 140ms ease-in; }
+  .chat-rail__card.is-open .chat-rail__inner { transform:none; clip-path:polygon(0 0, 100% 0, 100% 100%, 0 100%); transition:transform 380ms var(--motion-ease), clip-path 380ms var(--motion-ease); }
+  .chat-rail__inner > * { opacity:0; transition:opacity 80ms ease-in; }
+  .chat-rail__card.is-open .chat-rail__inner > * { opacity:1; transition:opacity 160ms ease-out 110ms; }
+}
+
+@media (max-width:850px) {
+  .chat-rail { --rail-edge:3px; --rail-inset:4px; --pull:26px; }
+  .chat-rail__track { width:30px; }
+  .chat-rail__tick::before { width:14px; }
+  .chat-rail__card { right:calc(44px + var(--rail-inset)); }
+}
+
+@media (forced-colors:active) {
+  .chat-rail__tick { color:CanvasText; }
+  .chat-rail__tick.is-current,
+  .chat-rail__tick.is-hot { color:Highlight; }
+  .chat-rail__tick::before { forced-color-adjust:none; background:currentColor; }
+  .chat-rail__inner { border:1px solid CanvasText; background:Canvas; }
+}

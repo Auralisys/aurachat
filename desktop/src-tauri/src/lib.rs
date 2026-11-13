@@ -692,7 +692,7 @@ async fn chat_inner(
                 let activity=std::mem::take(&mut *events);
                 let mut segments=segments.lock().unwrap();
                 if !content.is_empty() || !activity.is_empty() {
-                    segments.push(ChatMessage{role:"assistant".into(),content,activity,attachments:vec![],feedback:None});
+                    segments.push(ChatMessage{role:"assistant".into(),content,activity,attachments:vec![],feedback:None,created_at:Some(data::now_millis())});
                 }
                 segments.push(message);
                 content_offset.store(0,std::sync::atomic::Ordering::Relaxed);
@@ -791,7 +791,7 @@ async fn chat_inner(
         conv.messages.push(user_message);
         conv.messages.extend(segments.into_inner().unwrap());
         if !reply.trim().is_empty() || !turn_activity.is_empty() {
-            conv.messages.push(ChatMessage { role:"assistant".into(),content:reply.clone(),attachments:vec![],feedback:None,activity:turn_activity });
+            conv.messages.push(ChatMessage { role:"assistant".into(),content:reply.clone(),attachments:vec![],feedback:None,activity:turn_activity,created_at:Some(data::now_millis()) });
         }
         conv.updated_at = data::now_millis();
         if usage.total_tokens > 0 { conv.context_tokens = usage.total_tokens; }
@@ -1039,7 +1039,7 @@ async fn install_skill(app:tauri::AppHandle,state:tauri::State<'_,AppState>,sour
 #[tauri::command(rename_all = "snake_case")]
 fn steer_chat(app:tauri::AppHandle, state: tauri::State<'_, AppState>, conversation_id:String, content:String, attachments:Option<Vec<Attachment>>) -> Result<serde_json::Value,String> {
     let owner=state.firestore.uid().ok_or("login_required")?;
-    let message=ChatMessage{role:"user".into(),content:clean(&content),attachments:attachments.unwrap_or_default(),feedback:None,activity:vec![]};
+    let message=ChatMessage{role:"user".into(),content:clean(&content),    attachments:attachments.unwrap_or_default(),feedback:None,activity:vec![],created_at:Some(data::now_millis())};
     // Every client (this window, remote desktops, mobile) shows unread guidance until it is read or withdrawn.
     let id=state.chat_runs.steer(&owner,&conversation_id,message,|item|{
         let Ok(mut event)=serde_json::to_value(&item.message) else {return};

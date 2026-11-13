@@ -105,6 +105,37 @@ SHA-256 verificati dopo l'installazione:
 - Eseguibile installato, senza normalizzazione:
   `2c61a77cb1702f2c6627dac5fca4c7dd0093a03ac003b32f69f8c95e6b74cbed`.
 
+### Installazione locale Windows — rail di navigazione, 13 novembre 2026
+
+Build **0.1.6** con il rail di navigazione delle chat lunghe (tacche sul bordo
+destro e card con data a sinistra e posizione compatta "N/M" a destra, sulla
+stessa linea di base; +6 px di spazio dalla card delle modifiche) installata con
+`install-prod.ps1 -SkipBuild` dopo aver controllato in sola lettura, con
+Computer Use, che l'app non avesse turni in corso. App riaperta con un nuovo
+processo; i controlli dello script (eseguibile normalizzato identico alla build,
+`DirectML.dll` presente) sono passati. Nessun incremento di versione o upload;
+l'agente non ha inviato messaggi reali.
+
+Ricevuta validata con `node desktop\scripts\release.cjs --skip-build`.
+Fingerprint dei sorgenti desktop:
+`f682a9d7fb39b10047140844f8f86971088abca74d15cf3cb61c542917dcd30e`.
+
+SHA-256 verificati dopo l'installazione:
+- Installer `AuraChat_0.1.6_x64-setup.exe`:
+  `7cd5d6536bc7fae369463a3f4a206c2e47c23a9e989a58226b87a767f4a3df00`.
+- Eseguibile installato, senza normalizzazione:
+  `4f2d162fc20f06de59c6d157bc01919d0c24f3e813289349f47ad6d49c39ee2a`.
+- Build ed eseguibile installato, normalizzando il marcatore Tauri come nello
+  script: entrambi
+  `812d6c9c08c5099b184c92beb858542ef5c83ef5491b4d42e642fa5dc4898897`.
+
+La suite `chat-rail.cjs` e le altre suite dell'interfaccia sono passate, con
+tre eccezioni gia presenti prima di questa modifica e invariate sul commit
+precedente: `sidebar-selection`, `skills` e `ui-smoke` (mock non aggiornati al
+caricamento progressivo della cronologia). Le date delle chat salvate prima di
+`created_at` sono approssimate con la prima attivita della risposta. Dettagli
+del comportamento in [[Desktop gateway - Tauri]].
+
 ## Limiti
 
 La firma dell'updater non sostituisce la firma del sistema operativo: su Windows

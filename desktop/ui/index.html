@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="annotations.css" />
     <link rel="stylesheet" href="browser.css" />
     <link rel="stylesheet" href="balance.css" />
+    <link rel="stylesheet" href="chat-rail.css" />
   </head>
   <body>
     <div class="backdrop" aria-hidden="true"></div>
@@ -97,6 +98,10 @@
               </div>
             </div>
             <div id="messages" class="messages" tabindex="-1" data-i18n-aria-label="chat.conversation"></div>
+            <nav id="chat-rail" class="chat-rail" data-i18n-aria-label="chat.rail" hidden>
+              <div class="chat-rail__track"></div>
+              <div class="chat-rail__card" aria-hidden="true"><div class="chat-rail__body"><div class="chat-rail__inner"><p class="chat-rail__text"></p><p class="chat-rail__meta"><span class="chat-rail__when"></span><span class="chat-rail__place"></span></p><div class="chat-rail__thumbs" hidden></div></div></div></div>
+            </nav>
             <div class="composer">
               <button id="chat-latest" type="button" class="chat-latest" data-i18n-title="chat.latest" hidden><svg data-icon="chevron" aria-hidden="true"></svg><span data-i18n="chat.latest"></span></button>
               <div id="editing-message" class="editing-message" hidden><span data-i18n="chat.editing"></span><button id="cancel-edit" class="icon-button" data-i18n-aria-label="project.cancel"><svg data-icon="close" aria-hidden="true"></svg></button></div>
@@ -273,6 +278,7 @@
     <script src="activity.js"></script>
     <script src="git.js"></script>
     <script src="chat-scroll.js"></script>
+    <script src="chat-rail.js"></script>
     <script src="chat-progress.js"></script>
     <script src="icons.js"></script>
     <script src="settings.js"></script>

@@ -111,6 +111,7 @@ function setupChatScroll() {
   const box = $('#messages'), button = $('#chat-latest');
   chatScroll.follower = scrollFollower(box, () => {
     button.hidden = box.scrollHeight - box.clientHeight - box.scrollTop <= 2 || !state.messages.length;
+    chatRail.schedule();
   });
   button.onclick = () => {chatScroll.follow();box.focus({preventScroll:true});};
   box.addEventListener('click', event => {
@@ -118,4 +119,5 @@ function setupChatScroll() {
   }, true);
   chatScroll.observer = new ResizeObserver(() => chatScroll.sync());
   chatScroll.observer.observe(box);
+  chatRail.setup();
 }

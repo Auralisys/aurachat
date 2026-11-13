@@ -1226,10 +1226,17 @@ function sameMessageValue(a, b) {
   return keys.length === Object.keys(b).length && keys.every(key => Object.hasOwn(b,key) && sameMessageValue(a[key],b[key]));
 }
 
+// The native copy of a just-sent message carries its own timestamp: it must not rebuild the bubble.
+function sameMessage(a, b) {
+  if (a === b) return true;
+  const keys = Object.keys(a).filter(key => key !== 'created_at'), other = Object.keys(b).filter(key => key !== 'created_at');
+  return keys.length === other.length && keys.every(key => Object.hasOwn(b,key) && sameMessageValue(a[key],b[key]));
+}
+
 function renderedMessage(message, index, latest) {
   const failed = message.role === 'error' && !!state.failedSend;
   const entry = renderedMessages.entries[index];
-  if (entry && entry.latest === latest && entry.failed === failed && sameMessageValue(entry.message,message)) {
+  if (entry && entry.latest === latest && entry.failed === failed && sameMessage(entry.message,message)) {
     entry.node._busyControls.forEach(button => {button.disabled = state.busy;});
     return entry.node;
   }
@@ -1260,6 +1267,7 @@ function renderMessages() {
     renderedMessages.entries = [];
     box.innerHTML = emptyHTML();
     chatScroll.afterRender(reading);
+    chatRail.refresh();
     return;
   }
   if (renderedMessages.conversation !== state.activeConversationId || box.querySelector(':scope > .empty')) {
@@ -1281,6 +1289,7 @@ function renderMessages() {
   if (state.busy) updateLiveTurn();
   renderThinkingStatus();
   chatScroll.afterRender(reading);
+  chatRail.refresh();
   updateThinkingTimer();
 }
 
@@ -1319,7 +1328,7 @@ async function requestChat(payload) {
     baseRevision:saved?.revision, baseUpdatedAt:saved?.updated_at};
   if (!isActive && !payload.retry) {
     if (Number.isInteger(payload.edit_index)) run.messages = run.messages.slice(0,payload.edit_index);
-    run.messages.push({role:'user',content:payload.content,attachments:payload.attachments || []});
+    run.messages.push({role:'user',content:payload.content,attachments:payload.attachments || [],created_at:Date.now()});
     run.initialMessageCount = run.messages.length;
   }
   state.runs.set(id, run);if (isActive) {state.messages = run.messages;state.failedSend = null;}state.unread.delete(id);
@@ -1419,7 +1428,7 @@ async function dispatchMessage(id, message) {
   if (id === state.activeConversationId) {
     composerStatus();
     if (message.edit_index !== null && message.edit_index !== undefined) state.messages = state.messages.slice(0, message.edit_index);
-    state.messages.push({role:'user', content:message.content, attachments:message.attachments});
+    state.messages.push({role:'user', content:message.content, attachments:message.attachments, created_at:Date.now()});
   }
   await requestChat({conversation_id:id, content:message.content, attachments:message.attachments, edit_index:message.edit_index});
 }
