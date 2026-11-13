@@ -9,12 +9,19 @@ function composerEl() {
 
 const PASTE_COLLAPSE_LINES = 20;
 
+function composerTail(el = composerEl()) {
+  return [...el.childNodes].findLast(node => node.nodeType !== Node.TEXT_NODE || node.textContent);
+}
+
 // All offsets use the message text, never the visible label of a collapsed paste.
 function* composerNodes(root = composerEl()) {
   for (const node of root?.childNodes || []) {
     if (node.nodeType === Node.TEXT_NODE) yield {node, text:node.textContent};
     else if (node.classList?.contains('paste-token')) yield {node, text:JSON.parse(node.dataset.pasteText), pasted:true};
-    else if (node.nodeName === 'BR') yield {node, text:'\n'};
+    else if (node.nodeName === 'BR') {
+      // The final BR supplies the empty caret line, not another logical newline.
+      if (root !== composerEl() || node !== composerTail(root)) yield {node, text:'\n'};
+    }
     else yield* composerNodes(node);
   }
 }
@@ -41,6 +48,7 @@ function setComposerParts(parts) {
   if (!el) return;
   document.querySelector('.paste-preview[open]')?.close();
   el.replaceChildren(...parts.map(part => part.pasted ? pastedTextToken(part.text) : document.createTextNode(part.text)));
+  if (el.lastChild?.nodeType === Node.TEXT_NODE && /\r?\n$/.test(el.lastChild.textContent)) el.append(document.createElement('br'));
   placeCaretAtEnd(el);
 }
 
@@ -59,13 +67,18 @@ function appendComposerText(text) {
   if (!el) return;
   const current = composerText();
   const separator = current && !/\s$/.test(current) ? ' ' : '';
+  const tail = composerTail(el);
+  if (tail?.nodeName === 'BR') tail.remove();
   el.appendChild(document.createTextNode(separator + text));
   placeCaretAtEnd(el);
+  revealComposerCaret();
 }
 
 function placeCaretAtEnd(el) {
   const range = document.createRange();
   range.selectNodeContents(el);
+  const tail = composerTail(el);
+  if (tail?.nodeName === 'BR') range.setEndBefore(tail);
   range.collapse(false);
   const selection = window.getSelection();
   selection.removeAllRanges();
@@ -134,23 +147,99 @@ function composerRange(start, end) {
   return range;
 }
 
+// Chromium keeps a placeholder <br> in an emptied field; it must not become a trailing newline.
+function dropComposerPlaceholder(el) {
+  if (!composerText() && !el.querySelector('.paste-token') && el.querySelector('br')) {el.replaceChildren();placeCaretAtEnd(el);}
+}
+
 // Insert plain text at the caret (replacing any current selection).
 function insertComposerText(text) {
   const selection = window.getSelection();
   if (!selection) return;
   const el = composerEl();
-  // Chromium keeps a placeholder <br> in an emptied field; it must not become a trailing newline.
-  if (!el.textContent && !el.querySelector('.paste-token') && el.querySelector('br')) {el.replaceChildren();placeCaretAtEnd(el);}
+  dropComposerPlaceholder(el);
   if (!selection.rangeCount || !el.contains(selection.getRangeAt(0).commonAncestorContainer)) placeCaretAtEnd(el);
   const range = selection.getRangeAt(0);
   range.deleteContents();
   const node = document.createTextNode(text);
   range.insertNode(node);
-  range.setStartAfter(node);
-  range.setEndAfter(node);
+  const spare = text.endsWith('\n') && !node.nextSibling && node.parentNode === el ? document.createElement('br') : null;
+  if (spare) node.after(spare);
+  if (spare) range.setStartBefore(spare);
+  else range.setStartAfter(node);
   range.collapse(true);
   selection.removeAllRanges();
   selection.addRange(range);
+  revealComposerCaret();
+}
+
+// Explicit BRs avoid Chromium's extra text newline in pre-wrap while keeping native undo.
+function insertComposerNewline() {
+  const el = composerEl(), selection = window.getSelection();
+  if (!el || !selection) return;
+  dropComposerPlaceholder(el);
+  if (!selection.rangeCount || !el.contains(selection.getRangeAt(0).commonAncestorContainer)) placeCaretAtEnd(el);
+  const tail = selection.getRangeAt(0).cloneRange();
+  tail.collapse(false);tail.setEnd(el, el.childNodes.length);
+  const rest = tail.cloneContents();
+  const atEnd = !rest.textContent && !rest.querySelector('.paste-token') && rest.querySelectorAll('br').length <= 1;
+  if (atEnd) selection.getRangeAt(0).setEnd(el, el.childNodes.length);
+  if (!document.execCommand('insertHTML', false, atEnd ? '<br><br>' : '<br>')) {
+    console.error('Composer could not insert a newline');composerStatus(t('chat.paste_failed'));return;
+  }
+  if (atEnd) placeCaretAtEnd(el);
+  revealComposerCaret();
+}
+
+// A collapsed range has no box at a line start or before a newline: measure the character next to the caret instead.
+function composerCaretRect() {
+  const el = composerEl(), selection = window.getSelection();
+  if (!el || !selection?.rangeCount || !selection.isCollapsed) return null;
+  const range = selection.getRangeAt(0), {startContainer:node, startOffset:offset} = range;
+  if (!el.contains(node)) return null;
+  const boxOf = target => [...target.getClientRects()].filter(rect => rect.height).pop() || null;
+  const own = boxOf(range);
+  if (own) return own;
+  const probes = [];
+  if (node.nodeType === Node.TEXT_NODE) {
+    if (offset < node.length) probes.push([node, offset, false]);
+    if (offset > 0) probes.push([node, offset - 1, true]);
+  } else {
+    const after = node.childNodes[offset], before = node.childNodes[offset - 1];
+    if (after) probes.push([after, 0, false]);
+    if (before) probes.push([before, before.nodeType === Node.TEXT_NODE ? before.length - 1 : 0, true]);
+  }
+  for (const [leaf, index, behind] of probes) {
+    let box = null, newline = false;
+    if (leaf.nodeType === Node.TEXT_NODE) {
+      if (index < 0 || index >= leaf.length) continue;
+      const probe = document.createRange();
+      probe.setStart(leaf, index);probe.setEnd(leaf, index + 1);
+      box = boxOf(probe);newline = behind && leaf.data[index] === '\n';
+    } else if (leaf.nodeType === Node.ELEMENT_NODE) {
+      box = boxOf(leaf);newline = behind && leaf.nodeName === 'BR';
+    }
+    if (!box) continue;
+    if (!newline) return box;
+    const pitch = parseFloat(getComputedStyle(el).lineHeight) || box.height * 1.25;
+    return new DOMRect(box.left, box.top + pitch, 0, box.height);
+  }
+  return null;
+}
+
+// Scroll the composer just enough to show the caret: native editing commands run from script do not.
+function revealComposerCaret() {
+  const el = composerEl();
+  if (!el || el.scrollHeight <= el.clientHeight) return;
+  const rect = composerCaretRect();
+  if (!rect) {
+    if (caretOffset() >= composerText().length) el.scrollTop = el.scrollHeight;
+    return;
+  }
+  const style = getComputedStyle(el), inner = el.getBoundingClientRect().top + el.clientTop;
+  const top = inner + (parseFloat(style.paddingTop) || 0), bottom = inner + el.clientHeight - (parseFloat(style.paddingBottom) || 0);
+  if (rect.bottom > bottom) el.scrollTop += rect.bottom - bottom;
+  else if (rect.top < top) el.scrollTop -= top - rect.top;
 }
 
 function notifyComposerInput() {
@@ -184,11 +273,26 @@ function insertPastedNode(node) {
   }
   input.focus();
   if (pastedId) placeCaretAfter(input.querySelector(`[data-paste-id="${pastedId}"]`));
+  revealComposerCaret();
   return true;
 }
 
-function insertComposerPaste(text) {
-  if (pastedLineCount(text) > PASTE_COLLAPSE_LINES) insertPastedNode(pastedTextToken(text));
+// Ctrl/Cmd+Shift+V is the special paste: the text lands as typed, expanded and never collapsed into a chip.
+let literalPasteUntil = 0;
+
+function armLiteralPaste(event) {
+  if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey) return;
+  if (event.code === 'KeyV' || event.key?.toLowerCase() === 'v') literalPasteUntil = performance.now() + 1000;
+}
+
+function takeLiteralPaste() {
+  const armed = performance.now() < literalPasteUntil;
+  literalPasteUntil = 0;
+  return armed;
+}
+
+function insertComposerPaste(text, literal = false) {
+  if (!literal && pastedLineCount(text) > PASTE_COLLAPSE_LINES) insertPastedNode(pastedTextToken(text));
   else insertComposerText(text);
 }
 
@@ -230,6 +334,7 @@ function openPastedText(token) {
 
 function setupComposerPastes() {
   const input = composerEl();
+  input.addEventListener('keydown', armLiteralPaste);
   input.addEventListener('click', event => {
     const token = event.target.closest('.paste-token');
     if (token) openPastedText(token);

@@ -1275,10 +1275,21 @@ il conteggio (sotto la soglia il testo torna espanso).
 
 `composer.js` usa lo stesso testo completo per serializzazione, copia/taglio,
 posizione del cursore e scelta delle skill. Il chip non è un allegato e non
-riduce i token: all'invio viene espanso nel messaggio, senza inviare la sua
-etichetta. Incolla/rimozione supportano Annulla/Ripeti; il testo resta letterale,
+riduce i token: il modello riceve tutto il testo, senza la sua etichetta.
+Nella bubble inviata il blocco resta invece un chip cliccabile: apre un dialog
+centrato, di sola lettura, con Copia e X in alto (anche Esc chiude). Gli intervalli
+opzionali `pastes` sono salvati con il messaggio, conservati da coda, modifica,
+riprova e companion, ma non entrano nelle richieste al modello. Messaggi vecchi
+senza intervalli restano espansi; intervalli invalidi non nascondono il testo.
+Incolla/rimozione supportano Annulla/Ripeti; il testo resta letterale,
 anche se contiene HTML, e i fine riga CRLF restano intatti se non viene modificato.
 Le bozze in memoria conservano anche i blocchi tra chat, come gli allegati.
+**Ctrl+Shift+V** incolla sempre espanso, preservando a capo, righe vuote, tab e
+indentazione del testo (non stili HTML). **Ctrl+V** mantiene la compressione oltre
+20 righe. Shift+Invio e Ctrl+Invio inseriscono un a capo e portano il cursore in
+vista anche quando il composer ha raggiunto l'altezza massima; Invio invia.
+Il modificatore Cmd per l'incolla speciale viene riconosciuto, ma il percorso
+clipboard di WKWebView non e stato verificato su macOS.
 Verifica isolata: `desktop/tests/composer-paste.cjs`.
 
 ## Utilizzo e costo stimato

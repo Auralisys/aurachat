@@ -136,6 +136,41 @@ caricamento progressivo della cronologia). Le date delle chat salvate prima di
 `created_at` sono approssimate con la prima attivita della risposta. Dettagli
 del comportamento in [[Desktop gateway - Tauri]].
 
+### Installazione locale Windows — chip incolla e cursore, 13 novembre 2026
+
+Build **0.1.6** con chip persistenti nelle bubble, viewer centrale con Copia e X,
+Ctrl+Shift+V espanso e a capo con cursore visibile (Shift/Ctrl+Invio).
+Installata con `install-prod.ps1 -SkipBuild` dopo aver verificato con Computer
+Use il composer vuoto e il pulsante Invia, senza Stop o turni attivi. App
+rilanciata e cronologia caricata; nessun messaggio reale inviato dall'agente.
+Nessun incremento di versione, upload o pubblicazione di release.
+
+Ricevuta validata con `node desktop\scripts\release.cjs --skip-build`.
+Fingerprint dei sorgenti desktop:
+`a8db94c36e4a69eafeaebfad01457b0be661d5c1f1365c8e4321aec354dfaf0d`.
+
+SHA-256 verificati dopo l'installazione:
+- Installer `AuraChat_0.1.6_x64-setup.exe`:
+  `ab7851aa702dae82185e9c345933959fccf372d833a965de211350eedadd9a69`.
+- Eseguibile installato, senza normalizzazione:
+  `d69ad498725395f7a946436bae317e222664f1f419fee4b00ff8b1041c107fcb`.
+- Build ed eseguibile installato, normalizzando il marcatore Tauri:
+  `56bf6ed71b7743c02502eecb93c47d8dcb16a9b15549cfba0a8be493b01c4d8f`.
+- `DirectML.dll`, identica alla dipendenza della build:
+  `9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1`.
+  La DLL nel target e un link simbolico: la lunghezza 0 del link non indica
+  un file vuoto.
+
+Suite UI mirate passate: `composer-paste`, `composer-stop`, `pending-guidance`,
+`background-chats`, `history-save`, `chat-rail`, `chat-progress`,
+`image-attachments`, `voice-flow`. Verifica visiva del viewer a 1440 e 390 px.
+Rust: 136 test passati, 9 ignorati. L'eseguibile standard dei test fallisce
+all'avvio con `0xc0000139` su questo host: eseguita una copia dello stesso
+binario compilato con manifest Common-Controls v6 incorporato tramite `mt.exe`
+e DirectML disponibile. La build release standard e passata senza modifiche.
+Le tre suite gia segnalate nella voce precedente restano fuori ambito.
+Cmd+Shift+V su macOS non verificato. Dettagli in [[Desktop gateway - Tauri]].
+
 ## Limiti
 
 La firma dell'updater non sostituisce la firma del sistema operativo: su Windows

@@ -14,6 +14,51 @@ pub struct ChatMessage {
     /// Milliseconds since the Unix epoch; absent on messages saved before it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<u64>,
+    /// Pasted blocks the composer had collapsed, as ranges of `content` in UTF-16 code units (the
+    /// unit of the UI's strings). Only the UI reads them, to show each block as a chip: they never
+    /// reach a provider request and Rust never slices `content` by them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "lenient_pastes")]
+    pub pastes: Vec<PasteRange>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PasteRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+/// Most pasted blocks one message keeps; the UI applies the same limit.
+pub const MAX_PASTES: usize = 100;
+
+/// Ranges from untrusted JSON; a value of any other shape means "no collapsed blocks".
+pub fn parse_pastes(value: Option<serde_json::Value>) -> Vec<PasteRange> {
+    match value {
+        None | Some(serde_json::Value::Null) => vec![],
+        Some(value) => match serde_json::from_value(value) {
+            Ok(ranges) => ranges,
+            Err(_) => { eprintln!("Invalid pasted-text metadata; displaying the complete message"); vec![] }
+        }
+    }
+}
+
+/// A stored value of another shape must not make the whole chat unreadable.
+fn lenient_pastes<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<PasteRange>, D::Error> {
+    Ok(parse_pastes(Some(serde_json::Value::deserialize(deserializer)?)))
+}
+
+/// Keeps `pastes` only when every range is non-empty, lies inside `content` (UTF-16 code units)
+/// and starts where the previous one ends or later; otherwise the message shows as plain text.
+pub fn valid_pastes(content: &str, pastes: Vec<PasteRange>) -> Vec<PasteRange> {
+    if pastes.len() > MAX_PASTES { eprintln!("Too many pasted-text ranges; displaying the complete message"); return vec![]; }
+    let length = content.encode_utf16().count();
+    let mut floor = 0;
+    for range in &pastes {
+        if range.start < floor || range.end <= range.start || range.end as usize > length {
+            eprintln!("Invalid pasted-text range; displaying the complete message"); return vec![];
+        }
+        floor = range.end;
+    }
+    pastes
 }
 
 /// A text file (`content`) or an image (`mime_type` and base64 `data`).
@@ -211,7 +256,7 @@ pub fn validate_attachments(files: &[Attachment]) -> Result<(), String> {
     Ok(())
 }
 
-pub fn prepare_turn(messages:&[ChatMessage], content:String, attachments:Vec<Attachment>, retry:bool, edit_index:Option<usize>) -> Result<(Vec<ChatMessage>,ChatMessage,usize),String> {
+pub fn prepare_turn(messages:&[ChatMessage], content:String, attachments:Vec<Attachment>, pastes:Vec<PasteRange>, retry:bool, edit_index:Option<usize>) -> Result<(Vec<ChatMessage>,ChatMessage,usize),String> {
     let keep = if retry {
         messages.iter().rposition(|m| m.role == "user").ok_or("empty_message")?
     } else if let Some(index) = edit_index {
@@ -219,7 +264,8 @@ pub fn prepare_turn(messages:&[ChatMessage], content:String, attachments:Vec<Att
         index
     } else { messages.len() };
     let user = if retry { messages[keep].clone() }
-        else { ChatMessage {role:"user".into(),content,attachments,feedback:None,activity:vec![],created_at:Some(crate::data::now_millis())} };
+        else { let pastes=valid_pastes(&content,pastes);
+            ChatMessage {role:"user".into(),content,attachments,feedback:None,activity:vec![],created_at:Some(crate::data::now_millis()),pastes} };
     validate_attachments(&user.attachments)?;
     let mut history = messages[..keep].to_vec();history.push(user.clone());
     Ok((history,user,keep))
@@ -1135,7 +1181,7 @@ impl Completion<'_> {
                     finish_tool_event(&mut tool_event, &result);tool_progress(&tool_event);
                     if name == "ask_user" && agent.is_none() {
                         if let Some(summary) = crate::questions::summary(&result) {
-                            let message = ChatMessage {role:"user".into(),content:summary,attachments:vec![],feedback:None,activity:vec![],created_at:Some(crate::data::now_millis())};
+                            let message = ChatMessage {role:"user".into(),content:summary,attachments:vec![],feedback:None,activity:vec![],created_at:Some(crate::data::now_millis()),pastes:vec![]};
                             (self.activity)("__question_summary",&serde_json::to_string(&message).map_err(|error|error.to_string())?);
                             reply.clear();
                         }
@@ -1613,7 +1659,7 @@ mod tests {
             if let Some((uid,refresh))=cloud.session(){config.uid=uid;config.refresh_token=refresh;config.save(&dir)?;}
             let model=user.models.get(&user.active_model).ok_or("no active model")?;
             println!("Active model: {}",model.model);
-            let messages=vec![ChatMessage{role:"user".into(),content:"Transcribe the text visible in the attached image and name the colour of the circle. Reply briefly.".into(),attachments:vec![image],feedback:None,activity:vec![],created_at:None}];
+            let messages=vec![ChatMessage{role:"user".into(),content:"Transcribe the text visible in the attached image and name the colour of the circle. Reply briefly.".into(),attachments:vec![image],feedback:None,activity:vec![],created_at:None,pastes:vec![]}];
             chat_completion(&reqwest::Client::new(),&model.base_url,&model.model,user.model_key(model),&messages,None,None,
                 |kind,text|if kind=="__activity" && text.contains("read_image") {reads.lock().unwrap().push(text.to_string());},|_|{}).await
         });
@@ -1655,7 +1701,7 @@ mod tests {
             tauri::async_runtime::block_on(runner.run(api_messages(messages),true,None))
         };
         let user=|text:&str,image:Option<String>|ChatMessage{role:"user".into(),content:text.into(),
-            attachments:image.map(|data|vec![Attachment::image("probe.png","image/png",data)]).unwrap_or_default(),feedback:None,activity:vec![],created_at:None};
+            attachments:image.map(|data|vec![Attachment::image("probe.png","image/png",data)])            .unwrap_or_default(),feedback:None,activity:vec![],created_at:None,pastes:vec![]};
         let mut messages=vec![user("What does it say?",Some(png(4093,17)))];
         assert_eq!(run(&messages).unwrap().0,"It says AURA 7319");
         {
@@ -1664,7 +1710,7 @@ mod tests {
                 [("read_image","probe.png","running"),("read_image","probe.png","completed")]);
             assert!(events[1]["output"].as_str().unwrap().contains("AURA 7319"));
         }
-        messages.push(ChatMessage{role:"assistant".into(),content:"It says AURA 7319".into(),attachments:vec![],feedback:None,activity:vec![],created_at:None});
+        messages.push(ChatMessage{role:"assistant".into(),content:"It says AURA 7319".into(),attachments:vec![],feedback:None,activity:vec![],created_at:None,pastes:vec![]});
         messages.push(user("Read it again",None));
         run(&messages).unwrap();
         assert_eq!(events.lock().unwrap().len(),2);
@@ -1714,18 +1760,81 @@ mod tests {
     #[test]
     fn edit_and_retry_prepare_history_without_mutating_saved_messages() {
         let saved:Vec<ChatMessage> = serde_json::from_str(r#"[{"role":"user","content":"original"},{"role":"assistant","content":"answer"},{"role":"user","content":"follow up","created_at":1700000000000},{"role":"assistant","content":"latest"}]"#).unwrap();
-        let (history,user,keep)=prepare_turn(&saved,String::new(),vec![],true,None).unwrap();
+        let (history,user,keep)=prepare_turn(&saved,String::new(),vec![],vec![],true,None).unwrap();
         assert_eq!(keep,2);assert_eq!(history.len(),3);assert_eq!(user.content,"follow up");
         assert_eq!(user.created_at,Some(1700000000000));
-        let (edited,user,keep)=prepare_turn(&saved,"edited".into(),vec![],false,Some(0)).unwrap();
+        let (edited,user,keep)=prepare_turn(&saved,"edited".into(),vec![],vec![],false,Some(0)).unwrap();
         assert_eq!(keep,0);assert_eq!(edited.len(),1);assert_eq!(user.content,"edited");
         assert!(user.created_at.is_some_and(|at|at>1700000000000));
         assert_eq!(saved.len(),4);assert_eq!(saved[0].content,"original");
         assert!(saved[0].created_at.is_none());
         assert!(serde_json::to_value(&saved[0]).unwrap().get("created_at").is_none());
-        assert!(prepare_turn(&saved,"x".into(),vec![],false,Some(1)).is_err());
-        assert!(prepare_turn(&saved,"x".into(),vec![],false,Some(40)).is_err());
-        assert!(prepare_turn(&[],String::new(),vec![],true,None).is_err());
+        assert!(prepare_turn(&saved,"x".into(),vec![],vec![],false,Some(1)).is_err());
+        assert!(prepare_turn(&saved,"x".into(),vec![],vec![],false,Some(40)).is_err());
+        assert!(prepare_turn(&[],String::new(),vec![],vec![],true,None).is_err());
+    }
+
+    fn range(start:u32,end:u32)->PasteRange {PasteRange{start,end}}
+
+    #[test]
+    fn pasted_ranges_are_optional_and_never_break_loading() {
+        let legacy:ChatMessage=serde_json::from_str(r#"{"role":"user","content":"hello"}"#).unwrap();
+        assert!(legacy.pastes.is_empty());
+        assert!(serde_json::to_value(&legacy).unwrap().get("pastes").is_none());
+        let message:ChatMessage=serde_json::from_str(r#"{"role":"user","content":"a\nb","pastes":[{"start":0,"end":3}]}"#).unwrap();
+        assert_eq!(message.pastes,vec![range(0,3)]);
+        let stored=serde_json::to_value(&message).unwrap();
+        assert_eq!(stored["pastes"],serde_json::json!([{"start":0,"end":3}]));
+        assert_eq!(serde_json::from_value::<ChatMessage>(stored).unwrap().pastes,vec![range(0,3)]);
+        for garbage in [r#""x""#,"null","7",r#"{"start":0,"end":3}"#,r#"[{"start":-1,"end":3}]"#,r#"[{"start":0.5,"end":3}]"#,r#"[{"start":0}]"#,r#"["a"]"#] {
+            let loaded:ChatMessage=serde_json::from_str(&format!(r#"{{"role":"user","content":"keep me","pastes":{garbage}}}"#)).unwrap();
+            assert_eq!(loaded.content,"keep me");assert!(loaded.pastes.is_empty(),"{garbage}");
+        }
+        assert_eq!(parse_pastes(Some(serde_json::json!([{"start":1,"end":2}]))),vec![range(1,2)]);
+        assert!(parse_pastes(Some(serde_json::json!({"start":1}))).is_empty());assert!(parse_pastes(None).is_empty());
+    }
+
+    #[test]
+    fn pasted_ranges_must_fit_the_content_in_utf16_units() {
+        // 1 + 1 + 2 + 1 UTF-16 units, but 8 UTF-8 bytes.
+        let text="aé😀b";
+        assert_eq!(valid_pastes(text,vec![range(0,5)]),vec![range(0,5)]);
+        assert_eq!(valid_pastes(text,vec![range(0,2),range(2,5)]),vec![range(0,2),range(2,5)]);
+        assert_eq!(valid_pastes(text,vec![range(1,2),range(4,5)]).len(),2);
+        assert!(valid_pastes(text,vec![]).is_empty());
+        for invalid in [vec![range(0,8)],vec![range(0,6)],vec![range(2,2)],vec![range(3,2)],vec![range(0,3),range(2,5)],vec![range(3,5),range(0,2)]] {
+            assert!(valid_pastes(text,invalid).is_empty());
+        }
+        assert!(valid_pastes(&"x".repeat(1000),(0..=MAX_PASTES as u32).map(|i|range(i*2,i*2+1)).collect()).is_empty());
+        assert_eq!(valid_pastes(&"x".repeat(1000),(0..MAX_PASTES as u32).map(|i|range(i*2,i*2+1)).collect()).len(),MAX_PASTES);
+    }
+
+    #[test]
+    fn pasted_ranges_follow_new_edited_and_retried_user_messages() {
+        let saved:Vec<ChatMessage>=serde_json::from_str(r#"[{"role":"user","content":"x\ny","pastes":[{"start":0,"end":3}]},{"role":"assistant","content":"ok"}]"#).unwrap();
+        let (_,created,_)=prepare_turn(&saved,"one\ntwo\nthree".into(),vec![],vec![range(0,13)],false,None).unwrap();
+        assert_eq!(created.pastes,vec![range(0,13)]);
+        let (_,edited,keep)=prepare_turn(&saved,"edited".into(),vec![],vec![range(0,4)],false,Some(0)).unwrap();
+        assert_eq!(keep,0);assert_eq!(edited.pastes,vec![range(0,4)]);
+        let (_,plain,_)=prepare_turn(&saved,"edited".into(),vec![],vec![],false,Some(0)).unwrap();
+        assert!(plain.pastes.is_empty());
+        let (_,rejected,_)=prepare_turn(&saved,"short".into(),vec![],vec![range(0,50)],false,None).unwrap();
+        assert!(rejected.pastes.is_empty());
+        let (history,retried,_)=prepare_turn(&saved,String::new(),vec![],vec![],true,None).unwrap();
+        assert_eq!(retried.pastes,vec![range(0,3)]);assert_eq!(history[0].pastes,vec![range(0,3)]);
+        assert_eq!(saved[0].pastes,vec![range(0,3)]);
+    }
+
+    #[test]
+    fn pasted_ranges_stay_out_of_provider_history() {
+        let mut message:ChatMessage=serde_json::from_str(r#"{"role":"user","content":"one\ntwo\nthree\nfour"}"#).unwrap();
+        let plain=api_messages(std::slice::from_ref(&message));
+        message.pastes=vec![range(0,18)];
+        let pasted=api_messages(std::slice::from_ref(&message));
+        assert_eq!(plain,pasted);
+        assert!(!serde_json::to_string(&pasted).unwrap().contains("pastes"));
+        message.attachments=vec![Attachment::text("a.txt","note")];
+        assert!(!serde_json::to_string(&api_messages(&[message])).unwrap().contains("pastes"));
     }
 
     #[test]
@@ -1816,8 +1925,8 @@ mod tests {
             respond(socket,"200 OK",&ok);
         });
         let mut messages:Vec<ChatMessage>=(0..40).map(|index|ChatMessage{role:(if index%2==0 {"user"} else {"assistant"}).into(),
-            content:format!("old-{index} {}","x".repeat(5000)),attachments:vec![],feedback:None,activity:vec![],created_at:None}).collect();
-        messages.push(ChatMessage{role:"user".into(),content:"latest question".into(),attachments:vec![],feedback:None,activity:vec![],created_at:None});
+            content:format!("old-{index} {}",            "x".repeat(5000)),attachments:vec![],feedback:None,activity:vec![],created_at:None,pastes:vec![]}).collect();
+                    messages.push(ChatMessage{role:"user".into(),content:"latest question".into(),attachments:vec![],feedback:None,activity:vec![],created_at:None,pastes:vec![]});
         let url=format!("http://{address}");
         for _ in 0..2 {
             let (reply,_)=tauri::async_runtime::block_on(chat_completion(&reqwest::Client::new(),&url,"overflow-test","test",&messages,None,None,|_,_|{},|_|{})).unwrap();
@@ -1839,7 +1948,7 @@ mod tests {
         assert!(validate_attachments(&files).is_ok());
         assert!(validate_attachments(&vec![files[0].clone();5]).is_err());
         assert!(validate_attachments(&[Attachment::text("large.txt","x".repeat(131073))]).is_err());
-        let messages = [ChatMessage {role:"user".into(),content:"Summarize".into(),attachments:files,feedback:Some(true),activity:vec![],created_at:None}];
+        let messages = [ChatMessage {role:"user".into(),content:"Summarize".into(),attachments:files,feedback:Some(true),activity:vec![],created_at:None,pastes:vec![]}];
         let payload = api_messages(&messages);
         assert_eq!(payload[0].as_object().unwrap().len(),2);
         assert!(payload[0]["content"].as_str().unwrap().contains("notes.md"));
@@ -1850,9 +1959,9 @@ mod tests {
         assert_eq!(serde_json::to_value(&legacy).unwrap(),serde_json::json!({"name":"a.txt","content":"text"}));
         let image = Attachment::image("shot.png","image/png",png(4,3));
         assert_eq!(serde_json::to_value(&image).unwrap()["content"],"");
-        let messages = [ChatMessage {role:"user".into(),content:"Describe".into(),        attachments:vec![image.clone(),Attachment::text("a.txt","note")],feedback:None,activity:vec![],created_at:None},
-                    ChatMessage {role:"user".into(),content:" ".into(),attachments:vec![image.clone()],feedback:None,activity:vec![],created_at:None},
-                    ChatMessage {role:"assistant".into(),content:"Seen".into(),attachments:vec![image.clone()],feedback:None,activity:vec![],created_at:None}];
+        let messages = [ChatMessage {role:"user".into(),content:"Describe".into(),                attachments:vec![image.clone(),Attachment::text("a.txt","note")],feedback:None,activity:vec![],created_at:None,pastes:vec![]},
+                            ChatMessage {role:"user".into(),content:" ".into(),attachments:vec![image.clone()],feedback:None,activity:vec![],created_at:None,pastes:vec![]},
+                            ChatMessage {role:"assistant".into(),content:"Seen".into(),attachments:vec![image.clone()],feedback:None,activity:vec![],created_at:None,pastes:vec![]}];
         let payload = api_messages(&messages);
         let parts = payload[0]["content"].as_array().unwrap();
         assert_eq!(parts.len(),3);
@@ -1927,7 +2036,7 @@ mod tests {
         let saved:Attachment=serde_json::from_value(serde_json::to_value(annotated(browser.clone())).unwrap()).unwrap();
         assert_eq!(saved.annotation.as_ref(),Some(&browser));assert_eq!(saved.id.as_deref(),Some("img-1"));
 
-        let messages=[ChatMessage{role:"user".into(),content:"Fix these".into(),attachments:vec![annotated(browser)],feedback:None,activity:vec![],created_at:None}];
+        let messages=[ChatMessage{role:"user".into(),content:"Fix these".into(),attachments:vec![annotated(browser)],feedback:None,activity:vec![],created_at:None,pastes:vec![]}];
         let payload=api_messages(&messages);
         let parts=payload[0]["content"].as_array().unwrap();
         assert_eq!(parts.len(),4);
@@ -1939,7 +2048,7 @@ mod tests {
         assert_eq!(image_focus(parts,1).as_deref(),Some(notes));
         assert_eq!(image_name(parts,1),"page.png");
         assert!(image_focus(&api_messages(&[ChatMessage{role:"user".into(),content:"x".into(),
-            attachments:vec![Attachment::image("a.png","image/png",png(2,2))],feedback:None,activity:vec![],created_at:None}])[0]["content"].as_array().unwrap(),1).is_none());
+            attachments:vec![Attachment::image("a.png","image/png",png(2,2))],feedback:None,activity:vec![],created_at:None,pastes:vec![]}])[0]["content"].as_array().unwrap(),1).is_none());
     }
 
     #[test]
@@ -2007,9 +2116,9 @@ mod tests {
             respond(socket,"400 Bad Request",rejected);
         });
         let image=Attachment::image("old.png","image/png",png(2,2));
-        let mut messages=vec![ChatMessage{role:"user".into(),        content:"What is this?".into(),attachments:vec![image],feedback:None,activity:vec![],created_at:None},
-                    ChatMessage{role:"assistant".into(),content:"A square".into(),attachments:vec![],feedback:None,activity:vec![],created_at:None},
-                    ChatMessage{role:"user".into(),content:"Thanks".into(),attachments:vec![],feedback:None,activity:vec![],created_at:None}];
+        let mut messages=vec![ChatMessage{role:"user".into(),                content:"What is this?".into(),attachments:vec![image],feedback:None,activity:vec![],created_at:None,pastes:vec![]},
+                            ChatMessage{role:"assistant".into(),content:"A square".into(),attachments:vec![],feedback:None,activity:vec![],created_at:None,pastes:vec![]},
+                            ChatMessage{role:"user".into(),content:"Thanks".into(),attachments:vec![],feedback:None,activity:vec![],created_at:None,pastes:vec![]}];
         let url=format!("http://{address}");
         let (reply,_)=tauri::async_runtime::block_on(chat_completion(&reqwest::Client::new(),&url,"text-only","test",&messages,None,None,|_,_|{},|_|{})).unwrap();
         assert_eq!(reply,"text reply");

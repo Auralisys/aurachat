@@ -920,9 +920,20 @@ atomici `contenteditable=false` con conteggio e anteprima modificabile. Il
 testo letterale è serializzato in un attributo JSON, non interpretato come HTML.
 Un unico attraversamento del DOM espande i blocchi per invio, copia/taglio e
 offset delle skill; gli stessi blocchi si salvano nella bozza in memoria.
-Le operazioni di editing native mantengono Annulla/Ripeti; nessuna modifica al
-protocollo messaggi o al companion. `desktop/tests/composer-paste.cjs` copre
-soglia, posizione, CRLF, anteprima, più blocchi, skill, cambio chat e invio completo.
+Le operazioni di editing native mantengono Annulla/Ripeti.
+`ChatMessage.pastes` conserva gli intervalli UTF-16 dei blocchi nel testo completo:
+`message-pastes.js` li mostra come chip anche nella bubble inviata, con dialog
+centrato di sola lettura, Copia e X in alto, Esc e ritorno del focus al chip.
+Coda, modifica, riprova, guida e companion conservano i metadati; i payload dei
+provider contengono sempre solo il testo completo. Le chat precedenti restano
+invariate; metadati invalidi fanno mostrare il testo senza comprimerlo.
+Ctrl+V comprime oltre 20 righe; Ctrl+Shift+V incolla espanso con righe, tab e
+indentazione intatti (non HTML). Shift+Invio e Ctrl+Invio inseriscono un a capo,
+mostrano la riga vuota e fanno scorrere solo il composer per tenere visibile il
+cursore. Il BR finale di appoggio non diventa una riga aggiuntiva nella bozza.
+Cmd+Shift+V e riconosciuto ma non verificato su WKWebView/macOS.
+`desktop/tests/composer-paste.cjs` copre soglia, posizione, CRLF, anteprima,
+piu blocchi, skill, cambio chat, invio, dialog, copia, modifica e cursore.
 
 ## Utilizzo e costo stimato
 

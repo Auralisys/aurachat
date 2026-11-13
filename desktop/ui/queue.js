@@ -23,8 +23,7 @@ function editQueuedMessage(id, message) {
   if (queueLocked(id) || !state.queues.get(id)?.includes(message)) return;
   removeQueuedMessage(id,message);
   const input = $('#composer-input');
-  const text = (message.content || '').trim();
-  setComposerText(composerText().trim() ? `${composerText().trim()}\n${text}` : text);
+  restoreMessageDraft(message, true);
   if (message.attachments?.length) state.attachments = [...state.attachments, ...structuredClone(message.attachments)];
   state.editingMessageIndex = null;
   autoGrow(input);renderDraft();input.focus();composerStatus();refreshQueue(id);
@@ -125,8 +124,7 @@ async function withdrawPendingGuidance(id, pending, edit) {
 function restoreGuidanceDraft(id, message) {
   if (id !== state.activeConversationId) return;
   const input = $('#composer-input');
-  const text = (message.content || '').trim();
-  setComposerText(composerText().trim() ? `${composerText().trim()}\n${text}` : text);
+  restoreMessageDraft(message, true);
   if (message.attachments?.length) state.attachments = [...state.attachments, ...structuredClone(message.attachments)];
   state.editingMessageIndex = null;state.guidanceDraft = id;
   autoGrow(input);renderDraft();input.focus();composerStatus(t('queue.guide_editing'));
@@ -140,7 +138,7 @@ function trackQueuedGuidance(run, item) {
   const content = typeof item.content === 'string' ? item.content : '';
   const local = list.find(pending => !pending.id && !pending.consumed && pending.message.content.trim() === content.trim());
   if (local) {local.id = item.id;return true;}
-  list.push({message:{role:'user',content,attachments:Array.isArray(item.attachments) ? item.attachments : []},accepted:true,consumed:false,id:item.id,external:true});
+  list.push({message:{role:'user',content,attachments:Array.isArray(item.attachments) ? item.attachments : [],...pasteMetadata(item)},accepted:true,consumed:false,id:item.id,external:true});
   return true;
 }
 
@@ -178,7 +176,7 @@ async function steerQueuedMessage(id, message) {
   const pending = {message, accepted:false, consumed:false};
   (run.pendingGuidance ||= []).push(pending);queuedTurns.steering.set(id,pending);delete message.steer_error;refreshQueue(id);
   try {
-    const result = await conversationCommand('steer_chat',{conversation_id:id,content:message.content,attachments:message.attachments || []});
+    const result = await conversationCommand('steer_chat',{conversation_id:id,content:message.content,attachments:message.attachments || [],...pasteMetadata(message)});
     if (typeof result?.id === 'string') {
       // The native notice may have arrived first as a separate entry: keep one.
       const twin = run.pendingGuidance.find(item => item !== pending && item.id === result.id);

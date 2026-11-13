@@ -890,6 +890,21 @@ mod tests {
     }
 
     #[test]
+    fn pasted_ranges_round_trip_through_a_message_record(){
+        let message:crate::llm::ChatMessage=serde_json::from_value(json!({"role":"user","content":"before\nlines\nafter","created_at":1,"pastes":[{"start":7,"end":13}]})).unwrap();
+        let value=message_value(0,&message).unwrap();
+        assert_eq!(value["pastes"],json!([{"start":7,"end":13}]));
+        let auth=crate::config::AppConfig::default().firestore_auth();
+        let write=update_write(&auth,"users/u/conversations/c/messages/m000000000000",&value,None).unwrap();
+        let stored=Value::Object(document_fields(&write["update"]).unwrap());
+        assert_eq!(stored,value);
+        let restored:crate::llm::ChatMessage=serde_json::from_value(stored).unwrap();
+        assert_eq!(restored.pastes,message.pastes);
+        let plain:crate::llm::ChatMessage=serde_json::from_value(json!({"role":"user","content":"hi"})).unwrap();
+        assert!(message_value(1,&plain).unwrap().get("pastes").is_none());
+    }
+
+    #[test]
     fn conversation_usage_round_trips_and_empty_usage_keeps_the_stored_total(){
         let mut conversation:Conversation=serde_json::from_value(json!({"id":"c","title":"Chat","created_at":1,"updated_at":2,"context_tokens":3})).unwrap();
         let auth=crate::config::AppConfig::default().firestore_auth();

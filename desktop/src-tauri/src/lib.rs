@@ -554,22 +554,23 @@ async fn chat(
     conversation_id: String,
     content: String,
     attachments: Option<Vec<Attachment>>,
+    pastes: Option<serde_json::Value>,
     retry: Option<bool>,
     edit_index: Option<usize>,
 ) -> Result<ChatResponse, String> {
     // Writing from this computer means the user is here: stop phone pushes for the chat.
     companion::unfollow(&conversation_id);
-    run_chat(app,state,conversation_id,content,attachments,retry,edit_index,None).await
+    run_chat(app,state,conversation_id,content,attachments,llm::parse_pastes(pastes),retry,edit_index,None).await
 }
 
 async fn run_chat(
     app:tauri::AppHandle, state:tauri::State<'_,AppState>,conversation_id:String,content:String,
-    attachments:Option<Vec<Attachment>>,retry:Option<bool>,edit_index:Option<usize>,expected_owner:Option<String>,
+    attachments:Option<Vec<Attachment>>,pastes:Vec<llm::PasteRange>,retry:Option<bool>,edit_index:Option<usize>,expected_owner:Option<String>,
 ) -> Result<ChatResponse,String> {
     let notification_owner=state.config.lock().unwrap().uid.clone();
     let event_id=format!("{}-{}",conversation_id,data::now_millis());
     let _=app.emit("live-turn",serde_json::json!({"conversation_id":conversation_id.clone(),"turn_id":event_id.clone(),"status":"running","user_content":content.clone()}));
-    let result=chat_inner(app.clone(),state.clone(),conversation_id.clone(),content,attachments,retry,edit_index,expected_owner).await;
+    let result=chat_inner(app.clone(),state.clone(),conversation_id.clone(),content,attachments,pastes,retry,edit_index,expected_owner).await;
     let turn_status=match &result {Ok(reply) if reply.cancelled=>"cancelled",Ok(_)=>"completed",Err(_)=>"failed"};
     let _=app.emit("live-turn",serde_json::json!({"conversation_id":conversation_id.clone(),"turn_id":event_id.clone(),"status":turn_status}));
     let (title,body)=match &result {
@@ -597,6 +598,7 @@ async fn chat_inner(
     conversation_id: String,
     content: String,
     attachments: Option<Vec<Attachment>>,
+    pastes: Vec<llm::PasteRange>,
     retry: Option<bool>,
     edit_index: Option<usize>,
     expected_owner: Option<String>,
@@ -638,7 +640,7 @@ async fn chat_inner(
         }
         let mut tree=state.data.lock().unwrap().clone();
         let conversation=tree.find_conversation_mut(&conversation_id).ok_or("conversation_not_found")?;
-        let (history,user_message,keep_count)=llm::prepare_turn(&conversation.messages,content,attachments,retry,edit_index)?;
+        let (history,user_message,keep_count)=llm::prepare_turn(&conversation.messages,content,attachments,pastes,retry,edit_index)?;
         let (changed,title_job)=prepare_title_job(conversation,&user_message,&effective_model);
         if changed {
             // Persist the pending title before claiming it, without saving the unfinished turn.
@@ -647,9 +649,10 @@ async fn chat_inner(
         }
         (history,user_message,keep_count,title_job)
     };
+    let mut live_message=serde_json::json!({"role":"user","content":user_message.content,"attachments":[]});
+    if !user_message.pastes.is_empty() {live_message["pastes"]=serde_json::json!(user_message.pastes);}
     let _=app.emit("live-turn",serde_json::json!({"conversation_id":conversation_id,
-        "status":"context","keep_count":keep_count,
-        "user_message":{"role":"user","content":user_message.content,"attachments":[]}}));
+        "status":"context","keep_count":keep_count,"user_message":live_message}));
 
     if let Some(conversation)=title_job {
         let app=app.clone();let owner=uid.clone();
@@ -692,7 +695,7 @@ async fn chat_inner(
                 let activity=std::mem::take(&mut *events);
                 let mut segments=segments.lock().unwrap();
                 if !content.is_empty() || !activity.is_empty() {
-                    segments.push(ChatMessage{role:"assistant".into(),content,activity,attachments:vec![],feedback:None,created_at:Some(data::now_millis())});
+                    segments.push(ChatMessage{role:"assistant".into(),content,activity,attachments:vec![],feedback:None,created_at:Some(data::now_millis()),pastes:vec![]});
                 }
                 segments.push(message);
                 content_offset.store(0,std::sync::atomic::Ordering::Relaxed);
@@ -791,7 +794,7 @@ async fn chat_inner(
         conv.messages.push(user_message);
         conv.messages.extend(segments.into_inner().unwrap());
         if !reply.trim().is_empty() || !turn_activity.is_empty() {
-            conv.messages.push(ChatMessage { role:"assistant".into(),content:reply.clone(),attachments:vec![],feedback:None,activity:turn_activity,created_at:Some(data::now_millis()) });
+            conv.messages.push(ChatMessage { role:"assistant".into(),content:reply.clone(),attachments:vec![],feedback:None,activity:turn_activity,created_at:Some(data::now_millis()),pastes:vec![] });
         }
         conv.updated_at = data::now_millis();
         if usage.total_tokens > 0 { conv.context_tokens = usage.total_tokens; }
@@ -1037,9 +1040,11 @@ async fn install_skill(app:tauri::AppHandle,state:tauri::State<'_,AppState>,sour
 }
 
 #[tauri::command(rename_all = "snake_case")]
-fn steer_chat(app:tauri::AppHandle, state: tauri::State<'_, AppState>, conversation_id:String, content:String, attachments:Option<Vec<Attachment>>) -> Result<serde_json::Value,String> {
+fn steer_chat(app:tauri::AppHandle, state: tauri::State<'_, AppState>, conversation_id:String, content:String, attachments:Option<Vec<Attachment>>, pastes:Option<serde_json::Value>) -> Result<serde_json::Value,String> {
     let owner=state.firestore.uid().ok_or("login_required")?;
-    let message=ChatMessage{role:"user".into(),content:clean(&content),    attachments:attachments.unwrap_or_default(),feedback:None,activity:vec![],created_at:Some(data::now_millis())};
+    let content=clean(&content);
+    let pastes=llm::valid_pastes(&content,llm::parse_pastes(pastes));
+    let message=ChatMessage{role:"user".into(),content,attachments:attachments.unwrap_or_default(),feedback:None,activity:vec![],created_at:Some(data::now_millis()),pastes};
     // Every client (this window, remote desktops, mobile) shows unread guidance until it is read or withdrawn.
     let id=state.chat_runs.steer(&owner,&conversation_id,message,|item|{
         let Ok(mut event)=serde_json::to_value(&item.message) else {return};

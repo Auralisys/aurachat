@@ -30,7 +30,7 @@ const assert = require('node:assert/strict');
           if (cmd === 'project_skills') return {skills:[{name:'review',description:'Review notes',root:0,scope:'global',path:'.agents/skills/review/SKILL.md'}],truncated:false};
           if (cmd === 'chat') return new Promise(resolve => {window.__finish = () => {
             const chat = __data.conversations.find(chat=>chat.id===args.conversation_id);
-            chat.messages.push({role:'user',content:args.content},{role:'assistant',content:'Ricevuto.'});
+            chat.messages.push({role:'user',content:args.content,...(args.pastes?.length ? {pastes:args.pastes} : {})},{role:'assistant',content:'Ricevuto.'});
             resolve({cancelled:false,data:structuredClone(__data),messages:structuredClone(chat.messages)});
           };});
         }}};
@@ -53,6 +53,44 @@ const assert = require('node:assert/strict');
     const dialog = page.locator('dialog.paste-preview');
     const lines = count => Array.from({length:count},(_,i)=>`Riga ${i+1}: dettagli della riunione`).join('\n');
     await open('a');
+
+    // Both newline shortcuts reveal the new empty line, including in an overflowing editor.
+    for (const key of ['Shift+Enter','Control+Enter']) {
+      await page.evaluate(value=>{setComposerText(value);composerEl().focus();placeCaretAtEnd(composerEl());composerEl().scrollTop=0;},lines(25));
+      await page.keyboard.press(key);
+      assert.equal(await text(),lines(25)+'\n',key+' inserts exactly one logical newline: '+await page.locator('#composer-input').innerHTML());
+      const position = await page.evaluate(()=>{
+        const el=composerEl(), rect=composerCaretRect(), box=el.getBoundingClientRect();
+        return {top:rect?.top,bottom:rect?.bottom,boxTop:box.top,boxBottom:box.bottom,scroll:el.scrollTop};
+      });
+      assert.ok(position.scroll>0 && position.top>=position.boxTop && position.bottom<=position.boxBottom+1,JSON.stringify(position));
+      await page.keyboard.type('Next');
+      assert.equal(await text(),lines(25)+'\nNext');
+      assert.equal(await page.evaluate(()=>__calls.filter(call=>call.cmd==='chat').length),0);
+    }
+    await page.evaluate(()=>setComposerText(''));
+    await page.locator('#composer-input').focus();
+    for (let i=1;i<=3;i++) {
+      await page.keyboard.press('Control+Enter');
+      assert.equal(await text(),'\n'.repeat(i),'Consecutive empty lines are not discarded: '+await page.locator('#composer-input').innerHTML());
+    }
+    await page.keyboard.type('after');
+    assert.equal(await text(),'\n\n\nafter');
+    await page.evaluate(()=>{setComposerText('beforeafter');setCaretOffset(6);});
+    await page.keyboard.press('Shift+Enter');
+    assert.equal(await text(),'before\nafter','A newline in the middle keeps the suffix');
+    await page.keyboard.press('Control+z');
+    assert.equal(await text(),'beforeafter','Newline is undoable');
+    await page.evaluate(()=>setComposerText(''));
+    const literal = 'First\n\t  indented\n\n'+lines(25)+'\n';
+    await page.locator('#composer-input').focus();
+    await page.evaluate(()=>composerEl().dispatchEvent(new KeyboardEvent('keydown',{key:'V',code:'KeyV',ctrlKey:true,shiftKey:true,bubbles:true})));
+    await paste(literal);
+    assert.equal(await token.count(),0,'Special paste stays expanded');
+    assert.equal(await text(),literal,'Special paste preserves indentation and trailing newline without a phantom line');
+    assert.deepEqual(await page.evaluate(()=>composerMessage()),{content:literal.trim()});
+    assert.ok(await page.locator('#composer-input').evaluate(el=>el.scrollTop>0),'Special paste reveals the caret');
+    await page.evaluate(()=>setComposerText(''));
 
     await page.locator('#composer-input').focus();
     await page.keyboard.type('Bozza da cancellare');
@@ -165,6 +203,59 @@ const assert = require('node:assert/strict');
     assert.equal(await token.count(),0);
     await page.evaluate(()=>window.__finish());
     await page.waitForFunction(()=>!state.busy);
+    const sentChip = page.locator('#messages .msg--user .message-paste');
+    assert.equal(await sentChip.count(),2,'Sent and persisted bubbles keep separate paste chips');
+    assert.equal(await page.locator('#messages .msg--user').last().innerText().then(value=>value.includes('Riga 89:')),false,'Full pasted text is not in the bubble');
+    const sentArgs = await page.evaluate(()=>__calls.find(call=>call.cmd==='chat').args);
+    assert.equal(sentArgs.pastes.length,2);
+    assert.equal(sentArgs.content.slice(sentArgs.pastes[0].start,sentArgs.pastes[0].end),lines(89));
+    await sentChip.first().click();
+    const viewer = page.locator('.message-paste-viewer');
+    await viewer.waitFor();
+    assert.equal(await viewer.locator('pre').textContent(),lines(89));
+    await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.__copied=text;}}}));
+    await viewer.getByRole('button',{name:locales['chat.copy'],exact:true}).click();
+    assert.equal(await page.evaluate(()=>__copied),lines(89));
+    for (const width of [1440,390]) {
+      await page.setViewportSize({width,height:900});
+      const rect=await viewer.boundingBox();
+      assert.ok(rect.x>=0&&rect.x+rect.width<=width&&rect.y>=0&&rect.y+rect.height<=900);
+      await page.screenshot({path:resolve(shots,`sent-viewer-${width}.png`)});
+    }
+    await page.keyboard.press('Escape');
+    await viewer.waitFor({state:'detached'});
+    assert.equal(await sentChip.first().evaluate(el=>el===document.activeElement),true,'Closing returns focus to the chip');
+    await page.setViewportSize({width:1440,height:900});
+    await open('b');await open('a');
+    assert.equal(await sentChip.count(),2,'Reloaded history retains ranges');
+    await page.locator('#messages .msg--user').last().getByRole('button',{name:locales['chat.edit'],exact:true}).click();
+    assert.equal(await token.count(),2,'Editing restores collapsed blocks');
+    assert.equal(await text(),sent.trim());
+    const restored = await page.evaluate(()=>{
+      const message=composerMessage();
+      const queued={...message,attachments:[]};state.queues.set(state.activeConversationId,[queued]);
+      setComposerText('');editQueuedMessage(state.activeConversationId,queued);
+      return composerMessage();
+    });
+    assert.deepEqual(restored,{content:sentArgs.content,pastes:sentArgs.pastes},'Editing a queued paste preserves ranges');
+    await page.evaluate(()=>{setComposerParts([{text:'  😀 intro '},{text:'a\r\nb',pasted:true},{text:' \n'}]);});
+    assert.deepEqual(await page.evaluate(()=>composerMessage()),{content:'😀 intro a\r\nb',pastes:[{start:9,end:13}]},'Ranges use UTF-16 and follow leading/trailing trim');
+    await page.evaluate(()=>{restoreGuidanceDraft(state.activeConversationId,{content:'a\nb',pastes:[{start:0,end:3}]});});
+    assert.equal(await token.count(),2,'Withdrawn guidance keeps pasted blocks when appending to a draft');
+    assert.equal(await page.evaluate(()=>messageParts({content:'whole',pastes:[{start:0,end:99}]}).map(p=>p.text).join('')),'whole');
+    assert.equal(await page.evaluate(()=>messageParts({content:'legacy'}).some(p=>p.pasted)),false);
+    await page.evaluate(()=>{state.editingMessageIndex=null;state.guidanceDraft=null;setComposerText('');});
+    await page.locator('#composer-input').focus();
+    await page.evaluate(()=>composerEl().dispatchEvent(new KeyboardEvent('keydown',{key:'V',code:'KeyV',ctrlKey:true,shiftKey:true,bubbles:true})));
+    await paste(literal);
+    const callsBefore = await page.evaluate(()=>__calls.filter(call=>call.cmd==='chat').length);
+    await page.click('#composer-send');
+    await page.waitForFunction(count=>__calls.filter(call=>call.cmd==='chat').length>count,callsBefore);
+    const expandedArgs = await page.evaluate(()=>__calls.filter(call=>call.cmd==='chat').at(-1).args);
+    assert.equal(expandedArgs.content,literal.trim());
+    assert.equal(expandedArgs.pastes,undefined,'Special paste is sent as ordinary text');
+    await page.evaluate(()=>__finish());await page.waitForFunction(()=>!state.busy);
+    assert.equal(await page.locator('#messages .msg--user').last().locator('.message-paste').count(),0);
     assert.deepEqual(errors,[]);
     console.log('PASS long paste threshold, inline position, preview/edit/cancel, raw copy, CRLF, undo, drafts, send and compact layouts.');
   } finally {await browser.close();}

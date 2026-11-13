@@ -1016,7 +1016,7 @@ async function copyText(text, button) {
     if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
     else {
       const input = document.createElement('textarea');input.value = text;input.className = 'sr-only';
-      document.body.appendChild(input);input.select();
+      (document.querySelector('dialog[open]') || document.body).appendChild(input);input.select();
       const copied = document.execCommand('copy');input.remove();
       if (!copied) throw new Error('clipboard');
     }
@@ -1163,7 +1163,7 @@ function editMessage(index) {
   if (state.busy || state.preparing) return;
   const message = state.messages[index];state.editingMessageIndex = index;
   state.attachments = structuredClone(message.attachments || []);
-  setComposerText(message.content);autoGrow();renderDraft();$('#composer-input').focus();
+  restoreMessageDraft(message);autoGrow();renderDraft();$('#composer-input').focus();
 }
 
 function messageEl(m, index) {
@@ -1174,7 +1174,8 @@ function messageEl(m, index) {
   const text = document.createElement('div');text.className = 'msg__text';
   if (role === 'assistant') {
     text.classList.add('markdown');renderTurnBody(text, m);
-  } else text.textContent = m.content;
+  } else if (role === 'user') renderMessagePastes(text, m);
+  else text.textContent = m.content;
   const images = (m.attachments || []).filter(isImageAttachment), files = (m.attachments || []).filter(file => !isImageAttachment(file));
   if (images.length) el.appendChild(messageImagesEl(images));
   if (m.content || m.activity?.length) el.appendChild(text);
@@ -1202,7 +1203,7 @@ function messageEl(m, index) {
   } else if (role === 'user') {
     const edit = messageAction('rename','chat.edit',() => editMessage(index));edit.disabled = state.busy;actions.appendChild(edit);el._busyControls.push(edit);
   } else if (state.failedSend) actions.appendChild(messageAction('retry','chat.retry',() => {
-    setComposerText(state.failedSend.content);state.attachments = structuredClone(state.failedSend.attachments);renderDraft();autoGrow();send();
+    restoreMessageDraft(state.failedSend);state.attachments = structuredClone(state.failedSend.attachments);renderDraft();autoGrow();send();
   }));
   el.appendChild(actions);return el;
 }
@@ -1328,7 +1329,7 @@ async function requestChat(payload) {
     baseRevision:saved?.revision, baseUpdatedAt:saved?.updated_at};
   if (!isActive && !payload.retry) {
     if (Number.isInteger(payload.edit_index)) run.messages = run.messages.slice(0,payload.edit_index);
-    run.messages.push({role:'user',content:payload.content,attachments:payload.attachments || [],created_at:Date.now()});
+    run.messages.push({role:'user',content:payload.content,attachments:payload.attachments || [],created_at:Date.now(),...pasteMetadata(payload)});
     run.initialMessageCount = run.messages.length;
   }
   state.runs.set(id, run);if (isActive) {state.messages = run.messages;state.failedSend = null;}state.unread.delete(id);
@@ -1353,7 +1354,7 @@ async function requestChat(payload) {
     if (run.stream?.content || run.stream?.activity.length) run.messages.push({role:'assistant', content:run.stream.content, activity:run.stream.activity});
     run.messages.push({role:'error',content:localizeError(e)});
     run.queueOutcome = 'failed';
-    if (!payload.retry) run.failedSend = {content:payload.content, attachments:payload.attachments || []};
+    if (!payload.retry) run.failedSend = {content:payload.content, attachments:payload.attachments || [],...pasteMetadata(payload)};
     return false;
   }
   finally {
@@ -1428,9 +1429,9 @@ async function dispatchMessage(id, message) {
   if (id === state.activeConversationId) {
     composerStatus();
     if (message.edit_index !== null && message.edit_index !== undefined) state.messages = state.messages.slice(0, message.edit_index);
-    state.messages.push({role:'user', content:message.content, attachments:message.attachments, created_at:Date.now()});
+    state.messages.push({role:'user', content:message.content, attachments:message.attachments, created_at:Date.now(),...pasteMetadata(message)});
   }
-  await requestChat({conversation_id:id, content:message.content, attachments:message.attachments, edit_index:message.edit_index});
+  await requestChat({conversation_id:id, content:message.content, attachments:message.attachments, edit_index:message.edit_index,...pasteMetadata(message)});
 }
 
 // I messaggi accodati partono uno alla volta, appena la conversazione torna libera.
@@ -1513,7 +1514,7 @@ async function send() {
   }
   if (state.preparing || state.loadingConversation || activeConversation()?.conversation.messages_loaded === false || state.changingModel || voiceBusy(state.activeConversationId)) return;
   if (imageJobs.get(state.activeConversationId)) {composerStatus(t('chat.preparing_image'));return;}
-  const input = $('#composer-input'), text = composerText().trim();
+  const input = $('#composer-input'), draft = composerMessage(), text = draft.content;
   const attachments = structuredClone(state.attachments), editIndex = state.editingMessageIndex;
   if (!text && !attachments.length) return;
   if (!state.activeConversationId) await ensureConversation(true);
@@ -1524,7 +1525,7 @@ async function send() {
   const asGuide = state.guidanceDraft === id;state.guidanceDraft = null;
   nameConversationFromMessage(id, text, attachments, editIndex);
   input.focus();
-  const message = {content:text, attachments, edit_index:editIndex};
+  const message = {...draft, attachments, edit_index:editIndex};
   chatScroll.follow();
   const existing = state.queues.get(id) || [];
   const waiting = existing.length || state.runs.get(id)?.pending;
@@ -2169,8 +2170,8 @@ async function init() {
     if (e.defaultPrevented || e.isComposing) return;
     if (e.key === 'Enter') {
       e.preventDefault();
-      if (e.shiftKey) {
-        insertComposerText('\n');
+      if (e.shiftKey || e.ctrlKey) {
+        insertComposerNewline();
         notifyComposerInput();
       } else {
         send();
@@ -2179,12 +2180,13 @@ async function init() {
   });
   input.addEventListener('paste', (e) => {
     e.preventDefault();
+    const literal = takeLiteralPaste();
     const clipboard = e.clipboardData || window.clipboardData;
     const text = clipboard?.getData('text/plain') || '';
     // Spreadsheets and documents also offer a picture of the copied text: prefer the text.
     const images = text.trim() ? [] : clipboardImages(clipboard);
     if (images.length) {addImageAttachments(images);return;}
-    insertComposerPaste(text);
+    insertComposerPaste(text, literal);
     notifyComposerInput();
   });
   $('#composer-send').addEventListener('click', send);

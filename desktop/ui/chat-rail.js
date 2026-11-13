@@ -49,7 +49,7 @@ const chatRail = (() => {
     const message = messageOf(node) || {};
     let words = previews.get(node);
     if (words === undefined) {
-      words = String(message.content || '').slice(0, 1000).replace(/\s+/g, ' ').trim();
+      words = messagePreview(message).slice(0, 1000).replace(/\s+/g, ' ').trim();
       if (words.length > PREVIEW) words = words.slice(0, PREVIEW) + '…';
       previews.set(node, words);
     }

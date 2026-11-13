@@ -146,7 +146,7 @@ impl Drop for Turn<'_> {
         assert!(runs.stop("u", "c").is_err());
     }
     fn guide(text:&str)->crate::llm::ChatMessage {
-        crate::llm::ChatMessage{role:"user".into(),content:text.into(),attachments:vec![],feedback:None,activity:vec![],created_at:None}
+        crate::llm::ChatMessage{role:"user".into(),content:text.into(),attachments:vec![],feedback:None,activity:vec![],created_at:None,pastes:vec![]}
     }
     #[test] fn unread_guidance_can_be_withdrawn_only_by_its_owner_and_only_once() {
         let runs = ChatRuns::default();
@@ -186,7 +186,7 @@ impl Drop for Turn<'_> {
         use base64::Engine as _;
         let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x02\0\0\0\x02".to_vec();png.extend_from_slice(&[8,6,0,0,0,0,0,0,0]);
         let data = base64::engine::general_purpose::STANDARD.encode(png);
-        let image = || crate::llm::ChatMessage{role:"user".into(),content:String::new(),attachments:vec![crate::llm::Attachment::image("a.png","image/png",data.clone())],feedback:None,activity:vec![],created_at:None};
+        let image = || crate::llm::ChatMessage{role:"user".into(),content:String::new(),attachments:vec![crate::llm::Attachment::image("a.png","image/png",data.clone())],feedback:None,activity:vec![],created_at:None,pastes:vec![]};
         let runs = ChatRuns::default();
         let (_turn, _) = Turn::start(&runs, "u", "c", crate::llm::MAX_IMAGES_DATA - data.len() - 4);
         let first = runs.steer("u", "c", image(), |_| {}).unwrap();

@@ -230,9 +230,13 @@ impl LiveTurn {
             "turn_id": self.turn_id,
             "status": self.status,
             "user_content": self.user_content,
-            "user_message": self.user_message.as_ref().map(|message|json!({
-                "role":"user","content":truncate_chars(message["content"].as_str().unwrap_or(""),LIVE_MAX_FIELD),"attachments":[]
-            })),
+            "user_message": self.user_message.as_ref().map(|message|{
+                let content=message["content"].as_str().unwrap_or("");
+                let mut user=json!({"role":"user","content":truncate_chars(content,LIVE_MAX_FIELD),"attachments":[]});
+                // Ranges only mean something over the whole text, so a truncated message shows as plain text.
+                if message["pastes"].is_array() && content.chars().count()<=LIVE_MAX_FIELD {user["pastes"]=message["pastes"].clone();}
+                user
+            }),
             "keep_count": self.keep_count,
             "title": self.title,
             "title_state": self.title_state,
@@ -860,7 +864,7 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
         },
         "stop"=>return state.chat_runs.stop(uid,id).map(|_|Value::Null),
         "steer"=>return crate::steer_chat(app.clone(),app.state::<AppState>(),id.into(),request["content"].as_str().ok_or("empty_message")?.into(),
-            request.get("attachments").cloned().map(serde_json::from_value).transpose().map_err(|e|e.to_string())?),
+            request.get("attachments").cloned().map(serde_json::from_value).transpose().map_err(|e|e.to_string())?,request.get("pastes").cloned()),
         "withdraw_guidance"=>return crate::withdraw_guidance(app.clone(),app.state::<AppState>(),id.into(),request["guidance_id"].as_str().ok_or("invalid_guidance")?.into())
             .and_then(|message|serde_json::to_value(message).map_err(|e|e.to_string())),
         "stop_agent"=>return crate::stop_subagent(app.state::<AppState>(),app.state::<crate::agent_runs::AgentRuns>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["agent_id"].as_str().ok_or("invalid_agent")?.into()).await.map(|_|Value::Null),
@@ -945,6 +949,7 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
     let attachments:Vec<crate::llm::Attachment>=request.get("attachments").cloned()
         .map(serde_json::from_value).transpose().map_err(|e|e.to_string())?.unwrap_or_default();
     crate::llm::validate_attachments(&attachments)?;
+    let pastes=crate::llm::parse_pastes(request.get("pastes").cloned());
     let retry=request["retry"].as_bool().unwrap_or(false);
     let edit_index=request.get("edit_index").filter(|v|!v.is_null()).map(|index|
         index.as_u64().and_then(|index|usize::try_from(index).ok()).ok_or("invalid_message_index")).transpose()?;
@@ -974,13 +979,13 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
     let (user_message,keep_count)={
         let tree=state.data.lock().unwrap();
         let conversation=tree.find_conversation(id).ok_or("conversation_not_found")?;
-        let (_,message,keep)=crate::llm::prepare_turn(&conversation.messages,content.into(),attachments.clone(),retry,edit_index)?;
+        let (_,message,keep)=crate::llm::prepare_turn(&conversation.messages,content.into(),attachments.clone(),pastes.clone(),retry,edit_index)?;
         (message,keep)
     };
     let _=app.emit("companion-started",json!({"conversation_id":id,"content":user_message.content,
         "message":user_message,"keep_count":keep_count}));
     drop(account);
-    crate::run_chat(app.clone(),app.state::<AppState>(),id.into(),content.into(),Some(attachments),Some(retry),edit_index,Some(uid.into())).await
+    crate::run_chat(app.clone(),app.state::<AppState>(),id.into(),content.into(),Some(attachments),pastes,Some(retry),edit_index,Some(uid.into())).await
         .map(|reply|json!({"cancelled":reply.cancelled}))
 }
 
@@ -1144,6 +1149,15 @@ fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,Strin
         let live=turn.document("c");
         assert_eq!(live["user_content"],"Domanda");assert_eq!(live["status"],"running");assert_eq!(live["activity"].as_array().unwrap().len(),3);
         turn.finish("completed",8);assert_eq!(turn.document("c")["status"],"completed");assert_eq!(turn.finished_at,Some(8));
+    }
+    #[test]fn live_user_message_keeps_pasted_ranges_only_while_the_text_is_whole(){
+        let mut turn=LiveTurn::running(1,Some("u".into()),"t","Q");
+        turn.user_message=Some(json!({"role":"user","content":"a\nb","attachments":[],"pastes":[{"start":0,"end":3}]}));
+        assert_eq!(turn.document("c")["user_message"]["pastes"],json!([{"start":0,"end":3}]));
+        turn.user_message=Some(json!({"role":"user","content":"x".repeat(LIVE_MAX_FIELD+1),"pastes":[{"start":0,"end":3}]}));
+        assert!(turn.document("c")["user_message"].get("pastes").is_none());
+        turn.user_message=Some(json!({"role":"user","content":"plain","attachments":[]}));
+        assert!(turn.document("c")["user_message"].get("pastes").is_none());
     }
     #[test]fn live_details_preserve_utf16_offsets_and_nested_tools(){
         let mut turn=LiveTurn::running(1,Some("u".into()),"t","Q");
