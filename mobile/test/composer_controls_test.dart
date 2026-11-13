@@ -1,3 +1,4 @@
+import 'package:aurachat_mobile/attachment_views.dart';
 import 'package:aurachat_mobile/ui.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -30,7 +31,7 @@ void main() {
           busy: false,
           onSend: () {},
           onStop: () {},
-          onOptions: () {},
+          onAttach: () {},
           models: const [
             ComposerChoice(value: 'a', label: 'Alpha'),
             ComposerChoice(value: 'b', label: 'Beta'),
@@ -72,7 +73,7 @@ void main() {
           busy: false,
           onSend: () {},
           onStop: () {},
-          onOptions: () {},
+          onAttach: () {},
           models: const [
             ComposerChoice(value: 'a', label: 'Alpha'),
             ComposerChoice(
@@ -127,7 +128,7 @@ void main() {
           busy: false,
           onSend: () {},
           onStop: () {},
-          onOptions: () {},
+          onAttach: () {},
           models: const [ComposerChoice(value: 'a', label: 'Alpha')],
         ),
       ),
@@ -164,7 +165,7 @@ void main() {
                   busy: false,
                   onSend: () {},
                   onStop: () {},
-                  onOptions: () {},
+                  onAttach: () {},
                   permissions: const [
                     ComposerChoice(
                       value: 'ask',
@@ -209,7 +210,7 @@ void main() {
               busy: false,
               onSend: () => sent++,
               onStop: () {},
-              onOptions: () {},
+              onAttach: () {},
               micActive: active,
               micBusy: busy,
               onMic: () => mic++,
@@ -252,7 +253,7 @@ void main() {
           allowQueue: true,
           onSend: () => sent++,
           onStop: () => stopped++,
-          onOptions: () {},
+          onAttach: () {},
         ),
       ),
     );
@@ -284,6 +285,86 @@ void main() {
     );
     expect(sent, 0);
     expect(stopped, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('attachments alone can be sent once images are ready', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    final focus = FocusNode();
+    addTearDown(controller.dispose);
+    addTearDown(focus.dispose);
+    var sent = 0, attach = 0;
+    Future<void> render({bool files = false, bool preparing = false}) =>
+        tester.pumpWidget(
+          host(
+            AuraComposer(
+              controller: controller,
+              focusNode: focus,
+              online: true,
+              busy: false,
+              onSend: () => sent++,
+              onStop: () {},
+              onAttach: () => attach++,
+              attachments: const Text('Allegati'),
+              hasAttachments: files,
+              preparing: preparing,
+            ),
+          ),
+        );
+    IconButton send() => tester.widget<IconButton>(
+      find.widgetWithIcon(IconButton, Icons.arrow_upward_rounded),
+    );
+    await render();
+    expect(find.text('Allegati'), findsOneWidget);
+    expect(send().onPressed, isNull);
+    await tester.tap(find.byTooltip('Allega'));
+    expect(attach, 1);
+    await render(files: true, preparing: true);
+    expect(find.byTooltip('Preparazione immagini…'), findsOneWidget);
+    expect(send().onPressed, isNull);
+    await render(files: true);
+    await tester.tap(find.byTooltip('Invia messaggio'));
+    expect(sent, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('attach sheet keeps files available at the image limit', (
+    tester,
+  ) async {
+    AttachmentPick? picked;
+    Future<void> open(int room) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: auraTheme(),
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () async =>
+                    picked = await showAttachmentSheet(context, imageRoom: room),
+                child: const Text('Apri'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Apri'));
+      await tester.pumpAndSettle();
+    }
+
+    await open(0);
+    await tester.tap(find.byKey(const ValueKey('attach-photos')));
+    await tester.pumpAndSettle();
+    expect(find.text('Allega'), findsOneWidget);
+    expect(picked, isNull);
+    await tester.tap(find.byKey(const ValueKey('attach-files')));
+    await tester.pumpAndSettle();
+    expect(picked, AttachmentPick.files);
+    await open(3);
+    await tester.tap(find.byKey(const ValueKey('attach-camera')));
+    await tester.pumpAndSettle();
+    expect(picked, AttachmentPick.camera);
     expect(tester.takeException(), isNull);
   });
 

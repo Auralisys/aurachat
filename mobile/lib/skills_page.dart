@@ -174,6 +174,7 @@ class _SkillsPageState extends State<SkillsPage> {
                 DropdownButtonFormField<String>(
                   initialValue: project ?? '',
                   isExpanded: true,
+                  borderRadius: BorderRadius.circular(16),
                   decoration: const InputDecoration(labelText: 'Ambito sul PC'),
                   items: [
                     const DropdownMenuItem(

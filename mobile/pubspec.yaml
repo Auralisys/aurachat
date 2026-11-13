@@ -23,6 +23,9 @@ dependencies:
   flutter_markdown_plus: ^1.0.12
   record: ^7.1.2
   url_launcher: ^6.3.2
+  image_picker: ^1.2.4
+  file_picker: ^13.3.3
+  image: ^4.12.0
 dev_dependencies:
   integration_test:
     sdk: flutter

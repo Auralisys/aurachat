@@ -355,3 +355,15 @@ Le push al telefono diventano opt-in per chat: il desktop pubblica
 `watch` nella collezione `requests` esistente: non viene presa in carico, il
 desktop la elimina dopo averla letta (`companion.rs:769`). Nessuna nuova
 collezione, regola o modifica alla Cloud Function.
+
+## Allegati dal telefono — 13 novembre 2026
+
+Protocollo 10, senza nuove collezioni, regole o modifiche alla Cloud Function.
+Il telefono scrive in `users/{uid}/devices/{id}/requests` un documento per
+allegato (`status: "attachment"`), poi la richiesta `pending` con
+`attachment_parts`, come già le parti audio della dettatura. Il desktop non
+prende in carico le parti: le legge con la richiesta e le cancella
+([[Desktop gateway - Tauri]]). Ogni documento resta sotto 1 MiB (immagini
+≤ 512 KB); il costo è una scrittura e una cancellazione per allegato. Le parti
+di richieste annullate o mai scritte le elimina il telefono; non c'è TTL per
+eventuali parti orfane.

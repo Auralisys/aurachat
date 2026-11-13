@@ -1,8 +1,11 @@
+import 'composer_attachments.dart';
+
 /// Session-only outbox. Never infer completion from a missing/stale heartbeat.
 class QueuedDraft {
-  QueuedDraft(this.id, this.text);
+  QueuedDraft(this.id, this.text, [this.attachments = const []]);
   final String id;
   String text;
+  final List<ComposerAttachment> attachments;
 }
 
 class ConversationQueue {
@@ -86,9 +89,11 @@ class ConversationQueue {
 }
 
 class PendingGuide {
-  PendingGuide(this.id, this.text, this.turn);
+  PendingGuide(this.id, this.text, this.turn, [this.attachments = const []]);
   final String id, text;
   final String? turn;
+  /// Local copies: the live turn lists guidance text only.
+  List<ComposerAttachment> attachments;
   bool seen = false, withdrawing = false;
 }
 
@@ -142,14 +147,19 @@ class PendingGuides {
     }
   }
 
-  void accepted(String id, String text) {
-    if (!running ||
-        _withdrawn.contains(id) ||
-        _read.contains(id) ||
-        items.any((g) => g.id == id)) {
+  void accepted(
+    String id,
+    String text, [
+    List<ComposerAttachment> attachments = const [],
+  ]) {
+    if (!running || _withdrawn.contains(id) || _read.contains(id)) return;
+    final known = items.where((g) => g.id == id).firstOrNull;
+    if (known != null) {
+      // The live turn can list the guide before its send receipt arrives.
+      if (known.attachments.isEmpty) known.attachments = attachments;
       return;
     }
-    items.add(PendingGuide(id, text, _turn));
+    items.add(PendingGuide(id, text, _turn, attachments));
   }
 
   void withdrawn(PendingGuide guide) {

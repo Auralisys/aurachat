@@ -62,8 +62,11 @@ const LIVE_HOT_MS: u64 = 1_000;
 const LIVE_COLD_MS: u64 = 10_000;
 const LIVE_RETENTION_MS: u64 = 60_000;
 // Relay protocol advertised to phones/computers. 7 adds the `watch` action,
-// 8 adds image attachments, 9 adds comments placed on images.
-const RELAY_PROTOCOL: u64 = 9;
+// 8 adds image attachments, 9 adds comments placed on images, 10 adds
+// attachments uploaded as separate `attachment_parts` documents.
+const RELAY_PROTOCOL: u64 = 10;
+// One document per phone attachment keeps each Firestore write below 1 MiB.
+const MAX_ATTACHMENT_PARTS: usize = crate::llm::MAX_IMAGES + 4;
 // Phone pushes are opt-in per chat: opening or using the chat on the phone
 // follows it for this long; a turn started from a computer stops following.
 const PUSH_WATCH_MS: u64 = 30 * 60_000;
@@ -820,6 +823,8 @@ async fn poll(app:&tauri::AppHandle,boot_time:u64,recovered:&mut Option<String>)
         let app=app.clone();let uid=uid.clone();let auth=auth.clone();
         tauri::async_runtime::spawn(async move {
             let result=execute(&app,&uid,&auth,&request).await;
+            // Requests rejected before reading their parts (expired, signed out...) would leave them behind.
+            if result.is_err() {discard_attachment_parts(&app.state::<AppState>(),&auth,&uid,&request).await;}
             request["finished_at"]=json!(data::now_millis());
             match result {
                 Ok(value)=>{request["status"]=json!("completed");if !value.is_null(){request["result"]=value;}},
@@ -863,10 +868,15 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
             return Ok(shell_recap(app.state::<Arc<crate::managed_shells::Shells>>().list(uid,id)));
         },
         "stop"=>return state.chat_runs.stop(uid,id).map(|_|Value::Null),
-        "steer"=>return crate::steer_chat(app.clone(),app.state::<AppState>(),id.into(),request["content"].as_str().ok_or("empty_message")?.into(),
-            request.get("attachments").cloned().map(serde_json::from_value).transpose().map_err(|e|e.to_string())?,request.get("pastes").cloned()),
+        "steer"=>{
+            let content=request["content"].as_str().ok_or("empty_message")?;
+            let attachments=request_attachments(&state,auth,uid,request).await?;
+            return crate::steer_chat(app.clone(),app.state::<AppState>(),id.into(),content.into(),Some(attachments),request.get("pastes").cloned());
+        },
         "withdraw_guidance"=>return crate::withdraw_guidance(app.clone(),app.state::<AppState>(),id.into(),request["guidance_id"].as_str().ok_or("invalid_guidance")?.into())
-            .and_then(|message|serde_json::to_value(message).map_err(|e|e.to_string())),
+            .and_then(|message|serde_json::to_value(message).map_err(|e|e.to_string()))
+            // Photos could exceed the 1 MiB result document; the phone keeps its own copy.
+            .map(|mut message|{if let Some(fields)=message.as_object_mut(){fields.remove("attachments");} message}),
         "stop_agent"=>return crate::stop_subagent(app.state::<AppState>(),app.state::<crate::agent_runs::AgentRuns>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["agent_id"].as_str().ok_or("invalid_agent")?.into()).await.map(|_|Value::Null),
         "stop_shell"=>return crate::stop_shell(app.state::<AppState>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["shell_id"].as_str().ok_or("invalid_shell")?.into()).await
             .and_then(|snapshot|serde_json::to_value(snapshot).map_err(|e|e.to_string())),
@@ -946,8 +956,7 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
         _=>return Err("unsupported_remote_action".into())
     }
     let content=request["content"].as_str().ok_or("empty_message")?;
-    let attachments:Vec<crate::llm::Attachment>=request.get("attachments").cloned()
-        .map(serde_json::from_value).transpose().map_err(|e|e.to_string())?.unwrap_or_default();
+    let attachments=request_attachments(&state,auth,uid,request).await?;
     crate::llm::validate_attachments(&attachments)?;
     let pastes=crate::llm::parse_pastes(request.get("pastes").cloned());
     let retry=request["retry"].as_bool().unwrap_or(false);
@@ -987,6 +996,54 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
     drop(account);
     crate::run_chat(app.clone(),app.state::<AppState>(),id.into(),content.into(),Some(attachments),pastes,Some(retry),edit_index,Some(uid.into())).await
         .map(|reply|json!({"cancelled":reply.cancelled}))
+}
+
+/// Inline attachments (computers) plus the `status:"attachment"` documents a
+/// phone writes before its request. Parts are deleted once read; the phone
+/// discards them itself when its request is never written or is cancelled.
+async fn request_attachments(state:&AppState,auth:&FirestoreAuth,uid:&str,request:&Value)->Result<Vec<crate::llm::Attachment>,String>{
+    let mut attachments:Vec<crate::llm::Attachment>=request.get("attachments").filter(|v|!v.is_null()).cloned()
+        .map(serde_json::from_value).transpose().map_err(|e|e.to_string())?.unwrap_or_default();
+    let parts=attachment_part_ids(request)?;
+    if parts.is_empty() {return Ok(attachments);}
+    let (device,_)=identity();
+    let paths:Vec<String>=parts.iter().map(|part|format!("users/{uid}/devices/{device}/requests/{part}")).collect();
+    let mut read=Ok(());
+    for path in &paths {
+        match state.firestore.relay_get(auth,path).await {
+            Ok(Some(doc))=>match part_attachment(&doc) {Ok(file)=>attachments.push(file),Err(e)=>{read=Err(e);break;}},
+            Ok(None)=>{read=Err("attachments_missing".into());break;},
+            Err(e)=>{read=Err(e);break;},
+        }
+    }
+    for path in &paths {
+        if let Err(e)=state.firestore.relay_delete(auth,path).await {eprintln!("Attachment part cleanup failed: {e}");}
+    }
+    read.map(|_|attachments)
+}
+
+/// Idempotent: parts already read are gone and deleting them again is a no-op.
+async fn discard_attachment_parts(state:&AppState,auth:&FirestoreAuth,uid:&str,request:&Value){
+    let Ok(parts)=attachment_part_ids(request) else {return};
+    let (device,_)=identity();
+    for part in parts {
+        if let Err(e)=state.firestore.relay_delete(auth,&format!("users/{uid}/devices/{device}/requests/{part}")).await {eprintln!("Attachment part cleanup failed: {e}");}
+    }
+}
+
+fn attachment_part_ids(request:&Value)->Result<Vec<&str>,String>{
+    let Some(parts)=request.get("attachment_parts").filter(|v|!v.is_null()) else {return Ok(vec![])};
+    let parts=parts.as_array().filter(|parts|parts.len()<=MAX_ATTACHMENT_PARTS).ok_or("invalid_attachments")?;
+    let mut seen=std::collections::HashSet::new();
+    parts.iter().map(|part|match part.as_str() {
+        Some(id) if data::valid_id(id).is_ok() && seen.insert(id)=>Ok(id),
+        _=>Err("invalid_attachments".to_string()),
+    }).collect()
+}
+
+fn part_attachment(doc:&Value)->Result<crate::llm::Attachment,String>{
+    if doc["status"]!="attachment" {return Err("invalid_attachments".into());}
+    serde_json::from_value(doc["attachment"].clone()).map_err(|_|"invalid_attachments".to_string())
 }
 
 fn shell_recap(mut shells:Vec<crate::managed_shells::Snapshot>)->Value {
@@ -1108,6 +1165,24 @@ fn remote_permission_mode(request:&Value)->Result<crate::permissions::Mode,Strin
         assert!(remote_permission_mode(&json!({"mode":"full"})).is_err());
         assert!(remote_permission_mode(&json!({"mode":"invalid"})).is_err());
         assert_eq!(remote_permission_mode(&json!({"mode":"full","confirm_full_access":true})).unwrap(),Mode::Full);
+    }
+    #[test]fn phone_attachment_parts_are_bounded_unique_and_typed(){
+        assert!(attachment_part_ids(&json!({})).unwrap().is_empty());
+        assert!(attachment_part_ids(&json!({"attachment_parts":null})).unwrap().is_empty());
+        assert_eq!(attachment_part_ids(&json!({"attachment_parts":["a","b"]})).unwrap(),vec!["a","b"]);
+        for parts in [json!("a"),json!(["a","a"]),json!(["a/b"]),json!([""]),json!([1]),json!((0..=MAX_ATTACHMENT_PARTS).map(|i|format!("p{i}")).collect::<Vec<_>>())] {
+            assert_eq!(attachment_part_ids(&json!({"attachment_parts":parts})).unwrap_err(),"invalid_attachments");
+        }
+        let distinct:Vec<String>=(0..MAX_ATTACHMENT_PARTS).map(|i|format!("p{i}")).collect();
+        assert_eq!(attachment_part_ids(&json!({"attachment_parts":distinct})).unwrap().len(),MAX_ATTACHMENT_PARTS);
+        let text=part_attachment(&json!({"status":"attachment","attachment":{"name":"note.md","content":"# Ciao"}})).unwrap();
+        assert_eq!((text.name.as_str(),text.content.as_str(),text.is_image()),("note.md","# Ciao",false));
+        let image=part_attachment(&json!({"status":"attachment","attachment":{"name":"foto.jpg","mime_type":"image/jpeg","data":"/9j/"}})).unwrap();
+        assert_eq!((image.mime_type.as_deref(),image.data.as_deref()),(Some("image/jpeg"),Some("/9j/")));
+        // A pending request or an audio part is never read as an attachment.
+        for doc in [json!({"status":"pending","attachment":{"name":"x","content":"y"}}),json!({"status":"audio","audio":"AAAA"}),json!({"status":"attachment"})] {
+            assert_eq!(part_attachment(&doc).unwrap_err(),"invalid_attachments");
+        }
     }
     #[test]fn notification_preview_keeps_the_beginning_and_unicode(){
         assert_eq!(notification_preview("  Prima\nriga  seconda ", 10), "Prima riga…");

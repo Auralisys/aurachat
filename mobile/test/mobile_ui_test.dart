@@ -166,7 +166,7 @@ void main() {
                       busy: busy,
                       onSend: () => sent++,
                       onStop: () => stopped++,
-                      onOptions: () {},
+                      onAttach: () {},
                       models: const [
                         ComposerChoice(value: 'a', label: 'Alpha'),
                         ComposerChoice(value: 'b', label: 'Beta'),

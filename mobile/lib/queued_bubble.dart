@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'attachment_views.dart';
+import 'message_images.dart';
 import 'ui.dart';
 
 /// Draft della coda mostrato come bolla utente, con stato e azioni.
@@ -8,6 +10,7 @@ class QueuedMessageBubble extends StatelessWidget {
     super.key,
     required this.text,
     required this.status,
+    this.attachments = const [],
     this.locked = false,
     this.warning,
     this.onEdit,
@@ -20,6 +23,9 @@ class QueuedMessageBubble extends StatelessWidget {
 
   final String text;
   final String status;
+
+  /// Payloads in the wire shape, as in history messages.
+  final List<Map<String, dynamic>> attachments;
   final bool locked;
   final String? warning;
   final VoidCallback? onEdit, onDelete, onSendNow, onResume;
@@ -28,6 +34,17 @@ class QueuedMessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final images = messageImages(attachments);
+    final files = messageFiles(attachments);
+    // No empty text bubble for attachments-only drafts: the status line above
+    // already marks them as queued.
+    final showText = text.isNotEmpty || images.isEmpty && files.isEmpty;
+    Widget narrow(Widget child) => LayoutBuilder(
+      builder: (context, constraints) => ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: constraints.maxWidth * .88),
+        child: child,
+      ),
+    );
     return Padding(
       padding: const EdgeInsets.only(bottom: 28),
       child: Column(
@@ -91,37 +108,44 @@ class QueuedMessageBubble extends StatelessWidget {
               ],
             ),
           ),
-          LayoutBuilder(
-            builder: (context, constraints) => Align(
-              alignment: Alignment.centerRight,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: constraints.maxWidth * .88,
-                ),
-                child: CustomPaint(
-                  foregroundPainter: const _QueuedBorder(),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
-                      vertical: 13,
-                    ),
-                    decoration: BoxDecoration(
-                      color: bubble,
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: Text(
-                      text,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        height: 1.6,
-                        color: textColor,
+          if (images.isNotEmpty) narrow(MessageImages(images: images)),
+          if (images.isNotEmpty && showText) const SizedBox(height: 8),
+          if (showText)
+            LayoutBuilder(
+              builder: (context, constraints) => Align(
+                alignment: Alignment.centerRight,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: constraints.maxWidth * .88,
+                  ),
+                  child: CustomPaint(
+                    foregroundPainter: const _QueuedBorder(),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 13,
+                      ),
+                      decoration: BoxDecoration(
+                        color: bubble,
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: Text(
+                        text,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          height: 1.6,
+                          color: textColor,
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
+          if (files.isNotEmpty) ...[
+            if (images.isNotEmpty || showText) const SizedBox(height: 8),
+            narrow(MessageFiles(files: files)),
+          ],
           if (warning != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),

@@ -1,3 +1,4 @@
+import 'package:aurachat_mobile/composer_attachments.dart';
 import 'package:aurachat_mobile/message_queue.dart';
 import 'package:aurachat_mobile/queued_bubble.dart';
 import 'package:aurachat_mobile/ui.dart';
@@ -263,5 +264,57 @@ void main() {
     await tester.pumpAndSettle();
     expect(cancelled, 1);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('attachments-only draft shows its file without an empty bubble', (
+    tester,
+  ) async {
+    Future<void> render(String text) => tester.pumpWidget(
+      MaterialApp(
+        theme: auraTheme(),
+        home: Scaffold(
+          body: QueuedMessageBubble(
+            text: text,
+            status: 'In coda',
+            attachments: const [
+              {'name': 'note.md', 'content': '# Titolo\nRiga'},
+            ],
+          ),
+        ),
+      ),
+    );
+    final textBubble = find.byWidgetPredicate(
+      (widget) =>
+          widget is Container &&
+          widget.decoration is BoxDecoration &&
+          (widget.decoration! as BoxDecoration).color == bubble,
+    );
+    await render('Leggi la nota');
+    expect(textBubble, findsOneWidget);
+    await render('');
+    expect(textBubble, findsNothing);
+    expect(find.text('note.md'), findsOneWidget);
+    expect(find.text('13 B · 2 righe'), findsOneWidget);
+    await tester.tap(find.text('note.md'));
+    await tester.pumpAndSettle();
+    expect(find.text('# Titolo\nRiga'), findsOneWidget);
+    expect(find.byTooltip('Copia testo'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  test('a guide listed before its receipt still gets its attachments', () {
+    final file = ComposerAttachment.text('note.md', 'ciao');
+    final guides = PendingGuides()
+      ..sync({
+        'status': 'running',
+        'turn_id': 't1',
+        'guidance': [
+          {'id': 'g1', 'content': 'Leggi la nota'},
+        ],
+      })
+      ..accepted('g1', 'Leggi la nota', [file]);
+    expect(guides.items.single.attachments, [file]);
+    guides.accepted('g1', 'Leggi la nota', const []);
+    expect(guides.items.single.attachments, [file]);
   });
 }

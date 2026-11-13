@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
@@ -9,10 +10,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'attachment_views.dart';
 import 'companion.dart';
+import 'composer_attachments.dart';
 import 'ui.dart';
 import 'turn_history.dart';
 import 'skill_picker.dart';
@@ -276,6 +280,16 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   (String, String)? guideEdit;
   final composer = TextEditingController();
   final composerFocus = FocusNode();
+  // Draft attachments: they follow the composer text, not the conversation.
+  late final attachments = ComposerAttachments(
+    onError: (code) {
+      if (mounted) setState(() => error = remoteError(code));
+    },
+  );
+  final picker = ImagePicker();
+  bool picking = false;
+  // Payloads of the message being sent, shown with the pending bubble.
+  List<Map<String, dynamic>> pendingAttachments = const [];
   final scaffoldKey = GlobalKey<ScaffoldState>();
   final recorder = AudioRecorder();
   bool micActive = false, micTranscribing = false;
@@ -492,6 +506,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     }
     composerFocus.dispose();
     composer.dispose();
+    attachments.dispose();
     scroll.dispose();
     super.dispose();
   }
@@ -698,6 +713,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
             requestStatus = data['status'];
             requestConversation = data['conversation_id'];
             pendingText = busy ? data['content'] : null;
+            if (!busy) pendingAttachments = const [];
             for (final lane in outbox.values.where(
               (q) => q.device == watchedDevice,
             )) {
@@ -721,6 +737,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       requestStatus = null;
       activeRequestId = null;
       pendingText = null;
+      pendingAttachments = const [];
     });
     requestSubscription?.cancel();
     watchApprovals();
@@ -820,7 +837,20 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       return;
     }
     final text = composer.text.trim();
-    if (text.isEmpty || !online) {
+    if ((text.isEmpty && attachments.isEmpty) || !online) {
+      return;
+    }
+    final notReady = attachments.preparing > 0
+        ? 'Attendi che le immagini siano pronte.'
+        : attachments.problem != null
+        ? remoteError(attachments.problem)
+        : attachments.isNotEmpty &&
+              ((device?['protocol'] as num?)?.toInt() ?? 0) <
+                  attachmentProtocol
+        ? 'Aggiorna AuraChat sul PC per inviare allegati dal telefono.'
+        : null;
+    if (notReady != null) {
+      setState(() => error = notReady);
       return;
     }
     if (turnBusy || (currentQueue?.drafts.isNotEmpty ?? false)) {
@@ -831,7 +861,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
           liveTurnRunning(liveTurns[target]);
       guideEdit = null;
       late final ConversationQueue lane;
-      final draft = QueuedDraft(const Uuid().v4(), text);
+      final draft = QueuedDraft(const Uuid().v4(), text, attachments.take());
       setState(() {
         lane = outbox.putIfAbsent((
           deviceId!,
@@ -861,12 +891,16 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     final id = conversationId ?? const Uuid().v4();
     final targetDevice = deviceId!;
     final targetProject = projectId;
+    final files = attachments.take();
+    final payloads = [for (final file in files) file.payload];
     setState(() {
       sending = true;
       error = null;
       pendingText = text;
+      pendingAttachments = payloads;
       requestConversation = id;
     });
+    var sent = false;
     try {
       final request = await api.send(
         targetDevice,
@@ -875,7 +909,9 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         newConversation: isNew,
         project: targetProject,
         extra: {if (isNew && chosenModel != null) 'model': chosenModel},
+        attachments: payloads,
       );
+      sent = true;
       if (!mounted) {
         return;
       }
@@ -904,6 +940,11 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         watchRequest(request);
       }
     } catch (e) {
+      // Like the text, attachments that never reached the PC stay in the draft.
+      if (!sent && mounted) {
+        attachments.restore(files);
+        pendingAttachments = const [];
+      }
       fail(e);
     } finally {
       if (mounted) {
@@ -940,18 +981,21 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       if (!guide) sending = true;
     });
     try {
+      final payloads = [for (final file in draft.attachments) file.payload];
       final request = await api.send(
         lane.device,
         lane.conversation,
         draft.text,
         project: lane.project,
         action: guide ? 'steer' : 'chat',
+        attachments: payloads,
       );
       if (!mounted) return;
       if (!guide) {
         lane.waitingRequest = request;
         requestConversation = lane.conversation;
         pendingText = draft.text;
+        pendingAttachments = payloads;
         requestStatus = 'pending';
         activeRequestId = request;
         final prefs = await SharedPreferences.getInstance();
@@ -988,13 +1032,18 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                           PendingGuides.new,
                         )
                       ..sync(liveTurns[lane.conversation])
-                      ..accepted(result['id'] as String, draft.text);
+                      ..accepted(
+                        result['id'] as String,
+                        draft.text,
+                        draft.attachments,
+                      );
                   }
                 } else {
                   lane.observeRequest(request, status);
                   if (activeRequestId == request) {
                     requestStatus = status;
                     pendingText = null;
+                    pendingAttachments = const [];
                   }
                 }
                 if (status != 'completed') {
@@ -1040,6 +1089,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     if (lane.operation != null || !lane.remove(draft)) return;
     final base = composer.text.trimRight();
     final merged = base.isEmpty ? draft.text : '$base\n${draft.text}';
+    attachments.restore(draft.attachments);
     setState(() {
       composer.value = TextEditingValue(
         text: merged,
@@ -1085,6 +1135,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
             text: merged,
             selection: TextSelection.collapsed(offset: merged.length),
           );
+          attachments.restore(guide.attachments);
           guideEdit = (device, conversation);
         }
       });
@@ -1182,6 +1233,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
           requestStatus == 'pending' &&
           activeRequestId != null) {
         final ref = api.requests(deviceId!).doc(activeRequestId);
+        Object? parts;
         final cancelled = await api.db.runTransaction<bool>((
           transaction,
         ) async {
@@ -1189,6 +1241,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
           if (snapshot.data()?['status'] != 'pending') {
             return false;
           }
+          parts = snapshot.data()?['attachment_parts'];
           transaction.update(ref, {
             'status': 'cancelled',
             'finished_at': DateTime.now().millisecondsSinceEpoch,
@@ -1196,6 +1249,8 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
           return true;
         });
         if (cancelled) {
+          // The PC will never read the attachments of a cancelled request.
+          api.discardParts(deviceId!, parts);
           return;
         }
       }
@@ -1876,24 +1931,98 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     ),
   );
 
-  Future<void> composerOptions() => showModalBottomSheet<void>(
-    context: context,
-    showDragHandle: true,
-    builder: (sheetContext) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: const Icon(Icons.laptop_mac_outlined),
-            title: const Text('Scegli PC'),
-            subtitle: Text(device?['name'] ?? 'Nessun PC selezionato'),
-            enabled: !busy,
-            onTap: () {
-              Navigator.pop(sheetContext);
-              chooseDevice();
-            },
-          ),
-          if (conversationId == null)
+  /// The composer "+": camera, photos or files, like the desktop paperclip.
+  Future<void> attachFiles() async {
+    if (picking) return;
+    picking = true;
+    try {
+      final pick = await showAttachmentSheet(
+        context,
+        imageRoom: attachments.imageRoom,
+      );
+      if (pick == null || !mounted) return;
+      final List<AttachmentSource> sources;
+      if (pick == AttachmentPick.files) {
+        final files = await FilePicker.pickFiles();
+        sources = [
+          for (final file in files)
+            AttachmentSource(
+              file.name,
+              file.readAsBytes,
+              size: await file.length(),
+            ),
+        ];
+      } else {
+        // `limit` must be positive; the sheet already disables photos at 0.
+        final room = attachments.imageRoom;
+        if (room <= 0) return;
+        final images = pick == AttachmentPick.camera
+            ? [
+                ?await picker.pickImage(
+                  source: ImageSource.camera,
+                  requestFullMetadata: false,
+                ),
+              ]
+            : await picker.pickMultiImage(
+                limit: room,
+                requestFullMetadata: false,
+              );
+        sources = [
+          for (final image in images)
+            AttachmentSource(
+              image.name,
+              image.readAsBytes,
+              size: await image.length(),
+              image: true,
+            ),
+        ];
+      }
+      if (sources.isEmpty || !mounted) return;
+      setState(() => error = null);
+      unawaited(attachments.add(sources));
+    } on PlatformException catch (e) {
+      if (mounted) {
+        setState(
+          () => error = switch (e.code) {
+            'camera_access_denied' =>
+              'Consenti l’accesso alla fotocamera nelle impostazioni di Android.',
+            'photo_access_denied' =>
+              'Consenti l’accesso alle foto nelle impostazioni di Android.',
+            'no_available_camera' => 'Nessuna fotocamera disponibile.',
+            _ => 'Impossibile aprire la selezione dei file.',
+          },
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => error = 'Impossibile aprire la selezione dei file.');
+      }
+    } finally {
+      picking = false;
+    }
+  }
+
+  /// Header label of a new chat: PC and project, both chosen before the first
+  /// message. Existing chats belong to their project, so only the PC changes.
+  Future<void> chooseContext() async {
+    if (libraryVisible || conversationId != null) return chooseDevice();
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.laptop_mac_outlined),
+              title: const Text('Scegli PC'),
+              subtitle: Text(device?['name'] ?? 'Nessun PC selezionato'),
+              enabled: !busy,
+              onTap: () {
+                Navigator.pop(sheetContext);
+                chooseDevice();
+              },
+            ),
             ListTile(
               leading: const Icon(Icons.folder_outlined),
               title: const Text('Scegli progetto'),
@@ -1904,11 +2033,12 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                 chooseProject();
               },
             ),
-          const SizedBox(height: 12),
-        ],
+            const SizedBox(height: 12),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 
   Widget notice(String message, String action, VoidCallback onTap) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
@@ -1983,7 +2113,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                   project: libraryVisible ? null : projectName,
                   pc: device?['name']?.toString(),
                   online: online,
-                  onTap: busy ? null : chooseDevice,
+                  tooltip: !libraryVisible && conversationId == null
+                      ? 'Cambia PC o progetto'
+                      : 'Cambia PC',
+                  onTap: busy ? null : chooseContext,
                 ),
               ],
             ),
@@ -2203,6 +2336,8 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                 ),
                                 if (activeRequest &&
                                     pendingText != null &&
+                                    (pendingText!.isNotEmpty ||
+                                        pendingAttachments.isNotEmpty) &&
                                     !messages.any(
                                       (m) =>
                                           m['role'] == 'user' &&
@@ -2213,6 +2348,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                     message: {
                                       'role': 'user',
                                       'content': pendingText,
+                                      'attachments': pendingAttachments,
                                     },
                                   ),
                                 if (activeLiveTurn != null &&
@@ -2290,6 +2426,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                     QueuedMessageBubble(
                                       key: ValueKey('guide-${guide.id}'),
                                       text: guide.text,
+                                      attachments: [
+                                        for (final file in guide.attachments)
+                                          file.payload,
+                                      ],
                                       locked: guide.withdrawing || !online,
                                       status: guide.withdrawing
                                           ? 'Annullamento…'
@@ -2309,6 +2449,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                     QueuedMessageBubble(
                                       key: ValueKey(draft.id),
                                       text: draft.text,
+                                      attachments: [
+                                        for (final file in draft.attachments)
+                                          file.payload,
+                                      ],
                                       locked: lane.operation != null,
                                       status: lane.operation == draft
                                           ? (lane.paused ??
@@ -2486,26 +2630,38 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                           hasProject: projectId != null,
                           skills: availableSkills,
                         ),
-                        AuraComposer(
-                          controller: composer,
-                          focusNode: composerFocus,
-                          online: online,
-                          busy: turnBusy,
-                          allowQueue: conversationId != null,
-                          onSend: send,
-                          onStop: () => action('stop'),
-                          onOptions: composerOptions,
-                          modelName: modelName,
-                          permissionLabel: permissionLabel,
-                          models: modelChoices,
-                          selectedModel: selectedModelId,
-                          onModelSelected: selectModel,
-                          permissions: permissionChoices,
-                          selectedPermission: permissionMode,
-                          onPermissionSelected: applyPermission,
-                          micActive: micActive,
-                          micBusy: micTranscribing,
-                          onMic: online && !micTranscribing ? toggleMic : null,
+                        ListenableBuilder(
+                          listenable: attachments,
+                          builder: (context, _) => AuraComposer(
+                            controller: composer,
+                            focusNode: composerFocus,
+                            online: online,
+                            busy: turnBusy,
+                            allowQueue: conversationId != null,
+                            onSend: send,
+                            onStop: () => action('stop'),
+                            onAttach: attachFiles,
+                            attachments: ComposerAttachmentStrip(
+                              files: attachments.items,
+                              preparing: attachments.preparing,
+                              onRemove: attachments.remove,
+                            ),
+                            hasAttachments: attachments.isNotEmpty,
+                            preparing: attachments.preparing > 0,
+                            modelName: modelName,
+                            permissionLabel: permissionLabel,
+                            models: modelChoices,
+                            selectedModel: selectedModelId,
+                            onModelSelected: selectModel,
+                            permissions: permissionChoices,
+                            selectedPermission: permissionMode,
+                            onPermissionSelected: applyPermission,
+                            micActive: micActive,
+                            micBusy: micTranscribing,
+                            onMic: online && !micTranscribing
+                                ? toggleMic
+                                : null,
+                          ),
                         ),
                       ],
                     ),
@@ -2551,7 +2707,17 @@ String remoteError(String? error) => switch (error) {
   'image_too_large' =>
     'Immagini troppo grandi: il limite è circa 6 MB in totale per messaggio.',
   'image_unreadable' =>
-    'Il PC non riesce a leggere l’immagine. Usa un file PNG, JPEG, GIF o WebP.',
+    'Impossibile leggere l’immagine. Usa un file PNG, JPEG, GIF, WebP o HEIC.',
+  'attachments_missing' =>
+    'Un allegato non è arrivato al PC. Invia di nuovo il messaggio.',
+  'invalid_attachments' =>
+    'Puoi allegare fino a 8 immagini e 4 file di testo UTF-8 (massimo 128 KB per file, 256 KB in totale).',
+  'attachment_unsupported' =>
+    'Puoi allegare immagini (PNG, JPEG, GIF, WebP, HEIC) e file di testo UTF-8 fino a 128 KB.',
+  'attachment_unreadable' => 'Impossibile leggere il file selezionato.',
+  'guidance_limit' =>
+    'Guida troppo lunga o troppe guide in attesa. Attendi che il modello le legga.',
+  'empty_message' => 'Scrivi un messaggio o allega un file.',
   'invalid_message_size' =>
     'Messaggio troppo grande per il controllo remoto. Accorcialo o invia meno allegati.',
   _ => 'Il desktop non ha completato la richiesta. Controlla AuraChat sul PC.',
@@ -2633,6 +2799,9 @@ class MessageView extends StatelessWidget {
     }
     final content = message['content'] as String? ?? '';
     final images = messageImages(message['attachments']);
+    final files = messageFiles(message['attachments']);
+    final hasText = content.trim().isNotEmpty;
+    // Same order as the desktop: images, text, then file chips.
     return Padding(
       padding: const EdgeInsets.only(bottom: 28),
       child: Column(
@@ -2645,9 +2814,9 @@ class MessageView extends StatelessWidget {
                 child: MessageImages(images: images),
               ),
             ),
-          if (images.isNotEmpty && content.trim().isNotEmpty)
+          if (images.isNotEmpty && hasText)
             const SizedBox(height: 8),
-          if (images.isEmpty || content.trim().isNotEmpty)
+          if (hasText || images.isEmpty && files.isEmpty)
             LayoutBuilder(
               builder: (context, constraints) => Align(
                 alignment: user ? Alignment.centerRight : Alignment.centerLeft,
@@ -2692,6 +2861,15 @@ class MessageView extends StatelessWidget {
                 ),
               ),
             ),
+          if (files.isNotEmpty) ...[
+            if (images.isNotEmpty || hasText) const SizedBox(height: 8),
+            LayoutBuilder(
+              builder: (context, constraints) => ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: constraints.maxWidth * .88),
+                child: MessageFiles(files: files),
+              ),
+            ),
+          ],
         ],
       ),
     );

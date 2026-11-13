@@ -182,6 +182,10 @@ di distribuzione vengono eliminate dopo un giorno quando la policy è applicata.
   sulla revisione Firestore, senza esecuzioni automatiche duplicate. L'azione
   `watch` (protocollo 7) non viene presa in carico: il desktop la legge, abilita le
   push di quella chat per 30 minuti e la elimina.
+- Allegati dal telefono (protocollo 10): un documento `requests` per allegato con
+  `status: attachment`, ciascuno sotto il limite Firestore di 1 MiB, poi la
+  richiesta `pending` con `attachment_parts`. Il desktop legge e cancella le
+  parti; il telefono le scarta se la richiesta non viene scritta o è annullata.
 - `users/{uid}/devices/{id}/approvals/{id}`: richieste di consenso con revisione.
 - `users/{uid}/devices/{id}/questions/{id}`: domande interattive `ask_user` in
   attesa (scelta singola/multipla, risposta libera, batch fino a dodici); il
@@ -353,7 +357,37 @@ compaiono miniature arrotondate (200 dp se singola, 104 dp in griglia) e il
 tocco apre un visualizzatore a schermo intero con scorrimento tra le immagini,
 zoom fino a 5× e contatore. Nel riepilogo le immagini tra le fonti hanno
 un'icona dedicata e aprono lo stesso visualizzatore (`lib/message_images.dart`).
-Il turno live non le include: compaiono quando il turno viene salvato. Dal
-telefono non si allegano immagini; gli errori remoti `images_unsupported`,
+Il turno live non le include: compaiono quando il turno viene salvato. Fino
+al 13 novembre dal telefono non si allegavano immagini (vedi sotto); gli errori remoti `images_unsupported`,
 `image_too_large`, `image_unreadable` e `invalid_message_size` hanno messaggi
 in italiano. Serve una nuova build mobile.
+
+## Allegati dal telefono e UI più morbida — 13 novembre 2026
+
+Il tasto **+** del composer apre il foglio **Allega** con Fotocamera, Foto
+(selezione multipla) e File; non apre più l'elenco dei PC. PC e progetto di una
+nuova chat si scelgono toccando l'etichetta in alto; **Opzioni chat** (`...`)
+resta invariato.
+
+Limiti allineati al desktop: fino a 8 immagini PNG, JPEG, GIF, WebP o HEIC
+(convertite in JPEG), ridotte entro 2048 px e circa 1,7 MP, compresse sotto
+512 KB e al massimo circa 6 MB in base64 per messaggio; fino a 4 file di testo
+UTF-8 da 128 KB, 256 KB in totale. Con le immagini al limite Fotocamera e Foto
+si disattivano e resta File. Gli allegati compaiono sopra il campo di testo come
+miniature e chip rimovibili; si può inviare anche senza testo. Nel messaggio
+l'ordine è immagini, testo, chip dei file: il tocco su un chip apre il testo
+completo con copia. Messaggi in coda e guide mantengono gli allegati
+(`lib/composer_attachments.dart`, `lib/attachment_views.dart`).
+
+Serve il desktop con **protocollo 10**: con un PC più vecchio l'invio si ferma
+con "Aggiorna AuraChat sul PC per inviare allegati dal telefono.".
+
+UI più morbida sullo stesso tema viola scuro: menu 16, tooltip 10, snackbar
+flottanti 16, dialog e fogli 28, menu a tendina 16, checkbox 5, barre di
+avanzamento arrotondate con traccia tenue. Divider e bordi dei pulsanti outline
+usano il colore linea del tema invece del bianco di ripiego di Material 3.
+
+Verifica: `flutter analyze` pulito, 72 test widget/unitari, 137 test Rust
+(9 ignorati) e screenshot di widget a 412×892 di chat, foglio Allega, limite
+immagini, visualizzatore file e dialog. Nessuna prova su emulatore, occupato da
+un'altra sessione. Serve una nuova build mobile e desktop.

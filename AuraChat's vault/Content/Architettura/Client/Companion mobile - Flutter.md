@@ -162,7 +162,32 @@ singola, 104 dp in griglia, bordi da 14. Il tocco apre `ImageViewerPage` a
 schermo intero (scorrimento, zoom fino a 5× che blocca lo scorrimento,
 contatore "n di m"). Il riepilogo usa lo stesso visualizzatore per le fonti
 immagine (`lib/chat_recap.dart`). Le immagini arrivano dalla cronologia
-Firestore, non dal turno live; dal telefono non si possono allegare. Nuovi
+Firestore, non dal turno live; fino al 13 novembre dal telefono non si potevano allegare. Nuovi
 messaggi per gli errori remoti `images_unsupported`, `image_too_large`,
 `image_unreadable` e `invalid_message_size` (`lib/app.dart`). Test:
 `test/message_images_test.dart`.
+
+## Allegati dal telefono e UI più morbida — 13 novembre 2026
+
+Il **+** del composer apre `AttachmentSheet` (`lib/attachment_views.dart`) con
+Fotocamera, Foto (selezione multipla, `image_picker`) e File (`file_picker`);
+prima apriva l'elenco dei PC. PC e progetto di una nuova chat si scelgono
+dall'etichetta in alto (`ChatContextLabel`, `lib/ui.dart`); **Opzioni chat**
+resta invariato. `lib/composer_attachments.dart` valida e normalizza come il
+desktop: 8 immagini (HEIC in JPEG, lato ≤ 2048 px, ~1,7 MP, ≤ 512 KB, ~6 MB
+base64 per messaggio) e 4 testi UTF-8 da 128 KB (256 KB totali). Con le immagini
+al limite Fotocamera e Foto si disattivano e resta File.
+
+Gli allegati sono una striscia animata sopra il campo; si può inviare senza
+testo, non durante la preparazione delle immagini. Messaggi, coda e guide
+mostrano immagini, testo e chip dei file; il chip apre il testo con copia.
+`Companion.send` scrive un documento per allegato e poi la richiesta con
+`attachment_parts` (`lib/companion.dart:159`); con PC sotto protocollo 10
+l'invio si ferma con un invito ad aggiornare (`lib/app.dart:847`). Le parti di
+una richiesta annullata le scarta il telefono (`lib/app.dart:1253`).
+
+Tema: dialog 28, menu a tendina 16, checkbox 5, progress arrotondati con traccia
+`0xff45404d`. `outline` e `outlineVariant` sono espliciti: in
+`ColorScheme.dark()` ricadono su `onSurface` e rendevano quasi bianchi divider e
+bordi dei pulsanti outline. Test: `test/composer_attachments_test.dart`,
+`test/composer_controls_test.dart`, `test/queued_bubble_test.dart`.

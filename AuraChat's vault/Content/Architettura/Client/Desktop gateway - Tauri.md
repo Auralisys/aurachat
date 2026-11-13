@@ -596,7 +596,8 @@ sola, senza retry automatico in caso di esito ambiguo. Le letture delle ricevute
 escludono contenuto e allegati; quelle dei dispositivi escludono i cataloghi skill.
 Permessi ed esecuzione degli strumenti restano sul computer di destinazione.
 Il protocollo 6 aggiunge allegati testuali, modifica e rigenerazione al relay chat,
-il protocollo 8 le immagini, il protocollo 9 i commenti sulle immagini;
+il protocollo 8 le immagini, il protocollo 9 i commenti sulle immagini, il 10
+gli allegati del telefono in documenti separati;
 se il gateway e precedente viene richiesto l'aggiornamento invece di perdere
 silenziosamente i campi. Il companion mobile resta compatibile.
 
@@ -1011,3 +1012,15 @@ favicon si chiedono solo per host già visitati, con iniziale finché non carica
 
 Verifica: `desktop/tests/activity-panel.cjs`, `panel-tabs.cjs`,
 `operations-flow.cjs` e `git-panel.cjs`.
+
+## Allegati dal telefono — 13 novembre 2026
+
+`RELAY_PROTOCOL` sale a 10 (`companion.rs:67`). Un allegato del telefono è un
+documento `requests` con `status: "attachment"`, scritto prima della richiesta
+che lo elenca in `attachment_parts`: ogni scrittura resta sotto 1 MiB anche con
+più foto. Il poll prende in carico solo le richieste `pending`;
+`request_attachments` (`companion.rs:1004`) unisce gli allegati inline dei
+computer e le parti del telefono (al massimo `MAX_IMAGES + 4`, ID univoci, solo
+`status: "attachment"`) e le cancella dopo la lettura. Se `execute` fallisce, le
+parti rimaste vengono scartate (`companion.rs:827`). Test:
+`phone_attachment_parts_are_bounded_unique_and_typed`.

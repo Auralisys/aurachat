@@ -79,6 +79,11 @@ MessageImage? messageImage(Object? file) {
   return result is MessageImage ? result : null;
 }
 
+/// Seeds the cache for an attachment map created on this phone, whose bytes
+/// are already in memory.
+void rememberMessageImage(Map<Object?, Object?> file, MessageImage image) =>
+    _decoded[file] = image;
+
 List<MessageImage> messageImages(Object? attachments) => [
   for (final file in attachments is List ? attachments : const [])
     ?messageImage(file),

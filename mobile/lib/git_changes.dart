@@ -267,6 +267,7 @@ class _GitChangesState extends State<GitChanges>
             initialValue: root,
             key: ValueKey(root),
             isExpanded: true,
+            borderRadius: BorderRadius.circular(16),
             decoration: const InputDecoration(labelText: 'Repository'),
             items: repositories
                 .map(

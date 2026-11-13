@@ -23,6 +23,10 @@ ThemeData auraTheme() => ThemeData(
     surface: panel,
     onSurface: textColor,
     onSurfaceVariant: muted,
+    // Unset, both fall back to onSurface: dividers and outlined buttons would
+    // draw near-white hairlines.
+    outline: Color(0xff7a7484),
+    outlineVariant: Color(0xff45404d),
   ),
   textTheme: const TextTheme(
     bodyLarge: TextStyle(fontSize: 16, height: 1.5, color: textColor),
@@ -56,11 +60,74 @@ ThemeData auraTheme() => ThemeData(
   ),
   dividerColor: muted.withValues(alpha: .12),
   splashFactory: InkSparkle.splashFactory,
-  bottomSheetTheme: const BottomSheetThemeData(
+  bottomSheetTheme: BottomSheetThemeData(
+    backgroundColor: panel,
+    surfaceTintColor: Colors.transparent,
+    dragHandleColor: muted.withValues(alpha: .45),
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+    ),
+  ),
+  // Material defaults are 4 px corners and hairlines: soften every overlay to
+  // the radii of the composer and the sheets.
+  popupMenuTheme: const PopupMenuThemeData(
+    color: panel,
+    surfaceTintColor: Colors.transparent,
+    elevation: 8,
+    shadowColor: Colors.black54,
+    menuPadding: EdgeInsets.symmetric(vertical: 6),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(16)),
+      side: BorderSide(color: Color(0xff45404d)),
+    ),
+  ),
+  tooltipTheme: const TooltipThemeData(
+    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    decoration: BoxDecoration(
+      color: textColor,
+      borderRadius: BorderRadius.all(Radius.circular(10)),
+    ),
+    textStyle: TextStyle(
+      fontSize: 12,
+      height: 1.3,
+      fontWeight: FontWeight.w500,
+      color: ink,
+    ),
+  ),
+  snackBarTheme: const SnackBarThemeData(
+    behavior: SnackBarBehavior.floating,
+    backgroundColor: input,
+    actionTextColor: orchid,
+    elevation: 6,
+    contentTextStyle: TextStyle(fontSize: 14, height: 1.4, color: textColor),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(16)),
+    ),
+  ),
+  dialogTheme: const DialogThemeData(
     backgroundColor: panel,
     surfaceTintColor: Colors.transparent,
     shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      borderRadius: BorderRadius.all(Radius.circular(28)),
+    ),
+  ),
+  checkboxTheme: const CheckboxThemeData(
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(5)),
+    ),
+  ),
+  // Rounded ends for loading bars and spinners, like the rest of the shell.
+  progressIndicatorTheme: const ProgressIndicatorThemeData(
+    linearTrackColor: Color(0xff45404d),
+    borderRadius: BorderRadius.all(Radius.circular(4)),
+    strokeCap: StrokeCap.round,
+  ),
+  expansionTileTheme: const ExpansionTileThemeData(
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(14)),
+    ),
+    collapsedShape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(14)),
     ),
   ),
   inputDecorationTheme: InputDecorationTheme(
@@ -288,7 +355,10 @@ class AuraComposer extends StatelessWidget {
     required this.busy,
     required this.onSend,
     required this.onStop,
-    required this.onOptions,
+    required this.onAttach,
+    this.attachments,
+    this.hasAttachments = false,
+    this.preparing = false,
     this.modelName = 'Modello',
     this.permissionLabel = 'Permessi progetto',
     this.models = const [],
@@ -306,10 +376,15 @@ class AuraComposer extends StatelessWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
   final bool online, busy, allowQueue, showMic, micActive, micBusy;
+
+  /// Draft attachments, shown above the text; [preparing] while images are
+  /// still being resized, which holds sending back.
+  final Widget? attachments;
+  final bool hasAttachments, preparing;
   final String modelName, permissionLabel;
   final List<ComposerChoice> models, permissions;
   final String? selectedModel, selectedPermission;
-  final VoidCallback onSend, onStop, onOptions;
+  final VoidCallback onSend, onStop, onAttach;
   final VoidCallback? onMic;
   final ValueChanged<String>? onModelSelected, onPermissionSelected;
   @override
@@ -317,7 +392,11 @@ class AuraComposer extends StatelessWidget {
     listenable: Listenable.merge([controller, focusNode]),
     builder: (context, _) {
       // While dictating, send means "stop recording and send the transcript".
-      final ready = online && (controller.text.trim().isNotEmpty || micActive);
+      final ready =
+          online &&
+          (micActive ||
+              !preparing &&
+                  (controller.text.trim().isNotEmpty || hasAttachments));
       // Keep every control on the same 40 px footprint: the filled send button
       // used to dwarf the icon-only tools.
       final toolStyle = IconButton.styleFrom(
@@ -331,6 +410,8 @@ class AuraComposer extends StatelessWidget {
             ? 'Trascrizione in corso'
             : micActive
             ? 'Invia dettatura'
+            : preparing
+            ? 'Preparazione immagini…'
             : busy
             ? 'Invia in coda'
             : 'Invia messaggio',
@@ -383,6 +464,7 @@ class AuraComposer extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            ?attachments,
             TextField(
               key: const ValueKey('chat-composer'),
               controller: controller,
@@ -410,8 +492,8 @@ class AuraComposer extends StatelessWidget {
               children: [
                 // Left, as on desktop: attachments and project permissions.
                 IconButton(
-                  tooltip: 'Opzioni chat',
-                  onPressed: onOptions,
+                  tooltip: 'Allega',
+                  onPressed: onAttach,
                   color: muted,
                   style: toolStyle,
                   icon: const Icon(Icons.add_rounded, size: 20),
@@ -482,10 +564,12 @@ class ChatContextLabel extends StatelessWidget {
     this.pc,
     required this.online,
     this.onTap,
+    this.tooltip = 'Cambia PC',
   });
   final String? project, pc;
   final bool online;
   final VoidCallback? onTap;
+  final String tooltip;
   @override
   Widget build(BuildContext context) {
     final projectName = project?.trim() ?? '';
@@ -539,12 +623,13 @@ class ChatContextLabel extends StatelessWidget {
         '$pcName, ${online ? 'collegato' : 'non raggiungibile'}',
       ].join(', '),
       button: onTap != null,
+      hint: onTap == null ? null : tooltip,
       onTap: onTap,
       excludeSemantics: true,
       child: onTap == null
           ? label
           : Tooltip(
-              message: 'Cambia PC',
+              message: tooltip,
               child: InkWell(
                 onTap: onTap,
                 borderRadius: BorderRadius.circular(8),

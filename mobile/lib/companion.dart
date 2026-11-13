@@ -92,6 +92,9 @@ bool liveTurnRunning(Map<String, dynamic>? turn, [int? now]) =>
 /// Desktops from protocol 7 accept `watch`: phone pushes are opt-in per chat.
 const watchProtocol = 7;
 
+/// Desktops from protocol 10 read phone attachments from `attachment_parts`.
+const attachmentProtocol = 10;
+
 /// The open chat is re-signalled at most every 4 minutes; the desktop keeps
 /// its pushes enabled for 30 minutes after the last signal.
 const watchIntervalMs = 240000;
@@ -161,20 +164,51 @@ class Companion {
     String? project,
     String action = 'chat',
     Map<String, dynamic> extra = const {},
+    List<Map<String, dynamic>> attachments = const [],
   }) async {
+    // One document per attachment: a few photos together would exceed the
+    // 1 MiB Firestore document limit.
+    final parts = [for (final _ in attachments) requests(device).doc()];
     final request = requests(device).doc();
-    // A unique request is written once; ambiguous outcomes are never auto-replayed.
-    await request.set({
-      'conversation_id': conversation,
-      'content': content,
-      'new_conversation': newConversation,
-      'project_id': project,
-      'action': action,
-      'created_at': DateTime.now().millisecondsSinceEpoch,
-      'status': 'pending',
-      ...extra,
-    });
+    try {
+      await Future.wait([
+        for (var i = 0; i < parts.length; i++)
+          parts[i].set({
+            'conversation_id': conversation,
+            'content': '',
+            'action': 'attachment',
+            'status': 'attachment',
+            'created_at': DateTime.now().millisecondsSinceEpoch,
+            'attachment': attachments[i],
+          }),
+      ]);
+      // A unique request is written once; ambiguous outcomes are never auto-replayed.
+      await request.set({
+        'conversation_id': conversation,
+        'content': content,
+        'new_conversation': newConversation,
+        'project_id': project,
+        'action': action,
+        'created_at': DateTime.now().millisecondsSinceEpoch,
+        'status': 'pending',
+        if (parts.isNotEmpty)
+          'attachment_parts': [for (final part in parts) part.id],
+        ...extra,
+      });
+    } catch (_) {
+      discardParts(device, [for (final part in parts) part.id]);
+      rethrow;
+    }
     return request.id;
+  }
+
+  /// The PC deletes attachment parts once read; this covers requests it will
+  /// never read. Not awaited: offline deletes complete only on reconnect.
+  void discardParts(String device, Object? ids) {
+    if (ids is! List) return;
+    for (final id in ids.whereType<String>()) {
+      requests(device).doc(id).delete().ignore();
+    }
   }
 
   Future<Map<String, dynamic>> control(
