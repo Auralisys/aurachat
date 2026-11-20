@@ -10,12 +10,14 @@ mod speech;
 mod tts;
 mod media;
 mod project_files;
+mod mentions;
 mod git;
 mod managed_shells;
 mod permissions;
 mod approvals;
 mod agent_runs;
 mod chat_runs;
+mod chat_links;
 mod questions;
 mod companion;
 mod updates;
@@ -82,6 +84,8 @@ pub struct AppState {
     history_save_lock: tauri::async_runtime::Mutex<()>,
     account_lock: tauri::async_runtime::Mutex<()>,
     running_chats: Mutex<std::collections::HashSet<String>>,
+    /// Chats created by the model whose first turn is still ahead or running.
+    spawned_chats: Mutex<std::collections::HashSet<String>>,
     chat_runs: chat_runs::ChatRuns,
     /// Chat currently shown in the focused main window; completion notices are
     /// redundant while the user is looking at it.
@@ -722,7 +726,9 @@ async fn chat_inner(
         intent:history.last().map(|m|m.content.chars().take(16000).collect()).unwrap_or_default(),agent_id:None,cancellation:Some(stop.clone())
     });
     let meter = std::sync::Mutex::new(Usage::default());
-    let completion = llm::chat_completion_steered(&state.client, &base_url, &model, &api_key, &history, project, Some(agent_runs::Runtime{app:app.clone(),owner:uid.clone(),conversation:conversation_id.clone(),execution}), Some(guidance.clone()), Some(&meter), &progress, |mut agent| {
+    // A chat created by the model may not create further chats on its first turn.
+    let spawn_chats = !state.spawned_chats.lock().unwrap().contains(&conversation_id);
+    let completion = llm::chat_completion_steered(&state.client, &base_url, &model, &api_key, &history, project, Some(agent_runs::Runtime{app:app.clone(),owner:uid.clone(),conversation:conversation_id.clone(),execution,spawn_chats}), Some(guidance.clone()), Some(&meter), &progress, |mut agent| {
         agent["conversation_id"] = serde_json::json!(conversation_id);
         let mut events = turn_activity.lock().unwrap();
         let mut stored = agent.clone();stored["kind"] = serde_json::json!("agent");stored["offset"] = content_offset.load(std::sync::atomic::Ordering::Relaxed).into();
@@ -1008,6 +1014,32 @@ async fn project_skills(app:tauri::AppHandle,state:tauri::State<'_,AppState>,pro
     tauri::async_runtime::spawn_blocking(move||context.catalog(include_disabled.unwrap_or(false))).await.map_err(|e|e.to_string())?
 }
 
+/// The folders of a project this device may read: linked by the project and consented to here.
+fn readable_roots(state:&AppState,uid:&str,project_id:&str)->Result<Vec<PathBuf>,String> {
+    let tree=state.data.lock().unwrap();
+    let project=tree.projects.iter().find(|project|project.id==project_id).ok_or("project_not_found")?;
+    let grants=state.folder_access.lock().unwrap().paths(uid,project_id);
+    Ok(project.source_folders.iter().filter(|path|grants.contains(path)).map(PathBuf::from).collect())
+}
+
+/// Autosuggest for `@` in the composer: files of the authorized folders matching `query`.
+#[tauri::command(rename_all = "snake_case")]
+async fn search_project_paths(state:tauri::State<'_,AppState>,project_id:String,query:String)->Result<serde_json::Value,String>{
+    let uid=state.firestore.uid().ok_or("login_required")?;
+    let roots=readable_roots(&state,&uid,&project_id)?;
+    if roots.is_empty() {return Ok(serde_json::json!({"files":[],"truncated":false,"no_folders":true}));}
+    let query=query.chars().take(200).collect::<String>();
+    tauri::async_runtime::spawn_blocking(move||mentions::search(&roots,&query)).await.map_err(|e|e.to_string())
+}
+
+/// Read-only preview for the side panel; refuses anything outside the project's authorized folders.
+#[tauri::command(rename_all = "snake_case")]
+async fn preview_project_path(state:tauri::State<'_,AppState>,project_id:String,path:String)->Result<serde_json::Value,String>{
+    let uid=state.firestore.uid().ok_or("login_required")?;
+    let roots=readable_roots(&state,&uid,&project_id)?;
+    tauri::async_runtime::spawn_blocking(move||mentions::preview(&roots,&path)).await.map_err(|e|e.to_string())?
+}
+
 #[tauri::command(rename_all = "snake_case")]
 async fn set_skill_enabled(app:tauri::AppHandle,state:tauri::State<'_,AppState>,project_id:Option<String>,id:String,enabled:bool)->Result<(),String>{
     let _account=state.account_lock.lock().await;
@@ -1075,40 +1107,55 @@ fn open_external_url(app:tauri::AppHandle, url:String) -> Result<(),String> {
     app.opener().open_url(parsed.as_str(), None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Images and small UTF-8 files are stored in the chat; anything else (binary, too large, or past
+/// the text limits) becomes a link to its absolute path that the model reads itself.
+fn picked_attachment(path: &std::path::Path, bytes: Vec<u8>, texts: &mut (usize, usize)) -> Result<Attachment, String> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    const MAX_PICKED_IMAGE: usize = 20 << 20;
+    const IMAGES: [&str; 5] = ["png","jpg","jpeg","gif","webp"];
+    let name = path.file_name().and_then(|n| n.to_str()).ok_or("invalid_attachments")?.to_string();
+    if let Some(mime) = llm::image_mime(&bytes) {
+        if bytes.len() > MAX_PICKED_IMAGE { return Err("image_too_large".into()); }
+        return Ok(Attachment::image(name, mime, BASE64.encode(&bytes)));
+    }
+    if path.extension().and_then(|e| e.to_str()).is_some_and(|e| IMAGES.contains(&e.to_ascii_lowercase().as_str())) { return Err("image_unreadable".into()); }
+    if bytes.len() <= 131072 && texts.0 < 4 && texts.1 + bytes.len() <= 262144 && !bytes.contains(&0) {
+        if let Ok(text) = String::from_utf8(bytes) {
+            *texts = (texts.0 + 1, texts.1 + text.len());
+            return Ok(Attachment::text(name, text));
+        }
+    }
+    let link = path.to_str().ok_or("invalid_attachments")?;
+    if !llm::valid_link_path(link) { return Err("invalid_attachments".into()); }
+    Ok(Attachment::linked(name, link))
+}
+
 /// Picked images are returned as-is; the UI scales and re-encodes them before sending.
 #[tauri::command]
 async fn choose_chat_files(window:tauri::Window) -> Result<Vec<Attachment>,String> {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
     const MAX_PICKED_IMAGE: usize = 20 << 20;
     const IMAGES: [&str; 5] = ["png","jpg","jpeg","gif","webp"];
     const TEXTS: [&str; 14] = ["txt","md","json","csv","log","js","ts","rs","py","html","css","toml","yaml","yml"];
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::Read;
-        let all = TEXTS.iter().chain(IMAGES.iter()).copied().collect::<Vec<_>>();
+        let both = TEXTS.iter().chain(IMAGES.iter()).copied().collect::<Vec<_>>();
         let paths = window.dialog().file().set_parent(&window)
-            .add_filter("Text and images", &all)
+            .add_filter("All files", &["*"])
+            .add_filter("Text and images", &both)
             .add_filter("Images", &IMAGES)
             .add_filter("Text files", &TEXTS)
             .blocking_pick_files().unwrap_or_default();
         let mut files = Vec::new();
+        let mut texts = (0, 0);
         for path in paths {
             let path = path.into_path().map_err(|e| e.to_string())?;
-            let name = path.file_name().and_then(|n| n.to_str()).ok_or("invalid_attachments")?.to_string();
-            let image_name = path.extension().and_then(|e| e.to_str()).is_some_and(|e| IMAGES.contains(&e.to_ascii_lowercase().as_str()));
             let mut bytes = Vec::new();
             std::fs::File::open(&path).map_err(|e| e.to_string())?.take(MAX_PICKED_IMAGE as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-            if let Some(mime) = llm::image_mime(&bytes) {
-                if bytes.len() > MAX_PICKED_IMAGE { return Err("image_too_large".into()); }
-                files.push(Attachment::image(name, mime, BASE64.encode(&bytes)));
-            } else if image_name {
-                return Err("image_unreadable".into());
-            } else {
-                if bytes.len() > 131072 { return Err("invalid_attachments".into()); }
-                files.push(Attachment::text(name, String::from_utf8(bytes).map_err(|_| "invalid_attachments")?));
-            }
+            files.push(picked_attachment(&path, bytes, &mut texts)?);
         }
         let images = files.iter().filter(|file| file.is_image()).count();
-        if images > llm::MAX_IMAGES || files.len() - images > 4 { return Err("invalid_attachments".into()); }
+        let linked = files.iter().filter(|file| file.is_linked()).count();
+        if images > llm::MAX_IMAGES || linked > llm::MAX_LINKED_FILES { return Err("invalid_attachments".into()); }
         llm::validate_attachments(&files.iter().filter(|file| !file.is_image()).cloned().collect::<Vec<_>>())?;
         Ok(files)
     }).await.map_err(|e| e.to_string())?
@@ -1436,6 +1483,7 @@ pub fn run() {
                 history_save_lock: tauri::async_runtime::Mutex::new(()),
                 account_lock: tauri::async_runtime::Mutex::new(()),
                 running_chats: Mutex::new(std::collections::HashSet::new()),
+                spawned_chats: Mutex::new(std::collections::HashSet::new()),
                 chat_runs: chat_runs::ChatRuns::default(),
                 viewing_chat: Mutex::new(None),
             });
@@ -1499,6 +1547,8 @@ pub fn run() {
             chat,
             set_viewing_chat,
             project_skills,
+            search_project_paths,
+            preview_project_path,
             set_skill_enabled,
             search_skills,
             install_skill,

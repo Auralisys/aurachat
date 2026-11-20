@@ -647,7 +647,11 @@ altrimenti le voci del sistema).
 Il titolo apre le azioni della conversazione e i token stanno nel dettaglio
 contesto. Il pulsante + sceglie fino a quattro file di testo (128 KiB ciascuno,
 256 KiB complessivi) e fino a otto immagini, che si possono anche incollare con
-Ctrl+V; i contenuti partono solo insieme al messaggio inviato.
+Ctrl+V; i contenuti partono solo insieme al messaggio inviato. Qualsiasi altro
+file (PDF, archivi, binari, anche fuori dal progetto) e i testi oltre i limiti si
+allegano **per percorso**: fino a 16 per messaggio, senza copiarli nella chat. Il
+riquadro mostra un chip «solo percorso» e al modello arriva il percorso assoluto,
+che legge con i suoi strumenti solo se serve. Il telefono non può inviarli.
 
 Impostazioni → Voce gestisce Cohere Transcribe INT4 (~2 GB): download da una
 revisione immutabile, controllo SHA-256, interruzione/ripresa e rimozione locale.
@@ -824,6 +828,20 @@ Il pannello conserva il testo progressivo, il reasoning effettivamente restituit
 dal provider, le operazioni e il loro esito. Interrompi agente annulla le richieste
 HTTP in attesa, impedisce nuove operazioni e arresta le sue shell registrate.
 Le attività terminali non vengono riattivate da eventi tardivi.
+
+**Chat create dal modello.** Su richiesta esplicita («apri una nuova chat», «crea
+una chat collegata», «fai un handoff») il modello dispone dello strumento
+`create_chat`: crea nello stesso progetto una chat con titolo e primo messaggio
+suoi e la avvia subito, in parallelo alla chat corrente. Al massimo tre per turno;
+una chat appena creata non ne crea altre nel suo primo turno. Se `linked` è vero la
+nuova chat è **collegata**: nella sidebar compare un'icona a catena e
+nell'intestazione il chip «Collegata a …» riporta alla chat madre (il collegamento
+è solo informativo; il telefono lo ignora). Il passo nella cronologia ha il
+pulsante «Apri chat». Dal menu ⋯ dell'intestazione, «Handoff in una nuova chat» e
+«Handoff in una chat collegata» chiedono al modello di scrivere un riassunto
+autosufficiente (obiettivo, stato, decisioni, file, prossimi passi; usa la skill
+handoff se c'è) e di passarlo direttamente come primo messaggio, senza salvare file.
+Verifica: `desktop/tests/chat-links.cjs` e `chat_links::tests`.
 
 Lo streaming raggruppa gli aggiornamenti per frame e conserva i nodi Markdown
 invariati: selezione del testo, copia del codice e scorrimento orizzontale restano
@@ -1222,6 +1240,23 @@ telefono mostra marker e note in sola lettura; il relay passa al protocollo 9 e 
 controllo remoto invia annotazioni solo a gateway aggiornati
 (`remote_update_required`).
 
+**Dettatura nei commenti.** Ogni commento ha un microfono accanto al cestino
+(`image-annotations.js`): usa la stessa dettatura locale del compositore
+(Cohere Transcribe INT4, `prepare_speech_model`/`transcribe_audio`, pausa e ripresa
+dei media di sistema, limite di 2 minuti, stessi messaggi e stato «Caricamento del
+modello…»). `voice.js` espone la pipeline di cattura (`captureVoice`) con due
+destinazioni: il compositore e un *campo* (`startFieldVoice`/`stopFieldVoice`/
+`cancelFieldVoice`), che occupa lo slot `voice.field` e non tocca `voice.recording`
+né `voice.pending`. Il campo è fissato all'avvio (sessione dell'editor + id del
+commento) e la coda `voice.jobs` resta FIFO e condivisa. Durante la registrazione
+compaiono X (scarta), onda e stop; alla fine il testo entra al cursore del commento,
+separato da spazi e nel limite di 1000 caratteri (se tagliato, avviso nel piede).
+Un solo commento detta alla volta e non in parallelo al microfono del compositore
+(mic disabilitato con tooltip). Esc durante la registrazione o la trascrizione la
+annulla senza chiudere l'editor; chiudere l'editor, eliminare il commento o
+riaprirlo scarta l'audio e il risultato in arrivo non viene scritto da nessuna
+parte. «Salva» resta disabilitato finché la dettatura è attiva, così nessuna
+trascrizione si perde in silenzio.
 **Browser interno.** Il comando del pannello laterale apre le schede a destra
 della chat; il riepilogo rimane indipendente. La larghezza è trascinabile o
 regolabile da tastiera, salvata in `localStorage`. Ogni link nelle risposte o
@@ -1258,6 +1293,8 @@ Una cattura non viene allegata se nel frattempo cambia chat, progetto o account;
 la navigazione durante la cattura viene rifiutata dal backend.
 
 Verifica: `desktop/tests/image-annotations.cjs` (editor, salvataggio e annulla,
+dettatura nei commenti con inserimento al cursore, Esc/X, errore del motore,
+chiusura durante la trascrizione e microfono del compositore invariato,
 argomenti `chat`, visualizzatore, apertura e limiti del pannello, occultamento
 sotto i menu, cattura annotata e annullata, link e indipendenza dal riepilogo),
 `desktop/tests/panel-tabs.cjs` (schede, isolamento, popup, chiusure in corsa,
@@ -1291,6 +1328,19 @@ vista anche quando il composer ha raggiunto l'altezza massima; Invio invia.
 Il modificatore Cmd per l'incolla speciale viene riconosciuto, ma il percorso
 clipboard di WKWebView non e stato verificato su macOS.
 Verifica isolata: `desktop/tests/composer-paste.cjs`.
+
+### Citare file con @
+
+Scrivendo `@` e parte del nome, il composer propone i file delle cartelle del
+progetto (↑ ↓ per scegliere, Invio per citare, Esc per chiudere). La ricerca salta
+`.git`, `node_modules`, cartelle di build e dipendenze, e mostra al massimo 30
+risultati. Il file scelto diventa un chip evidenziato come il testo incollato; clic
+o Invio sul chip, anche nel messaggio inviato, lo apre in anteprima nel pannello
+laterale (sola lettura, solo file nelle cartelle del progetto, testo fino a 256 KB).
+Al modello arriva semplicemente il percorso assoluto nel testo. Senza un progetto
+il composer lo segnala e non propone nulla. Il chip è salvato in `pastes` con
+`kind: "file"`; versioni senza questo campo lo mostrano come blocco incollato.
+Verifica: `desktop/tests/mentions.cjs`.
 
 ## Utilizzo e costo stimato
 

@@ -214,8 +214,6 @@ class _HistoryStep extends StatelessWidget {
     final shellId = _shellId(event);
     return _Disclosure(
       title: '$title${status.isEmpty ? '' : ' · $status'}',
-      initiallyExpanded:
-          live && kind == 'reasoning' && event['status'] == 'running',
       icon: switch (kind) {
         'reasoning' => Icons.psychology_outlined,
         'agent' => Icons.smart_toy_outlined,

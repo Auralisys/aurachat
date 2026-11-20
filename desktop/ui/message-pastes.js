@@ -15,7 +15,7 @@ function messageParts(message) {
   const parts = [];end = 0;
   for (const range of ranges) {
     if (range.start > end) parts.push({text:content.slice(end, range.start)});
-    parts.push({text:content.slice(range.start, range.end), pasted:true});end = range.end;
+    parts.push({text:content.slice(range.start, range.end), pasted:true, ...(range.kind === 'file' ? {kind:'file'} : {})});end = range.end;
   }
   if (end < content.length) parts.push({text:content.slice(end)});
   return parts;
@@ -28,7 +28,10 @@ function composerMessage() {
   const pastes = [];
   for (const part of parts) {
     const start = Math.max(offset, left), end = Math.min(offset + part.text.length, right);
-    if (part.pasted && end > start) pastes.push({start:start - left, end:end - left});
+    if (part.pasted && end > start) {
+      // A mention cut by trimming is no longer a whole path: it stays an ordinary block.
+      pastes.push({start:start - left, end:end - left, ...(part.kind === 'file' && end - start === part.text.length ? {kind:'file'} : {})});
+    }
     offset += part.text.length;
   }
   if (pastes.length > 100) {
@@ -48,7 +51,7 @@ function restoreMessageDraft(message, append = false) {
 }
 
 function messagePreview(message) {
-  return messageParts(message).map(part => part.pasted ? pastedLabel(part.text) : part.text).join(' ');
+  return messageParts(message).map(part => part.kind === 'file' ? pathName(part.text) : part.pasted ? pastedLabel(part.text) : part.text).join(' ');
 }
 
 function pastedLabel(text) {
@@ -59,6 +62,13 @@ function renderMessagePastes(target, message) {
   for (const part of messageParts(message)) {
     if (!part.pasted) {target.append(document.createTextNode(part.text));continue;}
     const chip = document.createElement('button');chip.type = 'button';chip.className = 'paste-token message-paste';
+    if (part.kind === 'file') {
+      chip.classList.add('mention-token');chip.title = part.text;
+      chip.setAttribute('aria-label', `${t('mentions.open')}: ${part.text}`);
+      chip.append(icon('file'), document.createTextNode(pathName(part.text)));
+      chip.onclick = () => openMentionedPath(part.text);
+      target.append(chip);continue;
+    }
     chip.setAttribute('aria-haspopup', 'dialog');chip.setAttribute('aria-label', `${t('chat.open_paste')}: ${pastedLabel(part.text)}`);
     chip.append(icon('file'), document.createTextNode(pastedLabel(part.text)));
     chip.onclick = () => openMessagePaste(part.text, chip);

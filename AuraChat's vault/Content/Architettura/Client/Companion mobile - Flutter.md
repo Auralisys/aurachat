@@ -191,3 +191,63 @@ Tema: dialog 28, menu a tendina 16, checkbox 5, progress arrotondati con traccia
 `ColorScheme.dark()` ricadono su `onSurface` e rendevano quasi bianchi divider e
 bordi dei pulsanti outline. Test: `test/composer_attachments_test.dart`,
 `test/composer_controls_test.dart`, `test/queued_bubble_test.dart`.
+
+## Ragionamenti chiusi e apertura della chat — 20 novembre 2026
+
+**Ragionamenti.** `_HistoryStep` (`lib/turn_history.dart`) non apre più il
+ragionamento in corso: ogni blocco è chiuso di base, nei turni live e in quelli
+salvati. Lo stato aperto è dell'`ExpansionTile` e non viene salvato da nessuna
+parte, quindi rientrando nella chat (la lista viene ricostruita) è tutto chiuso.
+Un aggiornamento live non richiude un blocco aperto dall'utente. Il gruppo
+**Attività** in coda al turno in corso (`_HistoryGroup`, `initiallyExpanded:
+live`) resta aperto finché il turno gira.
+
+**Posizione alla riapertura.** `selectChat` azzera `landingAnchor`; alla prima
+snapshot (`wasLoading`) lo imposta con `lastPromptIndex(messaggi)` (ultimo
+messaggio `role == 'user'`) solo se la chat è a riposo: nessun turno in corso
+(`busy` su questa chat, `liveRunning`), nessuna coda, nessuna guida. La lista è
+`ConversationList` (`lib/chat_scroll.dart`), che atterra una sola volta mentre è
+a opacità 0:
+
+1. scende in fondo finché l'estensione si stabilizza (lista pigra, al massimo 8
+   salti), con `scrollCacheExtent` di 30000 px perché l'ultimo scambio sia
+   costruito;
+2. misura il messaggio ancorato (`GlobalKey` + `getOffsetToReveal`) e calcola
+   `landingOffset`: inizio del prompt, o inizio della risposta se il prompt è più
+   alto del 40% dello schermo, meno 12 px, limitato a `[0, max]`; uno scambio che
+   sta nello schermo finisce quindi in fondo;
+3. salta lì e mostra la lista; senza ancora o con ancora non costruita (scambio
+   oltre ~30000 px) resta in fondo.
+
+Dopo l'atterraggio `ConversationList` non muove più lo scroll. Le snapshot
+successive seguono il fondo solo se `extentAfter < 100` (e `scrollToBottom` non
+parte se era il primo caricamento); i turni live restano a `< 120`; `send()`
+porta in fondo dopo l'invio, diretto o in coda. Non c'è paginazione della
+cronologia sul telefono (`Companion.messages` legge tutto), quindi nessun
+caricamento di messaggi vecchi può far saltare la vista.
+
+Limiti noti: una guida a metà turno conta come ultimo prompt (il messaggio
+salvato non porta il flag `guidance`); all'avvio da notifica i turni live
+possono arrivare dopo la prima snapshot e una chat già in corso atterrare
+sull'ultimo prompt invece che in fondo (nessuno scatto successivo); un blocco
+aperto e poi portato molto fuori dalla cache della lista torna chiuso.
+
+Test: `test/chat_scroll_test.dart` (`lastPromptIndex`, `landingOffset`, risposta
+lunga, prompt alto, scambio corto, nessuna ancora, lista da 300 elementi non
+uniformi, scambio da 40000 px, nessun movimento dopo l'apertura) e
+`test/turn_history_test.dart` (ragionamenti chiusi, aperti a richiesta, chiusi
+di nuovo alla rientrata).
+
+Verifica: `flutter analyze` pulito e 82 test (72 + 10 nuovi). Prova su emulatore
+con la build release e le chat esistenti dell'account di prova, in sola lettura:
+ragionamenti e gruppo Attività chiusi, apertura a mano e di nuovo chiusi dopo
+uscita e rientro; una chat con risposta lunga si apre sull'inizio dell'ultimo
+prompt, una con scambio breve in fondo. Non provati su emulatore (coperti dai
+test): turno in corso e invio di un messaggio.
+
+Durante la prova la build release restava sullo spinner: `pubspec.lock` fissava
+`shared_preferences_android` 2.5.0, che nelle release lancia `NoSuchMethodError`
+su `SharedPreferences.getInstance()` (corretto dalla 2.5.2); senza dispositivi né
+`loading=false` l'app mostrava «Nessun PC». Il lock ora usa la 2.5.4 (con lo SDK
+installato si sono riallineati anche `matcher`, `meta`, `test_api`,
+`vector_math`). Serve una nuova build mobile.

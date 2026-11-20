@@ -34,7 +34,9 @@ function activityItems() {
   const sources = [], links = new Set();
   const fileSource = (id, file, summary) => isImageAttachment(file)
     ? {id, title: file.name, summary, kind: 'image', image: file}
-    : {id, title: file.name, summary, content: file.content, plain: true};
+    : isLinkedAttachment(file)
+      ? {id: `file:${file.path}`, title: file.name, summary: t('activity.linked'), path: file.path}
+      : {id, title: file.name, summary, content: file.content, plain: true};
   state.messages.forEach((message, index) => {
     if (message.role !== 'user') return;
     for (const [fileIndex, file] of (message.attachments || []).entries()) {
@@ -46,7 +48,10 @@ function activityItems() {
   for (const url of links) sources.push({id:`link:${url}`, title:url, summary:t('activity.user_link'), url});
   state.attachments.forEach((file, index) => sources.push(fileSource(`draft-${index}`, file, t('activity.draft'))));
   sources.push(...(record?.sources.values() || []));
-  return { outputs: activityArtifacts(record), agents: [...activityAgentMap().values()], sources, shells: activityShells(record) };
+  // The same linked file can be attached, mentioned and previewed: keep one row, preferring the loaded preview.
+  const uniqueSources = new Map();
+  for (const source of sources) uniqueSources.set(source.id, source);
+  return { outputs: activityArtifacts(record), agents: [...activityAgentMap().values()], sources: [...uniqueSources.values()], shells: activityShells(record) };
 }
 
 // ===== Artifacts =====
@@ -562,6 +567,7 @@ function renderArtifactDetail(content, item) {
 
 function renderReferenceDetail(content, item) {
   if (item.path) content.append(activityText('p', item.path, 'activity-detail-meta'));
+  if (item.note) content.append(activityText('p', item.note, 'activity-empty activity-empty--note'));
   if (item.image) {
     const open = imageThumb([item.image], 0, 'activity-image-open');
     open.querySelector('img').className = 'activity-image';content.append(open);

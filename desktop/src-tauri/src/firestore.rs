@@ -497,7 +497,8 @@ impl Firestore {
         let mut conversation:Conversation=serde_json::from_value(Value::Object(metadata)).map_err(|e|e.to_string())?;
         if let Some(tree)=self.trees.lock().unwrap().get_mut(uid) {
             if let Some(summary)=tree.find_conversation_mut(id) {
-                conversation.title=summary.title.clone();conversation.title_state=summary.title_state.clone();*summary=conversation.clone();
+                conversation.title=summary.title.clone();conversation.title_state=summary.title_state.clone();
+                conversation.linked_from=summary.linked_from.clone();*summary=conversation.clone();
             }
         }
         Ok(conversation)
@@ -1007,7 +1008,7 @@ mod tests {
             let chat_path=format!("{path}/conversations/{id}");
             let outcome:Result<(),String>=async {
                 let mut draft=original.clone();
-                draft.conversations.push(Conversation {id:id.clone(),title:"Temporary CRUD fixture".into(),title_state:None,model:None,messages:vec![],created_at:1,updated_at:1,context_tokens:0,messages_loaded:true,revision:None,usage:Default::default()});
+                draft.conversations.push(Conversation {id:id.clone(),title:"Temporary CRUD fixture".into(),title_state:None,model:None,linked_from:None,messages:vec![],created_at:1,updated_at:1,context_tokens:0,messages_loaded:true,revision:None,usage:Default::default()});
                 client.save_tree(&uid,&auth,&draft).await?;
                 let mut tree=client.cached_tree(&uid).ok_or("missing_draft_cache")?;
                 check(tree.find_conversation(&id).and_then(|c|c.revision.as_ref()).is_some(),"draft revision")?;

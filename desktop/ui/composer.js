@@ -17,7 +17,7 @@ function composerTail(el = composerEl()) {
 function* composerNodes(root = composerEl()) {
   for (const node of root?.childNodes || []) {
     if (node.nodeType === Node.TEXT_NODE) yield {node, text:node.textContent};
-    else if (node.classList?.contains('paste-token')) yield {node, text:JSON.parse(node.dataset.pasteText), pasted:true};
+    else if (node.classList?.contains('paste-token')) yield {node, text:JSON.parse(node.dataset.pasteText), pasted:true, kind:node.dataset.mention};
     else if (node.nodeName === 'BR') {
       // The final BR supplies the empty caret line, not another logical newline.
       if (root !== composerEl() || node !== composerTail(root)) yield {node, text:'\n'};
@@ -31,7 +31,7 @@ function composerText(root = composerEl()) {
 }
 
 function composerParts() {
-  return [...composerNodes()].map(({text, pasted}) => pasted ? {text, pasted:true} : {text});
+  return [...composerNodes()].map(({text, pasted, kind}) => pasted ? {text, pasted:true, ...(kind ? {kind} : {})} : {text});
 }
 
 function composerPastedAt(offset) {
@@ -47,7 +47,7 @@ function setComposerParts(parts) {
   const el = composerEl();
   if (!el) return;
   document.querySelector('.paste-preview[open]')?.close();
-  el.replaceChildren(...parts.map(part => part.pasted ? pastedTextToken(part.text) : document.createTextNode(part.text)));
+  el.replaceChildren(...parts.map(part => !part.pasted ? document.createTextNode(part.text) : part.kind === 'file' ? mentionToken(part.text) : pastedTextToken(part.text)));
   if (el.lastChild?.nodeType === Node.TEXT_NODE && /\r?\n$/.test(el.lastChild.textContent)) el.append(document.createElement('br'));
   placeCaretAtEnd(el);
 }
@@ -261,6 +261,17 @@ function pastedTextToken(text) {
   return token;
 }
 
+// An `@` mention is a paste-like atom whose text is the absolute path: that path is what the model receives.
+function mentionToken(path) {
+  const token = document.createElement('span');
+  token.className = 'paste-token mention-token';token.contentEditable = 'false';token.tabIndex = 0;
+  token.dataset.pasteId = crypto.randomUUID();token.dataset.pasteText = JSON.stringify(path);token.dataset.mention = 'file';
+  token.setAttribute('role', 'button');
+  token.setAttribute('aria-label', `${t('mentions.open')}: ${path}`);token.title = path;
+  token.append(icon('file'), document.createTextNode(pathName(path)));
+  return token;
+}
+
 function insertPastedNode(node) {
   const input = composerEl(), selection = window.getSelection();
   if (!selection?.rangeCount || !input.contains(selection.getRangeAt(0).commonAncestorContainer)) placeCaretAtEnd(input);
@@ -335,15 +346,16 @@ function openPastedText(token) {
 function setupComposerPastes() {
   const input = composerEl();
   input.addEventListener('keydown', armLiteralPaste);
+  const openToken = token => token.dataset.mention ? openMentionedPath(JSON.parse(token.dataset.pasteText)) : openPastedText(token);
   input.addEventListener('click', event => {
     const token = event.target.closest('.paste-token');
-    if (token) openPastedText(token);
+    if (token) openToken(token);
   });
   input.addEventListener('keydown', event => {
     const token = event.target.closest('.paste-token');
     if (!token || event.isComposing) return;
     if (['Enter', ' '].includes(event.key)) {
-      event.preventDefault();event.stopImmediatePropagation();openPastedText(token);
+      event.preventDefault();event.stopImmediatePropagation();openToken(token);
     } else if (['Backspace', 'Delete'].includes(event.key)) {
       event.preventDefault();
       const range = document.createRange();range.selectNode(token);

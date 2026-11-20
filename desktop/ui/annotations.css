@@ -42,8 +42,19 @@
 .annotator__item-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px; }
 .annotator__label { display:inline-flex; align-items:center; gap:8px; font-size:12px; font-weight:600; color:var(--c-text-muted); }
 .annotator__remove { width:26px; height:26px; }
-.annotator__remove .ui-icon { width:15px; height:15px; }
-.annotator__remove:hover { color:var(--c-text); }
+.annotator__remove .ui-icon,.annotator__mic .ui-icon { width:15px; height:15px; }
+.annotator__remove:hover,.annotator__mic:hover:not(:disabled) { color:var(--c-text); }
+.annotator__item-actions { display:inline-flex; align-items:center; gap:2px; }
+.annotator__mic { width:26px; height:26px; }
+.annotator__voice { display:flex; align-items:center; gap:8px; min-width:0; margin-top:6px; }
+.annotator__voice-btn { flex:none; width:28px; height:28px; padding:0; border-radius:var(--radius-full); background:var(--c-hover); color:var(--c-text); }
+.annotator__voice-btn:hover { filter:brightness(1.2); }
+.annotator__voice-btn .ui-icon { width:15px; height:15px; }
+.annotator__voice-wave { flex:1 1 0; width:0; min-width:0; height:32px; color:var(--c-text-muted); }
+.annotator__voice-status:not(.sr-only) { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--c-text-muted); font-size:12px; }
+.annotator__voice-loader { display:none; flex:none; align-items:center; gap:4px; height:28px; }
+.annotator__voice.is-busy .annotator__voice-loader { display:inline-flex; }
+.annotator__voice-loader i { width:5px; height:5px; border-radius:50%; background:var(--c-accent); opacity:.85; }
 .annotator__item textarea { display:block; width:100%; min-height:52px; max-height:160px; padding:7px 9px; resize:vertical; border:1px solid var(--c-soft-border); border-radius:var(--radius-md); background:var(--c-input); font-size:13px; line-height:1.5; }
 .annotator__item textarea:focus-visible { outline-offset:0; border-color:var(--c-glow); }
 .annotator__foot { display:flex; align-items:center; gap:8px; padding:12px 16px; border-top:1px solid var(--c-soft-border); }
@@ -59,6 +70,10 @@
 }
 @media (prefers-reduced-motion:no-preference) {
   .annotator[open] { animation:feedback-arrive var(--motion-state) var(--motion-ease); }
+  .annotator__voice-loader i { animation:voice-dot 1.1s var(--motion-ease, ease-in-out) infinite; }
+  .annotator__voice-loader i:nth-child(2) { animation-delay:.15s; }
+  .annotator__voice-loader i:nth-child(3) { animation-delay:.3s; }
+  .annotator__voice.is-busy .annotator__voice-status { background:linear-gradient(90deg,var(--c-text-muted) 0%,var(--c-text-muted) 40%,var(--c-text) 50%,var(--c-text-muted) 60%,var(--c-text-muted) 100%) 0 0/250% 100%; -webkit-background-clip:text; background-clip:text; color:transparent; animation:voice-shimmer 2.2s linear infinite; }
 }
 @media (prefers-reduced-motion:reduce) { .image-tile__annotate,.annotator__item { transition:none; } }
-@media (forced-colors:active) { .annotation-marker { forced-color-adjust:none; border-color:CanvasText; } }
+@media (forced-colors:active) { .annotation-marker { forced-color-adjust:none; border-color:CanvasText; } .annotator__voice-loader i { background:CanvasText; } }

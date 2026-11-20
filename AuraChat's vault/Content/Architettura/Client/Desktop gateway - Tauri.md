@@ -916,6 +916,8 @@ Verifica: `desktop/tests/image-annotations.cjs`, `desktop/tests/panel-tabs.cjs`,
 `browser::tests` e test LLM su
 validazione, testo per il modello e bridge.
 
+La dettatura locale funziona anche nei commenti delle annotazioni sulle immagini. `voice.js` espone la stessa pipeline di cattura con due destinazioni: il compositore e un campo (`startFieldVoice`/`stopFieldVoice`/`cancelFieldVoice`), fissato all'avvio sull'editor aperto e sull'id del commento. La coda FIFO e il modello restano condivisi. Il testo entra al cursore del commento, nel limite di 1000 caratteri. Esc annulla la registrazione senza chiudere l'editor. Chiudere l'editor scarta audio e risultato in arrivo. «Salva» è disabilitato durante la dettatura. Nessuna modifica al Rust. Test in `tests/image-annotations.cjs`.
+
 Composer (`composer.js`): incolli con più di 20 righe logiche diventano nodi
 atomici `contenteditable=false` con conteggio e anteprima modificabile. Il
 testo letterale è serializzato in un attributo JSON, non interpretato come HTML.
@@ -1024,3 +1026,61 @@ computer e le parti del telefono (al massimo `MAX_IMAGES + 4`, ID univoci, solo
 `status: "attachment"`) e le cancella dopo la lettura. Se `execute` fallisce, le
 parti rimaste vengono scartate (`companion.rs:827`). Test:
 `phone_attachment_parts_are_bounded_unique_and_typed`.
+
+## Citazioni con @ e allegati per percorso — 20 novembre 2026
+
+Richiesta: citare un file del progetto scrivendo `@`, e allegare qualsiasi tipo di
+file senza copiarlo nella chat.
+
+**Citazioni.** Scrivendo `@nome` nel compositore (`mentions.js`) compare una lista
+di suggerimenti (↑ ↓, Invio, Esc). La ricerca è `search_project_paths`
+(`mentions.rs`): scorre solo le cartelle che il progetto può leggere
+(`readable_roots`), salta cartelle di build e dipendenze (`.git`, `node_modules`,
+`target`, …), si ferma a 30.000 voci scansionate e 30 risultati. La scelta inserisce
+un chip evidenziato e atomico come i blocchi incollati, ma con `kind: "file"` in
+`ChatMessage.pastes` (`PasteRange.kind`, retrocompatibile: un tipo sconosciuto diventa
+un normale blocco incollato). Al modello arriva il percorso assoluto nel testo.
+Il chip, anche nella bubble inviata, apre il file nel pannello laterale tramite
+`preview_project_path`: sola lettura, solo dentro le cartelle del progetto, testo
+fino a 256 KB, immagini fino a 5 MB; fuori dal progetto o per file binari mostra
+un avviso e il percorso resta comunque inviato.
+
+**Allegati per percorso.** `choose_chat_files` accetta ogni tipo: immagini e testi
+UTF-8 entro i limiti (128 KB per file, 4 file, 256 KB in totale) restano allegati
+copiati nella chat; tutto il resto, compresi i testi oltre i limiti, diventa
+`Attachment { name, path }` senza contenuto
+(`Attachment.path`, `is_linked`). `validate_attachments` ammette fino a
+`MAX_LINKED_FILES` (16) allegati per percorso con percorso assoluto valido e nessun
+contenuto/immagine/annotazione; altrimenti `invalid_attachments`. `api_messages`
+aggiunge `[Files linked by path…]` con i percorsi: il modello li legge solo se
+serve, con i suoi strumenti. Il relay del telefono rifiuta allegati con `path`
+(il percorso è del computer, non del telefono).
+
+Test: `desktop/tests/mentions.cjs` e unit test in `llm.rs`/`mentions.rs`.
+
+## Chat create dal modello e handoff rapido — 20 novembre 2026
+
+Richiesta: far creare al modello una chat nello stesso progetto, indipendente o
+collegata, e passarle un handoff senza salvarlo su file.
+
+Strumento `create_chat` (`chat_links.rs`), offerto solo ai turni principali con
+`Runtime.spawn_chats` e solo su richiesta esplicita dell'utente (nuova chat, chat
+collegata, handoff). Argomenti: `title` (1–80 caratteri), `message` (testo
+autosufficiente, fino a 100.000 byte), `linked` opzionale. Al massimo tre chat per
+turno. `create` prende `history_save_lock`, inserisce la chat nello stesso progetto
+della chat madre (o tra le libere), con modello copiato e `title_state: "manual"`,
+salva l'albero su Firestore, aggiorna `state.data` ed emette `companion-started`;
+poi avvia `run_chat` con `message` come primo messaggio in un task in background
+e restituisce `{chat_id, title, linked, status}`. Le chat create non offrono a
+loro volta `create_chat` durante il primo turno (`AppState.spawned_chats`),
+così non si formano catene automatiche.
+
+`Conversation.linked_from` (opzionale, solo informativo) conserva l'id della chat
+madre per le chat collegate; entra nel riepilogo dell'albero (`storage_tree`) e
+sopravvive ai salvataggi della UI e a `load_conversation`. Il telefono ignora il
+campo. UI: icona a catena nella sidebar, chip «Collegata a …» nell'intestazione,
+pulsante «Apri chat» nel passo `create_chat` della cronologia e, nel menu opzioni
+della chat, «Handoff in una nuova chat» / «Handoff in una chat collegata», che
+inviano un prompt preimpostato localizzato (il modello scrive l'handoff, usa la
+skill se disponibile, chiama `create_chat`). Test: `desktop/tests/chat-links.cjs` e
+`chat_links::tests`.

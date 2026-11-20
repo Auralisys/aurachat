@@ -2,7 +2,7 @@
 const progressMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 function progressIcon(item) {
-  const name = item?.action === 'ask_user' ? 'MessageCircle' : item?.action === 'read_image' ? 'ScanEye' : item?.kind === 'approval' ? 'ShieldCheck' : item?.kind === 'agent' ? 'Bot' : item?.kind === 'reasoning' ? 'Brain' : /search/.test(item?.action) ? 'Search' : /write|edit/.test(item?.action) ? 'FilePenLine' : /read/.test(item?.action) ? 'FileText' : /list/.test(item?.action) ? 'FolderSearch' : 'Terminal';
+  const name = item?.action === 'ask_user' ? 'MessageCircle' : item?.action === 'create_chat' ? 'MessageSquarePlus' : item?.action === 'read_image' ? 'ScanEye' : item?.kind === 'approval' ? 'ShieldCheck' : item?.kind === 'agent' ? 'Bot' : item?.kind === 'reasoning' ? 'Brain' : /search/.test(item?.action) ? 'Search' : /write|edit/.test(item?.action) ? 'FilePenLine' : /read/.test(item?.action) ? 'FileText' : /list/.test(item?.action) ? 'FolderSearch' : 'Terminal';
   return lucide.createElement(lucide.icons[name], {class:'ui-icon', 'aria-hidden':'true'});
 }
 
@@ -10,8 +10,32 @@ function progressLabel(item) {
   if (item.kind === 'approval') return `${approvalLabel(item)}${item.action?.path ? ` · ${item.action.path}` : ''}`;
   if (item.kind === 'agent') return item.title || t('activity.agent');
   if (item.kind === 'reasoning') return t('progress.reasoned');
+  if (item.action === 'create_chat' && typeof item.arguments?.title === 'string') return `${t('progress.create_chat')} · ${item.arguments.title}`;
   const key = `progress.${item.action}`;
   return `${t(key) === key ? item.action || t('progress.command') : t(key)}${item.path ? ` · ${item.path}` : ''}`;
+}
+
+// A chat created by the model stays reachable from the step that created it.
+function createdChatId(item) {
+  if (item?.action !== 'create_chat' || !item.output) return null;
+  try {
+    const id = JSON.parse(item.output).chat_id;
+    return typeof id === 'string' && findConversation(id) ? id : null;
+  } catch (_) {return null;}
+}
+
+function updateCreatedChatLink(row, item) {
+  const summary = row.firstElementChild, id = createdChatId(item);
+  let button = summary.querySelector(':scope > .turn-step__open');
+  if (!id) {button?.remove();return;}
+  if (!button) {
+    button = document.createElement('button');button.type = 'button';button.className = 'turn-step__open';
+    button.append(icon('forward'),document.createElement('span'));
+    button.lastElementChild.textContent = t('chat.open_created');
+    summary.insertBefore(button,summary.querySelector('.turn-step__status'));
+  }
+  button.dataset.chatId = id;
+  button.onclick = event => {event.preventDefault();event.stopPropagation();showView('chat');openConversation(id);};
 }
 
 function reconcileChildren(parent, nodes) {
@@ -50,6 +74,7 @@ function updateProgressRow(row, original, live, last) {
     } else if (body.textContent !== text) body.textContent = text;
     if (row.open) body._follow?.sync();
     updateToolImages(row, item);
+    updateCreatedChatLink(row, item);
 }
 
 function reasoningPreview(text, live) {

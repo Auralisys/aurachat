@@ -12,6 +12,7 @@ function reportViewingChat(id) {
 }
 
 let skillsChooser = null;
+let mentionsChooser = null;
 
 const DEFAULT_CONFIG = {
   firebase_project_id: '',
@@ -314,7 +315,7 @@ function icon(name) {
     }
     return svg;
   }
-  const glyph = {computer:'Monitor', gear:'Settings', person:'UserRound', cpu:'Cpu', microphone:'Mic', search:'Search', back:'ArrowLeft', trash:'Trash2', compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', image:'Image', fileCode:'FileCode', fileData:'FileJson', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown', globe:'Globe', external:'ExternalLink', forward:'ArrowRight', reload:'RotateCw', capture:'MessageSquarePlus', summary:'List', panelRight:'PanelRight', expand:'Maximize2', restore:'Minimize2', git:'GitBranch', sources:'Files'}[name];
+  const glyph = {computer:'Monitor', gear:'Settings', person:'UserRound', cpu:'Cpu', microphone:'Mic', search:'Search', back:'ArrowLeft', trash:'Trash2', compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', image:'Image', fileCode:'FileCode', fileData:'FileJson', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown', globe:'Globe', external:'ExternalLink', forward:'ArrowRight', reload:'RotateCw', capture:'MessageSquarePlus', summary:'List', panelRight:'PanelRight', expand:'Maximize2', restore:'Minimize2', git:'GitBranch', sources:'Files', link:'Link2', handoff:'ArrowRightLeft'}[name];
   if (glyph && lucide.icons[glyph]) return lucide.createElement(lucide.icons[glyph], {class:'ui-icon','aria-hidden':'true'});
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
@@ -528,6 +529,23 @@ function projectEl(project) {
   el.appendChild(chats);return el;
 }
 
+function linkedParent(conv) {
+  return conv?.linked_from ? findConversation(conv.linked_from)?.conversation || null : null;
+}
+
+function linkedLabel(parent) {
+  return t('chat.linked_from').replace('{title}', parent.title || t('sidebar.new_chat'));
+}
+
+function linkedChatIcon(conv) {
+  const parent = linkedParent(conv);
+  if (!parent) return null;
+  const mark = document.createElement('span');mark.className = 'linked-chat';
+  const label = linkedLabel(parent);
+  mark.title = label;mark.setAttribute('role','img');mark.setAttribute('aria-label',label);mark.append(icon('link'));
+  return mark;
+}
+
 function conversationEl(conv, section) {
   const el = document.createElement('div');
   const active = conv.id === state.activeConversationId && section === state.activeConversationSection;
@@ -535,6 +553,8 @@ function conversationEl(conv, section) {
   el.dataset.conversationId = conv.id;
   const computer = remoteComputerIcon(conv.id);
   if (computer) el.append(computer);
+  const linked = linkedChatIcon(conv);
+  if (linked) el.append(linked);
   const title = document.createElement('span');
   title.className = 'tree-conv__title';
   title.tabIndex = 0;
@@ -1181,7 +1201,7 @@ function messageEl(m, index) {
   if (m.content || m.activity?.length) el.appendChild(text);
   if (files.length) {
     const attachments = document.createElement('div');attachments.className = 'message-attachments';
-    for (const file of files) {const chip = document.createElement('span');chip.className = 'attachment-chip';chip.append(icon('file'),document.createTextNode(file.name));attachments.appendChild(chip);}
+    for (const file of files) attachments.appendChild(isLinkedAttachment(file) ? linkedAttachmentChip(file) : attachmentChip(file));
     el.appendChild(attachments);
   }
   const actions = document.createElement('div');actions.className = 'msg-actions';
@@ -1262,6 +1282,15 @@ function renderMessages() {
   $('#conversation-remote')?.remove();
   const computer = remoteComputerIcon(state.activeConversationId);
   if (computer) {computer.id = 'conversation-remote';$('#conversation-title').before(computer);}
+  $('#conversation-link')?.remove();
+  const parent = linkedParent(activeConversation()?.conversation);
+  if (parent) {
+    const chip = document.createElement('button');chip.id = 'conversation-link';chip.type = 'button';chip.className = 'chat-link';
+    const text = document.createElement('span');text.textContent = linkedLabel(parent);
+    chip.title = text.textContent;chip.append(icon('link'),text);
+    chip.onclick = () => openConversation(parent.id);
+    $('#conversation-title').after(chip);
+  }
   $('#conversation-options').disabled = !state.activeConversationId || state.busy || queuedTurns.preparing.has(state.activeConversationId);
   renderThinkingStatus();
   if (empty) {
@@ -1418,7 +1447,7 @@ function updateComposerControls() {
   const label = t(busy ? 'chat.queue_send' : 'titlebar.send');
   send.setAttribute('aria-label', label);
   send.title = label;
-  skillsChooser?.sync();
+  skillsChooser?.sync();mentionsChooser?.sync();
 }
 
 function canStartRequest(id) {
@@ -1544,6 +1573,16 @@ async function send() {
 
 function composerStatus(message = '') {$('#composer-status').textContent=message;$('#composer-status').hidden=!message;}
 
+// Quick handoff: the model writes the summary and creates the chat itself, so nothing is saved to a file.
+async function startHandoff(linked) {
+  const id = state.activeConversationId;
+  if (!id || !state.messages.length || state.queues.get(id)?.length || !canStartRequest(id)) return;
+  const message = {content:t(linked ? 'chat.handoff_prompt_linked' : 'chat.handoff_prompt'), attachments:[], edit_index:null};
+  state.queues.set(id,[message]);
+  chatScroll.follow();renderSidebar();
+  await flushQueue(id);
+}
+
 function renderDraft() {
   renderActivity();
   const list = $('#composer-attachments');list.replaceChildren();
@@ -1562,11 +1601,13 @@ function renderDraft() {
   }
   for (const file of state.attachments) {
     if (isImageAttachment(file)) continue;
-    const chip=document.createElement('span');chip.className='attachment-chip';
-    const name=document.createElement('span');name.textContent=file.name;
-    chip.append(icon('file'),name,messageAction('close','chat.remove_attachment',remove(file)));list.appendChild(chip);
+    const chip = isLinkedAttachment(file) ? linkedAttachmentChip(file) : attachmentChip(file);
+    chip.append(messageAction('close','chat.remove_attachment',remove(file)));list.appendChild(chip);
   }
-  list.hidden=!state.attachments.length && !pending;$('#attachment-note').hidden=!state.attachments.length;
+  list.hidden=!state.attachments.length && !pending;
+  // Linked files are not copied into the chat: only their path reaches the model.
+  $('#attachment-note').hidden=!state.attachments.some(file=>!isLinkedAttachment(file));
+  $('#linked-note').hidden=!state.attachments.some(isLinkedAttachment);
   $('#editing-message').hidden=state.editingMessageIndex===null;updateComposerControls();
 }
 
@@ -1586,9 +1627,10 @@ async function attachFiles() {
   try {
     const files=await invoke('choose_chat_files');
     images = files.filter(isImageAttachment);
-    const next=[...state.attachments,...files.filter(file=>!isImageAttachment(file))];
-    const texts=next.filter(file=>!isImageAttachment(file));
-    if(texts.length>4 || texts.reduce((sum,file)=>sum+new TextEncoder().encode(file.content).length,0)>262144) throw new Error('invalid_attachments');
+    const known=new Set(state.attachments.filter(isLinkedAttachment).map(file=>file.path));
+    const next=[...state.attachments,...files.filter(file=>!isImageAttachment(file)&&!(isLinkedAttachment(file)&&known.has(file.path)))];
+    const texts=next.filter(file=>!isImageAttachment(file)&&!isLinkedAttachment(file));
+    if(next.filter(isLinkedAttachment).length>16 || texts.length>4 || texts.reduce((sum,file)=>sum+new TextEncoder().encode(file.content).length,0)>262144) throw new Error('invalid_attachments');
     state.attachments=next;renderDraft();
   } catch(e){composerStatus(localizeError(e));}
   finally{$('#composer-attach').disabled=false;}
@@ -1642,6 +1684,8 @@ function setupComposerExtras() {
     showTreeMenu($('.chat-header'),options,found.conversation.title,[
       ['rename','sidebar.rename',()=>renameInline($('#conversation-title'),found.conversation.title,name=>{renameConversation(found.conversation.id,name);renderMessages();})],
       ['copy','chat.copy_conversation',()=>copyText(state.messages.map(m=>`${m.role === 'user' ? t('chat.you') : t('chat.assistant')}:\n${m.content}`).join('\n\n'))],
+      ['handoff','chat.handoff_new',()=>startHandoff(false),!state.messages.length],
+      ['link','chat.handoff_linked',()=>startHandoff(true),!state.messages.length],
       ['delete','sidebar.delete',()=>deleteConversation(found.conversation.id)],
     ]);
   };
@@ -1769,7 +1813,7 @@ function populateProjectMenu() {
   refreshPermissions();
   const project = state.data.projects.find(p => p.id === state.pendingProjectId);
   if (!project) state.pendingProjectId = null;
-  skillsChooser?.sync();
+  skillsChooser?.sync();mentionsChooser?.sync();
   $('#project-name').textContent = project?.name || t('chat.no_project');
   const menu = $('#project-menu');
   const choose = id => {
@@ -2160,6 +2204,7 @@ async function init() {
   // Composer
   setupComposerPastes();
   skillsChooser = setupProjectSkills();
+  mentionsChooser = setupFileMentions();
   const input = $('#composer-input');
   input.addEventListener('input', () => {autoGrow();updateComposerControls();});
   // Chromium leaves a <br> after deleting everything, which defeats :empty; mutating the content would break undo.

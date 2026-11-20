@@ -1,9 +1,18 @@
-// Annotazioni sulle immagini e browser interno: editor, invio, visore, cattura della pagina e link della chat.
+// Annotazioni sulle immagini e browser interno: editor, dettatura nei commenti, invio, visore, cattura della pagina e link della chat.
 const {chromium}=require('playwright');
-const {readFileSync}=require('node:fs');const {resolve}=require('node:path');const {pathToFileURL}=require('node:url');const assert=require('node:assert/strict');
+const {readFileSync,mkdirSync}=require('node:fs');const {resolve,extname}=require('node:path');const http=require('node:http');const assert=require('node:assert/strict');
 const PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 (async()=>{
-  const browser=await chromium.launch({channel:'msedge',headless:true});
+  // Servita via HTTP: l'AudioWorklet della dettatura non si carica da file://.
+  const root=resolve(__dirname,'../ui');
+  const server=http.createServer((req,res)=>{
+    try{const path=resolve(root,'.'+decodeURIComponent(req.url.split('?')[0]));if(!path.startsWith(root))throw Error();
+      const file=req.url==='/'?resolve(root,'index.html'):path;
+      res.setHeader('Content-Type',({'.js':'text/javascript','.html':'text/html','.css':'text/css','.json':'application/json','.svg':'image/svg+xml'})[extname(file)]||'application/octet-stream');res.end(readFileSync(file));
+    }catch(_){res.statusCode=404;res.end();}
+  });
+  await new Promise(r=>server.listen(0,'127.0.0.1',r));
+  const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream','--autoplay-policy=no-user-gesture-required']});
   const page=await browser.newPage({viewport:{width:1400,height:900}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
   const locales=JSON.parse(readFileSync(resolve(__dirname,'../ui/locales/it.json'),'utf8'));
   await page.addInitScript(({locales,PNG})=>{
@@ -16,7 +25,14 @@ const PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADh
       window.__calls.push({cmd,args:structuredClone(args)});
       if(cmd==='get_locale')return JSON.stringify(locales);
       if(['get_config','get_local_config'].includes(cmd))return config;
-      if(cmd==='speech_model_status')return {ready:true,busy:false,loading:false,loaded:true,downloaded:1,total:1};
+      if(cmd==='speech_model_status')return window.__noModel?{ready:false,busy:false,loading:false,loaded:false,downloaded:0,total:1000}:{ready:true,busy:false,loading:false,loaded:true,downloaded:1,total:1};
+      if(cmd==='pause_dictation_media'){window.__paused=(window.__paused||0)+1;return;}
+      if(cmd==='resume_dictation_media'){window.__resumed=(window.__resumed||0)+1;return;}
+      if(cmd==='transcribe_audio'){
+        if(window.__transcribeError){window.__transcribeError=false;throw 'speech_engine: test failure';}
+        if(window.__delayTranscript)return new Promise(resolve=>window.__finishTranscript=()=>{window.__finishTranscript=null;resolve('test dettatura');});
+        return 'test dettatura';
+      }
       if(['get_data','refresh_data'].includes(cmd))return structuredClone(window.__data);
       if(cmd==='list_shells')return [];if(cmd==='get_conversation')return {...structuredClone(conversation(args.conversation_id)),messages_loaded:true};if(cmd==='save_data'){window.__data=structuredClone(args.data);return structuredClone(window.__data);}
       if(cmd==='browser_open'){const url=args.url.includes('://')?args.url:`https://${args.url}/`;return {url,capture:true};}
@@ -32,7 +48,7 @@ const PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADh
       }
     }}};
   },{locales,PNG});
-  await page.goto(pathToFileURL(resolve(__dirname,'../ui/index.html')).href);await page.locator('#boot-splash').waitFor({state:'hidden'});
+  await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.locator('#boot-splash').waitFor({state:'hidden'});
   const row=id=>page.locator(`#recent-chats [data-conversation-id="${id}"]`);
   const open=async id=>{await row(id).locator('.tree-conv__title').click();await page.waitForFunction(id=>state.activeConversationId===id&&!state.loadingConversation,id);};
   const paste=name=>page.evaluate(([name,PNG])=>{
@@ -81,6 +97,110 @@ const PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADh
   await page.keyboard.press('Escape');
   await page.waitForFunction(()=>!document.querySelector('dialog.annotator').open);
   assert.equal(await page.evaluate(()=>state.attachments[0].annotation.comments[0].text),'Ingrandisci il titolo');
+
+  // Dettatura nei commenti: stessa pipeline del compositore, ma il testo arriva solo nel commento scelto.
+  const item=n=>annotator.locator('.annotator__item').nth(n);
+  const texts=()=>annotator.evaluate(dialog=>dialog._comments.map(comment=>comment.text));
+  const focused=()=>page.evaluate(()=>({tag:document.activeElement.tagName,cls:document.activeElement.className,comment:document.activeElement.closest('[data-comment]')?.dataset.comment}));
+  const recordField=async n=>{await item(n).locator('.annotator__mic').click();await page.waitForFunction(()=>voice.field?.recording?.count>4000);};
+  const transcriptions=async()=>(await calls('transcribe_audio')).length;
+  const mediaBack=()=>page.waitForFunction(()=>window.__paused>0&&window.__resumed===window.__paused);
+  await tiles.first().locator('.image-tile__annotate').click();await annotator.waitFor();
+  await page.mouse.click(box.x+box.width*0.7,box.y+box.height*0.7);await page.keyboard.type('ab cd');
+  await item(1).locator('textarea').evaluate(el=>{el.focus();el.setSelectionRange(2,2);});
+  await recordField(1);
+  assert.equal(await item(1).locator('.annotator__voice').isVisible(),true);
+  assert.equal(await item(1).locator('.annotator__mic').isHidden(),true);
+  assert.equal(await item(0).locator('.annotator__mic').isDisabled(),true,'un solo commento detta alla volta');
+  assert.equal(await page.locator('#composer-mic').isDisabled(),true,'il compositore non registra insieme al commento');
+  assert.equal(await annotator.locator('.annotator__save').isDisabled(),true,'salvare perderebbe la trascrizione in arrivo');
+  assert.equal(await annotator.locator('.annotator__status').textContent(),locales['annotations.dictation_wait']);
+  assert.equal(await page.evaluate(()=>window.__paused),1);
+  assert.equal((await focused()).cls.includes('annotator__voice-stop'),true);
+  const shots=resolve(__dirname,'../../.artifact/chat-alignment');mkdirSync(shots,{recursive:true});
+  await page.screenshot({path:resolve(shots,'annotator-dictation-recording.png')});
+  await page.evaluate(()=>window.__delayTranscript=true);
+  await item(1).locator('.annotator__voice-stop').click();await page.waitForFunction(()=>window.__finishTranscript);
+  await page.screenshot({path:resolve(shots,'annotator-dictation-transcribing.png')});
+  assert.equal(await item(1).locator('.annotator__voice-status').textContent(),locales['voice.transcribing']);
+  assert.equal((await texts())[1],'ab cd');
+  await page.evaluate(()=>{window.__delayTranscript=false;window.__finishTranscript();});
+  await page.waitForFunction(()=>document.querySelectorAll('.annotator__item textarea')[1].value.includes('dettatura'));
+  assert.deepEqual(await texts(),['Ingrandisci il titolo','ab test dettatura cd']);
+  assert.equal(await item(1).locator('.annotator__voice').isHidden(),true);
+  assert.equal(await annotator.locator('.annotator__save').isEnabled(),true);
+  assert.deepEqual(await item(1).locator('textarea').evaluate(el=>[document.activeElement===el,el.selectionStart,el.selectionEnd]),[true,17,17]);
+  assert.equal((await page.locator('#composer-input').textContent()).trim(),'','la trascrizione non finisce nel compositore');
+  await mediaBack();
+
+  // Esc durante la registrazione la annulla senza chiudere l'annotatore; X scarta allo stesso modo.
+  const sent0=await transcriptions();
+  await recordField(0);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(()=>!voice.field);
+  assert.equal(await annotator.evaluate(dialog=>dialog.open),true);
+  assert.equal(await item(0).locator('.annotator__voice').isHidden(),true);
+  assert.deepEqual(await focused(),{tag:'TEXTAREA',cls:'',comment:await item(0).getAttribute('data-comment')});
+  await recordField(0);
+  await item(0).locator('.annotator__voice-cancel').click();
+  await page.waitForFunction(()=>!voice.field);
+  await mediaBack();
+  assert.equal(await transcriptions(),sent0,'l\'audio scartato non arriva al motore');
+  assert.equal((await texts())[0],'Ingrandisci il titolo');
+  assert.equal(await page.evaluate(()=>window.__paused),3);
+
+  // Un errore del motore compare nel piede e non tocca il testo.
+  await page.evaluate(()=>window.__transcribeError=true);
+  await recordField(0);await item(0).locator('.annotator__voice-stop').click();
+  await page.waitForFunction(label=>document.querySelector('.annotator__status').textContent===label,locales['voice.error']);
+  assert.equal((await texts())[0],'Ingrandisci il titolo');
+  await item(0).locator('textarea').press('End');await page.keyboard.type('!');
+  assert.equal(await annotator.locator('.annotator__status').textContent(),'');
+  await item(0).locator('textarea').fill('Ingrandisci il titolo');
+
+  // Chiuso l'annotatore durante la trascrizione, il risultato non entra nemmeno nel commento riaperto con lo stesso id.
+  await page.evaluate(()=>window.__delayTranscript=true);
+  await recordField(0);await item(0).locator('.annotator__voice-stop').click();await page.waitForFunction(()=>window.__finishTranscript);
+  await annotator.locator('.annotator__cancel').click();
+  await page.waitForFunction(()=>!document.querySelector('dialog.annotator').open);
+  assert.deepEqual(await page.evaluate(()=>[!!voice.field,voice.jobs.filter(job=>!job.cancelled).length]),[false,0]);
+  await tiles.first().locator('.image-tile__annotate').click();await annotator.waitFor();
+  assert.equal(await item(0).locator('.annotator__voice').isHidden(),true);
+  assert.equal(await item(0).locator('.annotator__mic').isEnabled(),true);
+  await page.evaluate(()=>{window.__delayTranscript=false;window.__finishTranscript();});
+  await page.waitForFunction(()=>!voice.jobs.length&&!voice.transcribing);
+  assert.deepEqual(await texts(),['Ingrandisci il titolo']);
+  assert.equal(await page.evaluate(()=>state.attachments[0].annotation.comments[0].text),'Ingrandisci il titolo');
+  await annotator.locator('.annotator__cancel').click();
+  await page.waitForFunction(()=>!document.querySelector('dialog.annotator').open);
+
+  // Modello in caricamento o assente: stessi stati e messaggi del compositore.
+  await tiles.first().locator('.image-tile__annotate').click();await annotator.waitFor();
+  await page.evaluate(()=>{voice.loading=true;voiceUi();});
+  assert.equal(await item(0).locator('.annotator__mic').isDisabled(),true);
+  assert.equal(await item(0).locator('.annotator__mic').getAttribute('title'),locales['voice.loading_model']);
+  await page.evaluate(()=>{voice.loading=false;voiceUi();});
+  assert.equal(await item(0).locator('.annotator__mic').isEnabled(),true);
+  await page.evaluate(()=>window.__noModel=true);
+  const pausedBefore=await page.evaluate(()=>window.__paused);
+  await item(0).locator('.annotator__mic').click();
+  await page.waitForFunction(label=>document.querySelector('.annotator__status').textContent===label,locales['voice.speech_model_missing']);
+  assert.deepEqual(await page.evaluate(()=>[!!voice.field,window.__paused]),[false,pausedBefore]);
+  await page.evaluate(()=>window.__noModel=false);
+  await annotator.locator('.annotator__cancel').click();
+  await page.waitForFunction(()=>!document.querySelector('dialog.annotator').open);
+  // Il microfono del compositore resta com'era; mentre registra, i commenti non possono dettare.
+  await page.click('#composer-mic');await page.locator('#voice-stop').waitFor({state:'visible'});await page.waitForFunction(()=>voice.recording?.count>4000);
+  await tiles.first().locator('.image-tile__annotate').click();await annotator.waitFor();
+  assert.equal(await item(0).locator('.annotator__mic').isDisabled(),true);
+  assert.match(await item(0).locator('.annotator__mic').getAttribute('aria-label'),new RegExp(locales['annotations.dictate_busy'].replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+  await annotator.locator('.annotator__cancel').click();
+  await page.waitForFunction(()=>!document.querySelector('dialog.annotator').open);
+  await page.click('#voice-stop');
+  await page.waitForFunction(()=>document.querySelector('#composer-input').textContent.includes('test dettatura'));
+  assert.deepEqual(await page.evaluate(()=>[voice.jobs.length,voice.field]),[0,null]);
+  await page.fill('#composer-input','');
+  assert.equal(await annotator.evaluate(dialog=>dialog.open),false);
 
   // L'invio porta id e annotazione; il visore mostra marker e note.
   await page.fill('#composer-input','Sistema questo');await page.click('#composer-send');
@@ -188,6 +308,6 @@ const PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADh
   assert.equal(await page.evaluate(()=>state.attachments.length),attachmentsBeforeLogout);
   assert.equal(await page.locator('dialog.annotator[open]').count(),0);
   assert.deepEqual(errors,[]);
-  await browser.close();
+  await browser.close();server.close();
   console.log('image annotations and browser ok');
 })().catch(error=>{console.error(error);process.exit(1);});

@@ -391,3 +391,49 @@ Verifica: `flutter analyze` pulito, 72 test widget/unitari, 137 test Rust
 (9 ignorati) e screenshot di widget a 412×892 di chat, foglio Allega, limite
 immagini, visualizzatore file e dialog. Nessuna prova su emulatore, occupato da
 un'altra sessione. Serve una nuova build mobile e desktop.
+
+## Ragionamenti chiusi e apertura della chat — 20 novembre 2026
+
+**Ragionamenti.** Ogni blocco di ragionamento è chiuso di base, anche quello in
+corso e quelli dei turni già salvati; si apre con un tocco. Lo stato aperto non
+si conserva: uscendo e rientrando nella chat (o cambiandola) sono di nuovo tutti
+chiusi, mentre un aggiornamento live non richiude quello che hai aperto. Il
+gruppo **Attività** in coda al turno in corso resta aperto finché il turno gira
+(`lib/turn_history.dart`).
+
+**Dove si apre una chat.** Una sola regola, applicata una volta quando la lista
+viene costruita (`ConversationList`, `lib/chat_scroll.dart`):
+
+- chat a riposo, cioè senza turno in corso, in attesa o in coda: si apre
+  sull'inizio dell'ultimo scambio (l'ultimo messaggio dell'utente); se quel
+  prompt occupa più del 40% dello schermo si apre invece sull'inizio della
+  risposta;
+- scambio che sta nello schermo, turno in corso/in attesa/in coda, oppure
+  scambio più alto di circa 30000 px: si apre in fondo, come prima;
+- dopo l'atterraggio non ci sono movimenti automatici: snapshot e turni live
+  seguono il fondo solo se sei già in fondo; inviare un messaggio (anche in
+  coda) porta in fondo.
+
+La lista resta trasparente per i pochi fotogrammi che servono a misurare e
+posizionarsi, così non si vede il salto. Il telefono legge tutti i messaggi in un
+solo flusso, senza paginazione: non esiste un caricamento di messaggi più vecchi
+che possa spostare lo scroll. Un messaggio inviato come guida a metà turno vale
+come ultimo prompt: il messaggio salvato non porta il flag `guidance`.
+
+Test: `test/chat_scroll_test.dart` (regola, risposta lunga, prompt alto,
+scambio corto, lista pigra da 300 elementi, scambio enorme, nessun movimento
+dopo l'apertura) e `test/turn_history_test.dart` (ragionamenti chiusi, aperti a
+richiesta, di nuovo chiusi alla rientrata).
+
+Verifica: `flutter analyze` pulito e 82 test widget/unitari (72 + 10 nuovi).
+Prova sull'emulatore con la build release e le chat esistenti dell'account di
+prova, solo in lettura: ragionamenti e gruppo Attività chiusi, apertura a mano e
+di nuovo chiusi dopo essere usciti e rientrati; una chat con risposta lunga si
+apre sull'inizio dell'ultimo prompt, una con scambio breve in fondo. Non provati
+sull'emulatore (coperti dai test): turno in corso, invio di un messaggio.
+
+Durante la prova la build release non andava oltre lo spinner: `pubspec.lock`
+fissava `shared_preferences_android` 2.5.0, che nelle release lancia
+`NoSuchMethodError` su `SharedPreferences.getInstance()` (corretto dalla 2.5.2).
+Il lock ora usa la 2.5.4, e con lo SDK installato si sono riallineati anche
+`matcher`, `meta`, `test_api` e `vector_math`. Serve una nuova build mobile.

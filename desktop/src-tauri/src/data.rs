@@ -87,6 +87,9 @@ pub struct Conversation {
     pub title_state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Chat from which the model created this one; the link is informational and never shares history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_from: Option<String>,
     #[serde(default)]
     pub messages: Vec<ChatMessage>,
     pub created_at: u64,
@@ -175,6 +178,7 @@ impl ChatData {
                 "updated_at":c.updated_at,"context_tokens":c.context_tokens});
             if let Some(model) = &c.model { summary["model"] = json!(model); }
             if let Some(state) = &c.title_state { summary["title_state"] = json!(state); }
+            if let Some(parent) = &c.linked_from { summary["linked_from"] = json!(parent); }
             if conversations.insert(c.id.clone(), summary).is_some() { return Err("duplicate_conversation_id".into()); }
         }
         Ok(json!({"schema_version":2,"projects":projects,"project_order":self.projects.iter().map(|p| &p.id).collect::<Vec<_>>(),
@@ -263,7 +267,7 @@ mod tests {
         assert!(data.conversations.is_empty());
         data.conversations.push(Conversation {
             id: "personal".into(), title: "Chat".into(), title_state: None, messages: vec![],
-            created_at: 0, updated_at: 0, context_tokens: 0,
+            created_at: 0, updated_at: 0, context_tokens: 0, linked_from: None,
             model: None, messages_loaded:true, revision:None, usage: Default::default(),
         });
         data.find_conversation_mut("personal").unwrap().title = "Saved".into();
@@ -311,5 +315,21 @@ mod tests {
         assert!(!restored.find_conversation("c").unwrap().messages_loaded);
         let mut invalid=stored;invalid["standalone_conversation_ids"]=serde_json::json!(["c"]);
         assert!(ChatData::from_storage(invalid).is_err());
+    }
+
+    #[test]
+    fn chat_link_survives_the_metadata_index() {
+        let mut full:ChatData=serde_json::from_value(serde_json::json!({"projects":[{"id":"p","name":"P","source_folders":[],"conversations":[
+            {"id":"parent","title":"Parent","created_at":1,"updated_at":1,"context_tokens":0},
+            {"id":"child","title":"Child","created_at":2,"updated_at":2,"context_tokens":0,"linked_from":"parent"}]}],"conversations":[]})).unwrap();
+        let stored=full.storage_tree().unwrap();
+        assert_eq!(stored["conversations"]["child"]["linked_from"],"parent");
+        assert!(stored["conversations"]["parent"].get("linked_from").is_none());
+        let restored=ChatData::from_storage(stored.clone()).unwrap();
+        assert_eq!(restored.find_conversation("child").unwrap().linked_from.as_deref(),Some("parent"));
+        assert_eq!(restored.storage_tree().unwrap(),stored);
+        full.find_conversation_mut("child").unwrap().title="Renamed".into();
+        let rebased=ChatData::rebase(&restored,&full,&restored).unwrap();
+        assert_eq!(rebased.find_conversation("child").unwrap().linked_from.as_deref(),Some("parent"));
     }
 }

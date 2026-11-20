@@ -1,8 +1,11 @@
-const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: null, capture: null, mediaOperation: null, transcribing: false, jobs: [], worker: null, downloading: false, loading: false, loaded: false, ttsDownloading: false, nativeOperation: null, conversationId: null };
+// `field` is a dictation aimed at a text field outside the composer (e.g. an image comment): at most one
+// at a time, sharing the microphone, the model and the FIFO of `jobs` with the composer. Its jobs carry
+// `field` (the target) instead of a conversation, so composer code must ignore them.
+const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: null, capture: null, mediaOperation: null, transcribing: false, jobs: [], worker: null, downloading: false, loading: false, loaded: false, ttsDownloading: false, nativeOperation: null, conversationId: null, field: null };
 
 function voiceBusy(id) {
   return ((voice.pending || voice.recording) && voice.conversationId === id)
-    || voice.jobs.some(job => !job.cancelled && job.conversationId === id);
+    || voice.jobs.some(job => !job.field && !job.cancelled && job.conversationId === id);
 }
 
 async function speechRequest(command, args) {
@@ -103,15 +106,15 @@ async function warmSpeechModel() {
 
 function voiceUi(message = '') {
   const mic = $('#composer-mic');
-  const job = voice.jobs.find(job => !job.cancelled && job.conversationId === state.activeConversationId);
+  const job = voice.jobs.find(job => !job.field && !job.cancelled && job.conversationId === state.activeConversationId);
   const transcribing = !!job && !voice.recording && !voice.pending;
-  const finishing = !!(voice.mediaOperation || (voice.nativeOperation && voice.nativeOperation.command !== 'transcribe_audio')) && !voice.pending && !transcribing && !voice.recording;
+  const finishing = !!((voice.mediaOperation && !voice.mediaOperation.forField) || (voice.nativeOperation && voice.nativeOperation.command !== 'transcribe_audio')) && !voice.pending && !voice.field && !transcribing && !voice.recording;
   const active = !!voice.recording || voice.pending || transcribing || finishing;
   const loading = voice.loading;
   mic.hidden = active;
   $('.composer__toolbar .model-select').hidden = active;
   $('#composer-attach').hidden = active;
-  mic.disabled = active || loading || state.preparing || state.loadingConversation || queuedTurns.preparing.has(state.activeConversationId);
+  mic.disabled = active || loading || !!voice.field || state.preparing || state.loadingConversation || queuedTurns.preparing.has(state.activeConversationId);
   mic.classList.toggle('is-loading', loading);
   mic.setAttribute('aria-pressed', String(!!voice.recording));
   const label = t(voice.recording ? 'voice.stop' : loading ? 'voice.loading_model' : 'chat.dictate');
@@ -133,6 +136,7 @@ function voiceUi(message = '') {
   updateComposerControls();
   if (active && !voice.frame) drawVoiceWave();
   if (!active) { cancelAnimationFrame(voice.frame); voice.frame = null; }
+  syncAnnotatorVoice();
 }
 
 function releaseRecording(recording) {
@@ -145,10 +149,11 @@ function releaseRecording(recording) {
   const operation = recording.release = (async () => {
     if (await recording.mediaPause) {
       try { await invoke('resume_dictation_media', {id:recording.mediaId}); }
-      catch (error) { console.error('Dictation media resume failed', error);composerStatus(t('voice.media_error')); }
+      catch (error) { console.error('Dictation media resume failed', error);(recording.report || composerStatus)(t('voice.media_error')); }
     }
   })();
   voice.mediaOperation = operation;
+  operation.forField = !!recording.field;
   operation.finally(() => {
     if (voice.mediaOperation === operation) {voice.mediaOperation = null;voiceUi();}
   });
@@ -156,13 +161,16 @@ function releaseRecording(recording) {
 }
 
 function cancelVoice(all = false) {
-  voice.epoch++;
+  if (all) cancelFieldVoice();
+  // A composer cancel must leave a live field dictation (which owns `capture`) alone.
+  if (all || !voice.field || voice.recording || voice.pending) voice.epoch++;
   if (all || (!voice.recording && !voice.pending)) {
     for (const job of voice.jobs) {
-      if (all || job.conversationId === state.activeConversationId) job.cancelled = true;
+      if (all || (!job.field && job.conversationId === state.activeConversationId)) job.cancelled = true;
     }
   }
-  const released = voice.recording || voice.capture ? releaseRecording(voice.recording || voice.capture) : voice.mediaOperation;
+  const own = voice.recording || (voice.capture?.field ? null : voice.capture);
+  const released = own ? releaseRecording(own) : voice.mediaOperation;
   voice.recording = null; voice.pending = false; voice.conversationId = null;
   if ($('#voice-recording')) voiceUi();
   return released;
@@ -182,8 +190,8 @@ function speechSamples(chunks, rate) {
   return Array.from(output);
 }
 
-function drawVoiceWave() {
-  const canvas = $('#voice-waveform'), rect = canvas.getBoundingClientRect();
+function paintWave(canvas) {
+  const rect = canvas.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
   canvas.width = Math.max(1, Math.round(rect.width * ratio)); canvas.height = 32 * ratio;
   const ctx = canvas.getContext('2d'); ctx.scale(ratio, ratio);
@@ -195,41 +203,32 @@ function drawVoiceWave() {
     const height = Math.max(2, Math.min(26, value * 26));
     ctx.beginPath(); ctx.roundRect(i * 5, (32 - height)/2, 2, height, 1); ctx.fill();
   }
+}
+
+function drawVoiceWave() {
+  paintWave($('#voice-waveform'));
   voice.frame = requestAnimationFrame(drawVoiceWave);
 }
 
-async function startVoice() {
-  if (voice.pending || voice.loading || (voice.nativeOperation && voice.nativeOperation.command !== 'transcribe_audio') || voice.mediaOperation || state.preparing || state.loadingConversation || queuedTurns.preparing.has(state.activeConversationId)) return;
-  if (voice.recording) return stopVoice();
-  if (voice.jobs.length >= 8) {composerStatus(t('voice.queue_full'));return;}
-  const epoch = ++voice.epoch;
-  voice.conversationId = state.activeConversationId;
-  voice.pending = true; voiceUi(t('voice.preparing'));
-  let recording;
+// Shared by the composer and field dictation: checks the model, loads it, opens the microphone and
+// starts capturing. `extra` is merged into the recording; `ui` holds the target-specific reactions
+// (progress, report, missing, live). Resolves quietly when refused or superseded; throws on failure,
+// with the microphone already released.
+async function captureVoice(epoch, extra, ui) {
+  const owner = state.config.firebase_email;
+  const status = await invoke('speech_model_status');
+  if (epoch !== voice.epoch) return;
+  if (status?.busy && !voice.transcribing) { ui.report(t('voice.speech_busy')); return; }
+  if (!status?.ready) { ui.missing(status); return; }
+  ui.progress(t('voice.loading_model'));
+  if (!voice.transcribing) await speechRequest('prepare_speech_model');
+  voice.loaded = true;
+  if (epoch !== voice.epoch) return;
+  ui.progress(t('voice.preparing'));
+  voice.waveform = [];
+  const recording = { chunks: [], count: 0, waveEnergy: 0, waveSamples: 0, epoch, owner, language:lang, report:ui.report, ...extra };
+  voice.capture = recording;
   try {
-    if (!voice.conversationId) {
-      const draft = {text:composerText(), attachments:structuredClone(state.attachments), editing:state.editingMessageIndex};
-      await ensureConversation();
-      if (epoch !== voice.epoch || !state.activeConversationId) return;
-      voice.conversationId = state.activeConversationId;
-      state.drafts.set(voice.conversationId,draft);restoreChatDraft(voice.conversationId);
-    }
-    const conversationId = voice.conversationId;
-    const owner = state.config.firebase_email;
-    const status = await invoke('speech_model_status');
-    if (epoch !== voice.epoch) return;
-    if (status?.busy && !voice.transcribing) { composerStatus(t('voice.speech_busy')); return; }
-    if (!status?.ready) {
-      openSettings(); selectSettingsTab('voice'); renderSpeechModel(status); return;
-    }
-    voiceUi(t('voice.loading_model'));
-    if (!voice.transcribing) await speechRequest('prepare_speech_model');
-    voice.loaded = true;
-    if (epoch !== voice.epoch) return;
-    voiceUi(t('voice.preparing'));
-    voice.waveform = [];
-    recording = { chunks: [], count: 0, waveEnergy: 0, waveSamples: 0, epoch, conversationId, owner, language:lang };
-    voice.capture = recording;
     recording.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false });
     if (epoch !== voice.epoch) { releaseRecording(recording); return; }
     recording.context = new AudioContext({ sampleRate: 16000 });
@@ -256,18 +255,65 @@ async function startVoice() {
     };
     recording.mediaId = crypto.randomUUID();
     recording.mediaPause = invoke('pause_dictation_media', {id:recording.mediaId}).then(() => true, error => {
-      console.error('Dictation media pause failed', error);composerStatus(t('voice.media_error'));return false;
+      console.error('Dictation media pause failed', error);recording.report(t('voice.media_error'));return false;
     });
     await recording.mediaPause;
     if (epoch !== voice.epoch) { await releaseRecording(recording);return; }
     recording.source.connect(recording.node); recording.node.connect(recording.context.destination);
     await recording.context.resume();
     if (epoch !== voice.epoch) { releaseRecording(recording); return; }
-    voice.recording = recording;
-    recording.timer = setTimeout(() => stopVoice(false), 120000);
-    voice.pending = false; voiceUi(t('voice.recording'));
+    ui.live(recording);
   } catch (error) {
-    if (recording) releaseRecording(recording);
+    releaseRecording(recording);
+    throw error;
+  }
+}
+
+// Stops feeding `recording` and turns what was captured into the samples of `job`.
+async function finishRecording(recording, job) {
+  try {
+    await new Promise(resolve => {
+      const timeout = setTimeout(resolve, 300);
+      recording.flushed = () => { clearTimeout(timeout); resolve(); };
+      recording.node.port.postMessage('flush');
+    });
+    await releaseRecording(recording);
+    job.samples = speechSamples(recording.chunks, recording.context.sampleRate);
+    recording.chunks = [];
+  } catch (error) {
+    await releaseRecording(recording);
+    job.error = error;
+  } finally {
+    job.ready = true;
+  }
+}
+
+async function startVoice() {
+  if (voice.pending || voice.field || voice.loading || (voice.nativeOperation && voice.nativeOperation.command !== 'transcribe_audio') || voice.mediaOperation || state.preparing || state.loadingConversation || queuedTurns.preparing.has(state.activeConversationId)) return;
+  if (voice.recording) return stopVoice();
+  if (voice.jobs.length >= 8) {composerStatus(t('voice.queue_full'));return;}
+  const epoch = ++voice.epoch;
+  voice.conversationId = state.activeConversationId;
+  voice.pending = true; voiceUi(t('voice.preparing'));
+  try {
+    if (!voice.conversationId) {
+      const draft = {text:composerText(), attachments:structuredClone(state.attachments), editing:state.editingMessageIndex};
+      await ensureConversation();
+      if (epoch !== voice.epoch || !state.activeConversationId) return;
+      voice.conversationId = state.activeConversationId;
+      state.drafts.set(voice.conversationId,draft);restoreChatDraft(voice.conversationId);
+    }
+    await captureVoice(epoch, {conversationId:voice.conversationId}, {
+      progress: voiceUi,
+      report: composerStatus,
+      missing: status => { openSettings(); selectSettingsTab('voice'); renderSpeechModel(status); },
+      live: recording => {
+        voice.recording = recording;
+        recording.timer = setTimeout(() => stopVoice(false), 120000);
+        voice.pending = false; voiceUi(t('voice.recording'));
+      }
+    });
+  } catch (error) {
     voice.conversationId = null;
     if (epoch === voice.epoch) composerStatus(voiceError(error));
   } finally {
@@ -290,23 +336,77 @@ async function stopVoice(sendAfter = false) {
     }
   }
   voice.recording = null;voiceUi(t('voice.transcribing'));
-  try {
-    await new Promise(resolve => {
-      const timeout = setTimeout(resolve, 300);
-      recording.flushed = () => { clearTimeout(timeout); resolve(); };
-      recording.node.port.postMessage('flush');
-    });
-    await releaseRecording(recording);
-    job.samples = speechSamples(recording.chunks, recording.context.sampleRate);
-    recording.chunks = [];
-  } catch (error) {
-    await releaseRecording(recording);
-    job.error = error;
-  } finally {
-    job.ready = true;
+  try { await finishRecording(recording, job); }
+  finally {
     if (voice.conversationId === conversationId && !voice.recording && !voice.pending) voice.conversationId = null;
     drainTranscriptions();
   }
+}
+
+// What stops a field dictation from starting: 'composer' (the composer owns the microphone),
+// 'busy' (another field or a cancelled operation is finishing) or 'loading' (model warm-up).
+function fieldVoiceBlocker() {
+  if (voice.pending || voice.recording) return 'composer';
+  if (voice.field || voice.mediaOperation || (voice.nativeOperation && voice.nativeOperation.command !== 'transcribe_audio')) return 'busy';
+  return voice.loading ? 'loading' : null;
+}
+
+// 'preparing' | 'recording' | 'queued' | 'transcribing' for the first field target matching `matches`.
+function fieldVoicePhase(matches) {
+  if (voice.field && matches(voice.field.target)) return voice.field.recording ? 'recording' : 'preparing';
+  const job = voice.jobs.find(job => job.field && !job.cancelled && matches(job.field));
+  return job ? (job === voice.jobs[0] ? 'transcribing' : 'queued') : null;
+}
+
+// `target`: {valid(), status(message), insert(text)}. The destination is pinned here: the result is
+// inserted only while `valid()` still holds, never into whatever is current when it arrives.
+async function startFieldVoice(target) {
+  if (fieldVoiceBlocker()) return;
+  if (voice.jobs.length >= 8) { target.status(t('voice.queue_full')); return; }
+  const epoch = ++voice.epoch, field = voice.field = {target, epoch, recording:null, message:t('voice.preparing')};
+  voiceUi();
+  try {
+    await captureVoice(epoch, {field:target}, {
+      progress: message => { field.message = message; voiceUi(); },
+      report: message => target.status(message),
+      missing: status => { renderSpeechModel(status); target.status(t('voice.speech_model_missing')); },
+      live: recording => {
+        field.recording = recording;
+        recording.timer = setTimeout(stopFieldVoice, 120000);
+        voiceUi();
+      }
+    });
+  } catch (error) {
+    if (epoch === voice.epoch) target.status(voiceError(error));
+  } finally {
+    if (voice.field === field && !field.recording) voice.field = null;
+    voiceUi();
+  }
+}
+
+async function stopFieldVoice() {
+  const recording = voice.field?.recording;
+  if (!recording) return;
+  const job = {field:recording.field, owner:recording.owner, language:recording.language, cancelled:false, samples:null};
+  voice.jobs.push(job);voice.transcribing = true;
+  voice.field = null;voiceUi();
+  try { await finishRecording(recording, job); }
+  finally { drainTranscriptions(); }
+}
+
+// Discards the recording and the queued or running audio of every field target accepted by `matches`.
+function cancelFieldVoice(matches = () => true) {
+  for (const job of voice.jobs) if (job.field && matches(job.field)) job.cancelled = true;
+  const field = voice.field;
+  let released = voice.mediaOperation;
+  if (field && matches(field.target)) {
+    voice.epoch++;
+    const recording = field.recording || (voice.capture?.field === field.target ? voice.capture : null);
+    if (recording) released = releaseRecording(recording);
+    voice.field = null;
+  }
+  voiceUi();
+  return released;
 }
 
 function restoreVoiceDraft(job) {
@@ -322,11 +422,33 @@ function restoreVoiceDraft(job) {
   if (job.conversationId === state.activeConversationId) restoreChatDraft(job.conversationId);
 }
 
+// A field job never reaches the engine once cancelled, and its text is dropped unless the target is
+// still valid when the transcript arrives.
+async function drainFieldJob(job) {
+  const target = job.field, stale = () => job.cancelled || job.owner !== state.config.firebase_email || !target.valid();
+  try {
+    if (stale()) return;
+    if (job.error) throw job.error;
+    const text = await speechRequest('transcribe_audio', {samples:job.samples,language:job.language});
+    if (stale()) return;
+    if (!text?.trim()) throw 'speech_silence';
+    target.insert(text.trim());
+  } catch (error) {
+    console.error('Dictation failed',error);
+    if (!stale()) target.status(voiceError(error));
+  } finally {
+    job.samples = null;
+    voice.jobs.shift();voice.transcribing = voice.jobs.length > 0;
+    voiceUi();
+  }
+}
+
 function drainTranscriptions() {
   if (voice.worker) return;
   voice.worker = (async () => {
     while (voice.jobs[0]?.ready) {
       const job = voice.jobs[0], id = job.conversationId;
+      if (job.field) { await drainFieldJob(job); continue; }
       try {
         if (job.cancelled || job.owner !== state.config.firebase_email || !findConversation(id)) {
           restoreVoiceDraft(job);continue;

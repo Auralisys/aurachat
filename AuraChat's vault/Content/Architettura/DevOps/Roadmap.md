@@ -186,3 +186,14 @@ iOS: creata via CLI l'app Firebase `com.ridney.aurachat` e aggiunto
 all'appId Android usato su iOS. Restano chiave APNs, capability Push e verifica
 su dispositivo reale. Per provare modifiche al gateway va ricompilato e
 riavviato il desktop, non solo l'app mobile.
+
+## Citazioni, allegati per percorso, chat collegate — 20 novembre 2026
+
+Desktop: `@` nel composer cita file e cartelle del progetto (chip cliccabile che
+apre l'anteprima nel pannello laterale; al modello arriva il percorso assoluto),
+qualsiasi file allegabile (immagini e testo restano copiati nella chat, il resto
+è collegato per percorso), dettatura vocale anche nei commenti delle annotazioni
+immagine, tool `create_chat` per chat indipendenti o collegate alla chat madre e
+handoff rapido dal menu della chat senza salvare file. Mobile: reasoning chiuso
+di default e apertura della chat sull'inizio dell'ultimo scambio. Dettagli in
+[[Desktop gateway - Tauri]] e [[Companion mobile - Flutter]].

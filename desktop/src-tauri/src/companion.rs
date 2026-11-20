@@ -973,7 +973,7 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
             let now=data::now_millis();
             let model=request["model"].as_str().map(str::to_string);
             if let Some(model)=&model {if !crate::load_user_cached(&state,auth,uid).await?.models.contains_key(model){return Err("model_not_found".into());}}
-            let conversation=Conversation{id:id.into(),title:crate::truncate_title(content),title_state:None,model,messages:vec![],created_at:now,updated_at:now,context_tokens:0,messages_loaded:true,revision:None,usage:Default::default()};
+            let conversation=Conversation{id:id.into(),title:crate::truncate_title(content),title_state:None,model,linked_from:None,messages:vec![],created_at:now,updated_at:now,context_tokens:0,messages_loaded:true,revision:None,usage:Default::default()};
             if let Some(project)=request["project_id"].as_str().filter(|p|!p.is_empty()) {
                 tree.projects.iter_mut().find(|p|p.id==project).ok_or("project_not_found")?.conversations.push(conversation);
             }else{tree.conversations.push(conversation);}
@@ -1004,6 +1004,8 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
 async fn request_attachments(state:&AppState,auth:&FirestoreAuth,uid:&str,request:&Value)->Result<Vec<crate::llm::Attachment>,String>{
     let mut attachments:Vec<crate::llm::Attachment>=request.get("attachments").filter(|v|!v.is_null()).cloned()
         .map(serde_json::from_value).transpose().map_err(|e|e.to_string())?.unwrap_or_default();
+    // A path link is a desktop-only feature: a relayed request never names files of this computer.
+    if attachments.iter().any(|file|file.is_linked()) {return Err("invalid_attachments".into());}
     let parts=attachment_part_ids(request)?;
     if parts.is_empty() {return Ok(attachments);}
     let (device,_)=identity();
@@ -1043,7 +1045,7 @@ fn attachment_part_ids(request:&Value)->Result<Vec<&str>,String>{
 
 fn part_attachment(doc:&Value)->Result<crate::llm::Attachment,String>{
     if doc["status"]!="attachment" {return Err("invalid_attachments".into());}
-    serde_json::from_value(doc["attachment"].clone()).map_err(|_|"invalid_attachments".to_string())
+    serde_json::from_value::<crate::llm::Attachment>(doc["attachment"].clone()).ok().filter(|file|!file.is_linked()).ok_or_else(||"invalid_attachments".to_string())
 }
 
 fn shell_recap(mut shells:Vec<crate::managed_shells::Snapshot>)->Value {

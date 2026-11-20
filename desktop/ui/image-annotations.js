@@ -125,8 +125,18 @@ function createAnnotator() {
   dialog.querySelector('.annotator__close').onclick = () => closeAnnotator(undefined);
   dialog.querySelector('.annotator__cancel').onclick = () => closeAnnotator(undefined);
   dialog.querySelector('.annotator__save').onclick = () => closeAnnotator(buildAnnotation(dialog._comments, dialog._size, dialog._meta));
-  dialog.addEventListener('cancel', event => {event.preventDefault();closeAnnotator(undefined);});
+  dialog._session = 0;dialog._voicePhases = new Map();dialog._voiceMessage = '';dialog._waveFrame = null;
+  // Escape first drops a dictation (recording, transcript, or both), and only then the annotator.
+  dialog.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || event.defaultPrevented || !dialog._voicePhases.size) return;
+    event.preventDefault();cancelAnnotatorDictation(dialog);
+  });
+  dialog.addEventListener('cancel', event => {
+    event.preventDefault();
+    if (dialog._voicePhases.size) cancelAnnotatorDictation(dialog); else closeAnnotator(undefined);
+  });
   dialog.addEventListener('close', () => {
+    cancelAnnotatorDictation(dialog);
     dialog.querySelector('.annotator__image').removeAttribute('src');
     const resolve = dialog._resolve;dialog._resolve = null;resolve?.(dialog._result);
     if (dialog._opener?.isConnected) dialog._opener.focus();
@@ -137,6 +147,7 @@ function createAnnotator() {
 
 function closeAnnotator(result) {
   if (!annotator?.open) return;
+  cancelAnnotatorDictation(annotator);
   annotator._result = result;annotator.close();
 }
 
@@ -154,6 +165,7 @@ function setAnnotatorStatus(text = '') { annotator.querySelector('.annotator__st
 function removeAnnotatorComment(id) {
   const dialog = annotator, index = dialog._comments.findIndex(comment => comment.id === id);
   if (index < 0) return;
+  cancelAnnotatorDictation(dialog, id);
   dialog._comments.splice(index, 1);renderAnnotator();
   const next = dialog._comments[Math.min(index, dialog._comments.length - 1)];
   (next ? dialog.querySelector(`.annotator__markers [data-id="${next.id}"]`) : dialog.querySelector('.annotator__save'))?.focus();
@@ -218,27 +230,132 @@ function renderAnnotator() {
     const remove = document.createElement('button');remove.type = 'button';remove.className = 'icon-button annotator__remove';
     remove.setAttribute('aria-label', `${t('annotations.remove')} ${number}`);remove.title = t('annotations.remove');
     remove.append(annotationIcon('Trash2'));remove.onclick = () => removeAnnotatorComment(comment.id);
+    const mic = document.createElement('button');mic.type = 'button';mic.className = 'icon-button annotator__mic';
+    mic.append(icon('mic'));mic.onclick = () => startAnnotatorDictation(dialog, comment.id);
     const field = document.createElement('textarea');field.id = id;field.rows = 2;field.maxLength = ANNOTATION_LIMIT.text;
     field.placeholder = t('annotations.placeholder');field.value = comment.text;
-    field.oninput = () => {comment.text = field.value;updateAnnotatorSave();};
+    field.oninput = () => {comment.text = field.value;dialog._voiceMessage = '';updateAnnotatorSave();};
     field.onkeydown = event => {
       if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {event.preventDefault();dialog.querySelector('.annotator__save').click();}
     };
     for (const [type, on] of [['focus', true], ['blur', false]]) field.addEventListener(type, () => highlightAnnotatorComment(comment.id, on));
-    const top = document.createElement('div');top.className = 'annotator__item-head';top.append(label, remove);
-    item.append(top, field);list.append(item);
+    const actions = document.createElement('span');actions.className = 'annotator__item-actions';actions.append(mic, remove);
+    const top = document.createElement('div');top.className = 'annotator__item-head';top.append(label, actions);
+    item.append(top, field, annotatorVoiceStrip(dialog, comment.id));list.append(item);
   });
   dialog.querySelector('.annotator__hint').textContent = comments.length ? t('annotations.hint_more') : t('annotations.hint');
-  setAnnotatorStatus();updateAnnotatorSave();
+  syncAnnotatorVoice();updateAnnotatorSave();
 }
 
 function updateAnnotatorSave() {
   const dialog = annotator, filled = dialog._comments.filter(comment => comment.text.trim()).length;
-  const empty = dialog._comments.length - filled;
-  setAnnotatorStatus(empty ? t('annotations.empty_dropped') : '');
+  const empty = dialog._comments.length - filled, dictating = dialog._voicePhases.size > 0;
+  setAnnotatorStatus(dialog._voiceMessage || (dictating ? t('annotations.dictation_wait') : empty ? t('annotations.empty_dropped') : ''));
   const save = dialog.querySelector('.annotator__save');
+  // Saving would drop a transcript that is still on its way: wait for it, or cancel it.
   // A capture can be attached without comments; an image needs a change to save.
-  save.disabled = dialog._meta.source !== 'browser' && !filled && !annotationComments(dialog._file).length;
+  save.disabled = dictating || (dialog._meta.source !== 'browser' && !filled && !annotationComments(dialog._file).length);
+}
+
+// ===== Dictation in comments =====
+// The pipeline is voice.js's field dictation. A target pins one comment of one open session of the
+// dialog: a transcript arriving after the dialog closed, reopened or lost the comment is dropped.
+function annotatorVoiceTarget(dialog, commentId) {
+  const session = dialog._session;
+  const live = () => annotator === dialog && dialog.open && dialog._session === session && dialog._comments.some(comment => comment.id === commentId);
+  return {
+    dialog, commentId, valid: live,
+    status(message) { if (live()) {dialog._voiceMessage = message;updateAnnotatorSave();} },
+    insert(text) { if (live()) insertAnnotatorDictation(dialog, commentId, text); }
+  };
+}
+
+function annotatorVoiceMatcher(dialog, commentId) {
+  return target => target.dialog === dialog && (commentId === undefined || target.commentId === commentId);
+}
+
+function cancelAnnotatorDictation(dialog, commentId) {
+  return cancelFieldVoice(annotatorVoiceMatcher(dialog, commentId));
+}
+
+function startAnnotatorDictation(dialog, commentId) {
+  dialog._voiceMessage = '';updateAnnotatorSave();
+  return startFieldVoice(annotatorVoiceTarget(dialog, commentId));
+}
+
+// Inserts at the caret (after a selection), spaced from the surrounding text and within the length limit.
+function insertAnnotatorDictation(dialog, commentId, text) {
+  const comment = dialog._comments.find(comment => comment.id === commentId);
+  const field = dialog.querySelector(`[data-comment="${commentId}"] textarea`);
+  if (!comment || !field) return;
+  const value = field.value, at = Math.min(field.selectionEnd ?? value.length, value.length);
+  const lead = at && !/\s$/.test(value.slice(0, at)) ? ' ' : '', trail = at < value.length && !/^\s/.test(value.slice(at)) ? ' ' : '';
+  const room = ANNOTATION_LIMIT.text - value.length, insertion = `${lead}${text}${trail}`;
+  if (room > 0) {
+    field.setRangeText(insertion.slice(0, room), at, at, 'end');
+    field.dispatchEvent(new Event('input', {bubbles:true}));
+  }
+  if (insertion.length > room) {dialog._voiceMessage = t('annotations.text_limit');updateAnnotatorSave();}
+}
+
+function annotatorVoiceStrip(dialog, commentId) {
+  const strip = document.createElement('div');strip.className = 'annotator__voice';strip.hidden = true;
+  const button = (name, label, action) => {
+    const element = document.createElement('button');element.type = 'button';element.className = `icon-button annotator__voice-btn annotator__voice-${name}`;
+    element.setAttribute('aria-label', t(label));element.title = t(label);element.append(icon(name === 'stop' ? 'stop' : 'close'));
+    element.onclick = action;
+    return element;
+  };
+  const loader = document.createElement('span');loader.className = 'annotator__voice-loader';loader.setAttribute('aria-hidden', 'true');
+  loader.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
+  const status = document.createElement('span');status.className = 'annotator__voice-status';status.setAttribute('role', 'status');
+  const wave = document.createElement('canvas');wave.className = 'annotator__voice-wave';wave.height = 32;wave.setAttribute('aria-hidden', 'true');
+  strip.append(button('cancel', 'voice.cancel', () => cancelAnnotatorDictation(dialog, commentId)), loader, status, wave, button('stop', 'voice.stop', () => stopFieldVoice()));
+  return strip;
+}
+
+function paintAnnotatorWave(dialog) {
+  const canvas = dialog.open && dialog.querySelector('.annotator__voice.is-recording canvas');
+  if (!canvas) {dialog._waveFrame = null;return;}
+  paintWave(canvas);
+  dialog._waveFrame = requestAnimationFrame(() => paintAnnotatorWave(dialog));
+}
+
+// Mirrors the shared dictation state onto the comment list; called by voiceUi() on every change.
+function syncAnnotatorVoice() {
+  const dialog = annotator;
+  if (!dialog) return;
+  if (!dialog.open) {cancelAnimationFrame(dialog._waveFrame);dialog._waveFrame = null;dialog._voicePhases = new Map();return;}
+  const active = document.activeElement, previous = dialog._voicePhases, phases = new Map();
+  const blocker = fieldVoiceBlocker(), busy = blocker === 'loading' ? t('voice.loading_model') : t('annotations.dictate_busy');
+  dialog.querySelectorAll('.annotator__item').forEach((item, index) => {
+    const id = item.dataset.comment, phase = fieldVoicePhase(annotatorVoiceMatcher(dialog, id));
+    if (phase) phases.set(id, phase);
+    const mic = item.querySelector('.annotator__mic'), strip = item.querySelector('.annotator__voice');
+    const ownsFocus = !!active && (mic.contains(active) || strip.contains(active));
+    const label = `${t('annotations.dictate')} ${index + 1}`;
+    mic.hidden = !!phase;mic.disabled = !!blocker;
+    mic.setAttribute('aria-label', blocker ? `${label}. ${busy}` : label);mic.title = blocker ? busy : t('annotations.dictate');
+    strip.hidden = !phase;
+    strip.classList.toggle('is-recording', phase === 'recording');strip.classList.toggle('is-busy', !!phase && phase !== 'recording');
+    const status = strip.querySelector('.annotator__voice-status');
+    status.textContent = {preparing:voice.field?.message || t('voice.preparing'), recording:t('voice.recording'), transcribing:t('voice.transcribing'), queued:t('voice.queued')}[phase] || '';
+    status.classList.toggle('sr-only', phase === 'recording');
+    strip.querySelector('canvas').hidden = phase !== 'recording';
+    strip.querySelector('.annotator__voice-stop').hidden = phase !== 'recording';
+    // The control that had focus may have just been hidden: hand focus to what comes next.
+    const was = previous.get(id) || null;
+    if (ownsFocus && phase !== was) {
+      const next = phase === 'recording' ? strip.querySelector('.annotator__voice-stop')
+        : phase === 'preparing' || (phase && was !== 'recording') ? strip.querySelector('.annotator__voice-cancel') : item.querySelector('textarea');
+      next.focus();
+    }
+  });
+  dialog._voicePhases = phases;
+  const recording = [...phases.values()].includes('recording');
+  if (recording && !dialog._waveFrame) paintAnnotatorWave(dialog);
+  if (!recording) {cancelAnimationFrame(dialog._waveFrame);dialog._waveFrame = null;}
+  updateAnnotatorSave();
 }
 
 // Resolves with the new annotation (null when every comment was removed), or undefined on cancel.
@@ -251,7 +368,7 @@ function openAnnotator(file, {opener = document.activeElement, meta = {}, title}
   dialog._meta = {...meta, source:meta.source || file.annotation?.source || 'image'};
   if (dialog._meta.source === 'browser' && file.annotation) dialog._meta = {url:file.annotation.url, title:file.annotation.title, captured_at:file.annotation.captured_at, ...dialog._meta};
   dialog._comments = annotationComments(file).map(comment => ({...comment}));
-  dialog._result = undefined;
+  dialog._result = undefined;dialog._session++;dialog._voiceMessage = '';dialog._voicePhases = new Map();
   dialog.querySelector('#annotator-title').textContent = title || t(dialog._meta.source === 'browser' ? 'annotations.capture_title' : 'annotations.title');
   const source = dialog.querySelector('.annotator__source');
   source.textContent = dialog._meta.source === 'browser' ? (dialog._meta.title || cleanPageURL(dialog._meta.url || '') || file.name) : file.name;
@@ -263,7 +380,7 @@ function openAnnotator(file, {opener = document.activeElement, meta = {}, title}
   canvas.style.setProperty('--image-ratio', String(entry.width / entry.height));
   canvas.setAttribute('aria-label', t('annotations.canvas_help'));
   renderAnnotator();
-  dialog.showModal();
+  dialog.showModal();syncAnnotatorVoice();
   (dialog.querySelector('.annotator__markers .annotation-marker') || dialog.querySelector('.annotator__canvas'))?.focus?.();
   return new Promise(resolve => {dialog._resolve = resolve;});
 }

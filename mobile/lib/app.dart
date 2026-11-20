@@ -26,6 +26,7 @@ import 'queued_bubble.dart';
 import 'skills_page.dart';
 import 'chat_actions.dart';
 import 'chat_recap.dart';
+import 'chat_scroll.dart';
 import 'question_card.dart';
 import 'message_images.dart';
 
@@ -298,6 +299,8 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   bool libraryVisible = true;
   bool changingPermission = false;
   final scroll = ScrollController();
+  // Prompt the chat opened on, frozen when its messages first arrive.
+  int? landingAnchor;
   late final StreamSubscription<QuerySnapshot<Map<String, dynamic>>>
   deviceSubscription;
   late final StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>
@@ -795,6 +798,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       conversationId = chat?['id'];
       projectId = chat?['project_id'];
       messages = [];
+      landingAnchor = null;
       loadingMessages = chat != null;
       error = null;
     });
@@ -815,12 +819,24 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
             wasLoading ||
             !scroll.hasClients ||
             scroll.positions.length == 1 && scroll.position.extentAfter < 100;
+        // A chat at rest opens on its last exchange; one with a turn running,
+        // waiting or queued opens at the bottom, where it is moving.
+        final atRest =
+            !(busy && requestConversation == conversationId) &&
+            !liveRunning &&
+            (currentQueue?.drafts.isEmpty ?? true) &&
+            (currentGuides?.items.isEmpty ?? true);
         setState(() {
           messages = decoded;
           loadingMessages = false;
+          if (wasLoading) {
+            landingAnchor = atRest ? lastPromptIndex(decoded) : null;
+          }
         });
-        if (follow) {
-          scrollToBottom(animated: !wasLoading);
+        // The list lands by itself when it is built; later snapshots only
+        // follow the bottom if the user is already there.
+        if (follow && !wasLoading) {
+          scrollToBottom(animated: scroll.hasClients);
         }
       } catch (e) {
         if (version == loadVersion) {
@@ -881,6 +897,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         lane.drafts.add(draft);
         composer.clear();
       });
+      scrollToBottom();
       flushQueues();
       // An edited guide goes back as guidance, like on desktop.
       if (asGuide) await sendQueuedNow(lane, draft);
@@ -900,6 +917,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       pendingAttachments = payloads;
       requestConversation = id;
     });
+    scrollToBottom();
     var sent = false;
     try {
       final request = await api.send(
@@ -2319,17 +2337,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                 ),
                               ),
                             )
-                          : ListView(
+                          : ConversationList(
                               key: const ValueKey('conversation-messages'),
                               controller: scroll,
-                              keyboardDismissBehavior:
-                                  ScrollViewKeyboardDismissBehavior.onDrag,
-                              padding: const EdgeInsets.fromLTRB(
-                                20,
-                                20,
-                                20,
-                                16,
-                              ),
+                              anchorIndex: landingAnchor,
                               children: [
                                 ...messages.map(
                                   (message) => MessageView(message: message),

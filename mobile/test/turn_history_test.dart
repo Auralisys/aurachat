@@ -166,14 +166,47 @@ void main() {
       expect(find.text(label).hitTestable(), findsOneWidget);
     }
     expect(find.text('In corso…'), findsNothing);
-    expect(find.text('Supplied thought'), findsOneWidget);
+    expect(find.text('Supplied thought'), findsNothing);
     expect(find.text('Hidden output'), findsNothing);
+    await expand(tester, 'Ragionamento · In corso');
+    expect(find.text('Supplied thought'), findsOneWidget);
     await expand(tester, 'Ragionamento · In corso');
     expect(find.text('Supplied thought'), findsNothing);
     await expand(tester, 'Read · In corso');
     expect(find.text('Hidden output'), findsOneWidget);
     await expand(tester, 'Attività · 4 · In corso');
     expect(find.text('Read · In corso'), findsNothing);
+  });
+
+  testWidgets('reasoning starts collapsed, opens on demand and closes on re-entry', (
+    tester,
+  ) async {
+    Map<String, dynamic> turn(String thought, String content) => {
+      'content': content,
+      'activity': [
+        {
+          'kind': 'reasoning',
+          'id': 'r1',
+          'status': 'running',
+          'text': thought,
+          'offset': 0,
+        },
+      ],
+    };
+    await showTurn(tester, turn('First thought', ''), live: true);
+    expect(find.text('Ragionamento · In corso'), findsOneWidget);
+    expect(find.text('First thought'), findsNothing);
+    await expand(tester, 'Ragionamento · In corso');
+    expect(find.text('First thought'), findsOneWidget);
+    // A live update must not close a block the user opened.
+    await showTurn(tester, turn('First thought, more', 'Answer'), live: true);
+    expect(find.text('First thought, more'), findsOneWidget);
+    // Re-entering the chat rebuilds the list: everything is closed again.
+    await tester.pumpWidget(const SizedBox());
+    await showTurn(tester, turn('First thought, more', 'Answer'));
+    await expand(tester, 'Attività · 1');
+    expect(find.text('Ragionamento · In corso'), findsOneWidget);
+    expect(find.text('First thought, more'), findsNothing);
   });
 
   testWidgets('interleaves prose and equal-offset events in received order', (

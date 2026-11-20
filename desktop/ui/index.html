@@ -112,6 +112,11 @@
                   <p id="skill-status" class="skill-chooser__status" role="status" aria-live="polite"></p>
                   <button id="skill-retry" type="button" class="skill-chooser__retry" data-i18n="skills.retry" hidden></button>
                 </div>
+                <div id="mention-chooser" class="skill-chooser mention-chooser" hidden>
+                  <p id="mention-title" class="skill-chooser__title" data-i18n="mentions.title"></p>
+                  <div id="mention-options" class="skill-options" role="listbox" aria-labelledby="mention-title"></div>
+                  <p id="mention-status" class="skill-chooser__status" role="status" aria-live="polite"></p>
+                </div>
                 <div id="composer-attachments" class="composer-attachments" hidden></div>
                 <div class="composer__input-wrap"><div id="composer-input" class="composer__input" contenteditable="true" role="textbox" aria-multiline="true" aria-autocomplete="list" aria-expanded="false" aria-controls="skill-options" data-i18n-aria-label="chat.placeholder" data-i18n-placeholder="chat.placeholder" spellcheck="false"></div></div>
                 <div class="composer__toolbar"><button id="composer-attach" class="icon-button composer__attach" data-i18n-aria-label="chat.attach" data-i18n-title="chat.attach"><svg data-icon="plus" aria-hidden="true"></svg></button><div id="permission-control" class="permission-control" hidden><button id="permission-select" class="model-select__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="permission-menu" data-i18n-title="permissions.title" data-i18n-aria-label="permissions.title"><svg data-icon="shield" aria-hidden="true"></svg><span id="permission-name"></span></button><div id="permission-menu" class="model-menu permission-menu" role="menu" data-i18n-aria-label="permissions.title" hidden></div></div><div id="voice-recording" class="voice-recording" hidden><button id="voice-recording-cancel" type="button" class="icon-button" data-i18n-aria-label="voice.cancel" data-i18n-title="voice.cancel"><svg data-icon="close" aria-hidden="true"></svg></button><span class="voice-loader" aria-hidden="true"><i></i><i></i><i></i></span><span id="voice-recording-status" class="sr-only" role="status"></span><canvas id="voice-waveform" height="32" aria-hidden="true"></canvas><button id="voice-stop" type="button" class="icon-button" data-i18n-aria-label="voice.stop" data-i18n-title="voice.stop"><svg data-icon="stop" aria-hidden="true"></svg></button></div><div class="model-select">
@@ -124,7 +129,7 @@
                 </div>
               </div>
               <div class="composer__project"><button id="project-select" class="model-select__trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="project-menu" data-i18n-aria-label="chat.project"><svg data-icon="project" aria-hidden="true"></svg><span id="project-name"></span><svg data-icon="chevron" aria-hidden="true"></svg></button><div id="project-menu" class="model-menu" role="menu" data-i18n-aria-label="chat.project" hidden></div></div>
-              <p id="attachment-note" class="composer-note" data-i18n="chat.attachment_note" hidden></p><p id="composer-status" class="composer-note" role="status" hidden></p>
+              <p id="attachment-note" class="composer-note" data-i18n="chat.attachment_note" hidden></p><p id="linked-note" class="composer-note" data-i18n="chat.linked_note" hidden></p><p id="composer-status" class="composer-note" role="status" hidden></p>
               <p class="composer__hint" data-i18n="chat.hint"></p>
             </div>
             <aside id="activity-dock" class="activity-dock" data-i18n-aria-label="activity.title" hidden><div id="activity-card" class="activity-card"></div></aside>
@@ -286,6 +291,7 @@
     <script src="composer.js"></script>
     <script src="message-pastes.js"></script>
     <script src="skills.js"></script>
+    <script src="mentions.js"></script>
     <script src="queue.js"></script>
     <script src="images.js"></script>
     <script src="image-annotations.js"></script>
