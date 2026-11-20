@@ -1,7 +1,7 @@
 // Navigation rail for long chats: one tick per user message in place of the scroll thumb.
-// Hovering a tick, scrolling or moving focus into the rail opens a card describing that message.
+// Only hovering a tick with the mouse opens the card describing that message.
 const chatRail = (() => {
-  const REACH = 60, PEEK = 900, LINGER = 90, PREVIEW = 400, LABEL = 140, THUMBS = 3, INSET = 24, DRAG = 4;
+  const REACH = 60, LINGER = 90, PREVIEW = 400, LABEL = 140, THUMBS = 3, INSET = 24, DRAG = 4;
   const SCROLL_KEYS = ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '];
   const previews = new WeakMap(), formats = new Map();
   let box, nav, track, card, headline, stamped, position, gallery;
@@ -10,7 +10,7 @@ const chatRail = (() => {
   let count = 0, step = 12, size = 1, navHeight = 0, trackTop = 0, cardHeight = 0;
   let current = 0, first = 0, last = 0, pinned = -1, travel = null;
   let hovered = -1, focused = -1, stopped = -1, hot = -1, shown = '', pointerY = null;
-  let peeking = false, lastTop = 0, lastInput = -Infinity, peekTimer = 0, closeTimer = 0;
+  let closeTimer = 0;
   let press = null, scrubbing = false, suppress = false, scrubbed = -1;
 
   const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
@@ -155,9 +155,6 @@ const chatRail = (() => {
     if (travel && (Math.abs(top - travel.target) <= 1.5 || now > travel.until)) travel = null;
     if (pinned >= 0 && !travel && (pinned < first || pinned > last)) pinned = -1;
     current = pinned >= 0 ? pinned : reading;
-    // Only reader input opens the card: follow, restore and jump scrolls stay quiet.
-    if (Math.abs(top - lastTop) > .5 && now - lastInput < 400) peek();
-    lastTop = top;
   }
 
   function paint() {
@@ -197,16 +194,11 @@ const chatRail = (() => {
     syncCard();
   }
 
-  function peek() {
-    peeking = true;
-    clearTimeout(peekTimer);
-    peekTimer = setTimeout(() => {peekTimer = 0;peeking = false;syncCard();}, PEEK);
-  }
-
   function syncCard() {
-    let target = hovered >= 0 ? hovered : focused >= 0 ? focused : peeking && active ? tickOf(current) : -1;
+    let target = hovered >= 0 ? hovered : focused >= 0 ? focused : -1;
     if (target >= ticks.length) target = -1;
-    if (target >= 0) open(target);
+    // Keyboard focus only highlights its tick; its accessible name already describes the message.
+    if (hovered >= 0 && hovered < ticks.length) open(hovered);
     else if (card.classList.contains('is-open') && !closeTimer) closeTimer = setTimeout(shut, LINGER);
     magnify(target);
   }
@@ -272,8 +264,8 @@ const chatRail = (() => {
   }
 
   function dismiss() {
-    clearTimeout(peekTimer);clearTimeout(closeTimer);peekTimer = closeTimer = 0;
-    hovered = focused = -1;pointerY = null;peeking = false;
+    clearTimeout(closeTimer);closeTimer = 0;
+    hovered = focused = -1;pointerY = null;
     track.classList.remove('is-tracking');
     shut();magnify(-1);
   }
@@ -346,7 +338,7 @@ const chatRail = (() => {
       if (event.ctrlKey) return;
       event.preventDefault();
       const unit = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? box.clientHeight : 1;
-      lastInput = performance.now();pinned = -1;
+      pinned = -1;
       box.scrollTop += event.deltaY * unit;
     }, {passive:false});
     track.addEventListener('keydown', event => {
@@ -377,7 +369,7 @@ const chatRail = (() => {
     track = nav.querySelector('.chat-rail__track');card = nav.querySelector('.chat-rail__card');
     headline = card.querySelector('.chat-rail__text');stamped = card.querySelector('.chat-rail__when');
     position = card.querySelector('.chat-rail__place');gallery = card.querySelector('.chat-rail__thumbs');
-    const input = () => {lastInput = performance.now();pinned = -1;};
+    const input = () => {pinned = -1;};
     for (const type of ['wheel', 'touchstart', 'pointerdown']) box.addEventListener(type, input, {passive:true});
     box.addEventListener('keydown', event => {if (SCROLL_KEYS.includes(event.key)) input();});
     window.addEventListener('resize', schedule);
@@ -388,7 +380,6 @@ const chatRail = (() => {
     });
     try {resized.observe(box, {box:'border-box'});} catch (_) {resized.observe(box);}
     bindTrack();
-    lastTop = box.scrollTop;
     ready = true;
     refresh();
   }

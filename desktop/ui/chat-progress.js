@@ -373,7 +373,7 @@ async function discoverRemoteTarget(id) {
 }
 
 function releaseRemoteTurn(id) {
-  if (!state.runs.get(id)?.remote || state.runs.get(id)?.pending || state.runs.get(id)?.queueOutcome === 'failed') return;
+  if (!state.runs.get(id)?.remote || state.runs.get(id)?.pending || state.runs.get(id)?.queueOutcome === 'failed' || state.unread.has(id)) return;
   state.runs.delete(id);
   stopTimer();
 }
@@ -418,6 +418,7 @@ async function refreshRemoteTurn(id = state.activeConversationId) {
         run = Object.assign(run?.submitting ? run : {}, {pending:true, remote:true, turnId:snapshot.turn_id, since:snapshot.started_at,
           initialMessages:structuredClone(saved.messages || []), usage:null});
         state.runs.set(id, run);
+        state.unread.delete(id);
       }
       if (run.remoteUpdatedAt === snapshot.updated_at) return;
       run.remoteUpdatedAt = snapshot.updated_at;
@@ -453,8 +454,14 @@ async function refreshRemoteTurn(id = state.activeConversationId) {
         queuedTurns.paused.add(id);
         if (stillActive()) composerStatus(t('chat.remote_offline'));
       } else if (stillActive()) composerStatus();
-      if (stillActive()) {state.messages = messages;renderMessages();updateContextInfo();updateComposerControls();}
-      stopTimer();renderSidebar();flushQueue(id);
+      const finished = ['completed','failed','cancelled'].includes(snapshot?.status);
+      if (finished) state.runs.set(id,{pending:false,remote:true,messages,queueOutcome:snapshot.status,
+        baseRevision:saved.revision,baseUpdatedAt:saved.updated_at});
+      if (stillActive()) {state.conversationLoadFailed=false;state.messages = messages;renderMessages();updateContextInfo();updateComposerControls();}
+      if (finished) markConversationFinished(id);
+      stopTimer();renderSidebar();
+      if (snapshot?.status === 'failed') {if (state.queues.get(id)?.length) queuedTurns.paused.add(id);}
+      else flushQueue(id);
     }
   } catch (error) {
     console.error('Remote chat sync failed', error);

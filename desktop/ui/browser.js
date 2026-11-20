@@ -462,10 +462,14 @@ async function openLink(url, event) {
   await openBrowser(url, {newTab:true});
 }
 
-function setBrowserWidth(width, save = true) {
+function maxBrowserWidth() {
   const workspace = document.querySelector('.workspace').clientWidth;
   const sidebar = $('.sidebar').getBoundingClientRect().width;
-  const max = Math.max(BROWSER_WIDTH.min, workspace - sidebar - BROWSER_WIDTH.keep);
+  return Math.max(BROWSER_WIDTH.min, workspace - sidebar - BROWSER_WIDTH.keep);
+}
+
+function setBrowserWidth(width, save = true) {
+  const max = maxBrowserWidth();
   const next = Math.round(Math.min(max, Math.max(BROWSER_WIDTH.min, width)));
   $('#browser-panel').style.setProperty('--browser-width', `${next}px`);
   const handle = $('#browser-resize');
@@ -479,6 +483,12 @@ function setBrowserWidth(width, save = true) {
 
 function setupBrowserResize() {
   const handle = $('#browser-resize'), panel = $('#browser-panel');
+  new ResizeObserver(() => {
+    if (!panel.offsetWidth || !handle.offsetWidth) return;
+    const max = maxBrowserWidth();
+    if (panel.offsetWidth > max) setBrowserWidth(max, false);
+    else handle.setAttribute('aria-valuemax', Math.round(max));
+  }).observe($('#sidebar'));
   handle.addEventListener('pointerdown', event => {
     if (event.button !== 0) return;
     event.preventDefault();handle.setPointerCapture(event.pointerId);

@@ -835,7 +835,7 @@ async fn poll(app:&tauri::AppHandle,boot_time:u64,recovered:&mut Option<String>)
             if let Err(e)=state.firestore.relay_upsert(&auth,&path,&request).await {eprintln!("Relay result publication failed: {e}");}
             let _=heartbeat_once(&app).await;
             if request["action"].as_str().unwrap_or("chat")=="chat" {
-                let _=app.emit("companion-updated",json!({"conversation_id":request["conversation_id"]}));
+                let _=app.emit("companion-updated",json!({"conversation_id":request["conversation_id"],"status":request["status"],"cancelled":request["result"]["cancelled"]}));
             }
         });
     }
@@ -880,7 +880,10 @@ async fn execute(app:&tauri::AppHandle,uid:&str,auth:&FirestoreAuth,request:&Val
         "stop_agent"=>return crate::stop_subagent(app.state::<AppState>(),app.state::<crate::agent_runs::AgentRuns>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["agent_id"].as_str().ok_or("invalid_agent")?.into()).await.map(|_|Value::Null),
         "stop_shell"=>return crate::stop_shell(app.state::<AppState>(),app.state::<Arc<crate::managed_shells::Shells>>(),id.into(),request["shell_id"].as_str().ok_or("invalid_shell")?.into()).await
             .and_then(|snapshot|serde_json::to_value(snapshot).map_err(|e|e.to_string())),
-        "approve"=>return app.state::<crate::approvals::Approvals>().resolve(uid,id,request["approval_id"].as_str().ok_or("invalid_approval")?,request["allow"].as_bool().ok_or("invalid_decision")?).map(|_|Value::Null),
+        "approve"=>{
+            let scope=request.get("scope").cloned().map(serde_json::from_value).transpose().map_err(|_|"invalid_approval_scope")?.unwrap_or_default();
+            return app.state::<crate::approvals::Approvals>().resolve(uid,id,request["approval_id"].as_str().ok_or("invalid_approval")?,request["allow"].as_bool().ok_or("invalid_decision")?,scope).map(|_|Value::Null);
+        },
         "answer_question"=>{
             let question_id=request["question_id"].as_str().ok_or("invalid_question")?;
             let answer:crate::questions::Answer=serde_json::from_value(request["answer"].clone()).map_err(|_|"invalid_question_answer".to_string())?;

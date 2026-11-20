@@ -76,6 +76,7 @@ pub struct AppState {
     client: reqwest::Client,
     quitting: AtomicBool,
     folder_access: Mutex<FolderAccess>,
+    reference_access: Mutex<permissions::ReferenceAccess>,
     permissions: Mutex<permissions::Permissions>,
     window_geometry: Mutex<Option<WindowGeometry>>,
     window_owner: Mutex<Option<String>>,
@@ -304,6 +305,7 @@ async fn login(state: tauri::State<'_, AppState>, email: String, password: Strin
     *state.config.lock().unwrap() = candidate;
     *state.user.lock().unwrap() = None;
     *state.data.lock().unwrap() = ChatData::default();
+    state.reference_access.lock().unwrap().clear();
     state.data_loaded.store(false, Ordering::SeqCst);
     get_config(state.clone()).await
 }
@@ -431,6 +433,7 @@ async fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
     *state.user.lock().unwrap() = None;
     *state.data.lock().unwrap() = ChatData::default();
     *state.viewing_chat.lock().unwrap() = None;
+    state.reference_access.lock().unwrap().clear();
     state.data_loaded.store(false, Ordering::SeqCst);
     Ok(())
 }
@@ -472,6 +475,7 @@ async fn refresh_data(state: tauri::State<'_, AppState>) -> Result<ChatData, Str
     let local = state.data.lock().unwrap().clone();
     let tree = state.firestore.refresh_tree_preserving_history(&uid, &auth, &local).await?;
     *state.data.lock().unwrap() = tree.clone();
+    state.reference_access.lock().unwrap().retain_chats(&uid, &tree);
     Ok(tree)
 }
 
@@ -490,6 +494,7 @@ async fn save_data(state: tauri::State<'_, AppState>, data: ChatData, base: Opti
     state.firestore.save_tree(&uid, &auth, &data).await?;
     let data=state.firestore.cached_tree(&uid).unwrap_or(data);
     *state.data.lock().unwrap() = data.clone();
+    state.reference_access.lock().unwrap().retain_chats(&uid, &data);
     state.data_loaded.store(true, Ordering::SeqCst);
     {
         let mut grants = state.folder_access.lock().unwrap();
@@ -1284,8 +1289,8 @@ fn list_approvals(state:tauri::State<'_,AppState>, approvals:tauri::State<'_,app
     let owner=state.firestore.uid().ok_or("login_required")?;Ok(approvals.list(&owner,&conversation_id))
 }
 #[tauri::command(rename_all = "snake_case")]
-fn resolve_approval(state:tauri::State<'_,AppState>, approvals:tauri::State<'_,approvals::Approvals>, conversation_id:String,id:String,allow:bool)->Result<(),String>{
-    let owner=state.firestore.uid().ok_or("login_required")?;approvals.resolve(&owner,&conversation_id,&id,allow)
+fn resolve_approval(state:tauri::State<'_,AppState>, approvals:tauri::State<'_,approvals::Approvals>, conversation_id:String,id:String,allow:bool,scope:Option<approvals::Scope>)->Result<(),String>{
+    let owner=state.firestore.uid().ok_or("login_required")?;approvals.resolve(&owner,&conversation_id,&id,allow,scope.unwrap_or_default())
 }
 #[tauri::command(rename_all = "snake_case")]
 fn list_questions(state:tauri::State<'_,AppState>, questions:tauri::State<'_,questions::Questions>,conversation_id:String)->Result<Vec<questions::Snapshot>,String>{
@@ -1468,6 +1473,7 @@ pub fn run() {
                 tts: std::sync::Arc::new(tts::Tts::new(&config_dir)),
                 config: Mutex::new(config),
                 folder_access: Mutex::new(folder_access),
+                reference_access: Mutex::new(permissions::ReferenceAccess::default()),
                 permissions: Mutex::new(permissions::Permissions::load(&config_dir)?),
                 config_dir,
                 user: Mutex::new(None),

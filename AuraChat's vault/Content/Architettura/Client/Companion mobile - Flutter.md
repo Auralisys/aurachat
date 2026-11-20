@@ -10,6 +10,12 @@ Firestore. Le chiavi dei modelli restano nella configurazione usata dal desktop,
 non vengono copiate nel client mobile. Il client non chiama mai il modello.
 La cronologia usa le sottocollezioni esistenti, comprese le parti dei messaggi grandi.
 
+Per un riferimento esterno richiesto dal gateway in Ask/Auto, il telefono
+mostra **Consenti per questa chat**, percorso e limiti: sola lettura fino al
+logout o all'uscita completa di AuraChat sul computer, senza aggiungere
+cartelle al progetto. Il consenso resta sul gateway e non vale per altre chat.
+Accesso completo non richiede questa conferma aggiuntiva.
+
 Il gateway prende in carico una richiesta con precondizione di revisione; non
 riesegue una richiesta interrotta da un riavvio. Le richieste scadono dopo cinque
 minuti. La presenza è aggiornata ogni 15 secondi e scade sul telefono dopo 45.
@@ -52,6 +58,14 @@ path degli strumenti e comando eseguito, oltre al passo corrente nel loader. La
 lista chat mostra un indicatore sulle conversazioni in corso, anche per i turni
 avviati dal desktop, e lo stop dal telefono interrompe lo stesso turno registrato
 in `chat_runs`. A turno concluso contano i messaggi salvati nella cronologia.
+
+La matita **Modifica messaggio** su un prompt a cui il modello ha già risposto
+apre una copia del testo. **Annulla** lascia intatte cronologia e bozza;
+**Invia modifica** fa ripartire la chat da quel prompt, sostituendo i messaggi
+successivi. Il telefono usa `chat` con `edit_index` (protocollo 6 o superiore),
+mai la coda o la guida. Reinvia gli allegati originali con `attachment_parts`
+dal protocollo 10; per link a file locali o allegati troppo grandi serve il PC.
+Prima di pubblicare la richiesta ricontrolla online PC, turno e cronologia.
 
 Stato verificato: APK Android compilato/installato, analisi e test locali passati;
 trasporto Firestore reale verificato per query, claim atomico e duplicato

@@ -38,24 +38,27 @@ function renderPermissionRequests() {
   tray.hidden = !requests.length;
   const existing = new Map([...tray.children].map(el => [el.dataset.requestId, el]));
   for (const item of requests) {
+    const reference = item.action?.kind === 'reference_access';
     let card = existing.get(item.id);existing.delete(item.id);
     if (card && card.dataset.status === item.status) continue;
     const replacement = document.createElement('article');replacement.className = 'approval-card';replacement.dataset.requestId = item.id;replacement.dataset.status = item.status;
     const title = document.createElement('div');title.className = 'approval-card__title';
-    const label = document.createElement('strong');label.textContent = approvalLabel(item);if (item.status === 'reviewing') label.className = 'is-working-text';
+    const label = document.createElement('strong');label.textContent = reference ? t('permissions.reference_title') : approvalLabel(item);if (item.status === 'reviewing') label.className = 'is-working-text';
     title.append(icon('shield'), label);
     const path = document.createElement('p');path.className = 'approval-card__path';path.textContent = item.action?.kind?.startsWith('mcp') ? [item.action.server,item.action.tool].filter(Boolean).join(' · ') : item.action?.path || item.action?.url || '';path.title = path.textContent;
     replacement.append(title, path);
     if (item.reason) {const reason = document.createElement('p');reason.className = 'approval-card__reason';reason.textContent = item.reason === 'review_unavailable' ? t('permissions.review_unavailable') : item.reason;replacement.append(reason);}
-    replacement.append(approvalDetails(item));
+    if (reference) {
+      const scope = document.createElement('p');scope.className = 'approval-card__reason';scope.textContent = t('permissions.reference_scope');replacement.append(scope);
+    } else replacement.append(approvalDetails(item));
     if (item.status === 'pending') {
       const actions = document.createElement('div');actions.className = 'approval-card__actions';
-      for (const [allow, key] of [[false,'permissions.deny'],[true,'permissions.allow_once']]) {
+      for (const [allow, key] of [[false,'permissions.deny'],[true,reference ? 'permissions.allow_chat' : 'permissions.allow_once']]) {
         const button = document.createElement('button');button.type = 'button';button.textContent = t(key);button.className = allow ? 'approval-allow' : 'approval-deny';
         button.onclick = async () => {
           actions.querySelectorAll('button').forEach(b => b.disabled = true);
           try {
-            await conversationCommand('resolve_approval',{conversation_id:item.conversation_id,id:item.id,allow});
+            await conversationCommand('resolve_approval',{conversation_id:item.conversation_id,id:item.id,allow,...(reference && allow ? {scope:'chat_session'} : {})});
             retainApproval({...item,status:allow ? 'approved' : 'denied'});renderPermissionRequests();renderSidebar();
           }
           catch(e) {composerStatus(localizeError(e));actions.querySelectorAll('button').forEach(b => b.disabled = false);}

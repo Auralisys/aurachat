@@ -15,6 +15,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
       if(['get_local_config','get_config'].includes(cmd))return config;
       if(['get_data','refresh_data'].includes(cmd))return structuredClone(data);
       if(cmd==='project_permission_mode')return 'auto';
+      if(cmd==='project_git'&&args.action==='discover')return {repositories:[],truncated:false};
       if(cmd==='list_shells')return [];
       if(cmd==='list_approvals')return Object.values(window.__pending).filter(r=>r.conversation_id===args.conversation_id);
       if(cmd==='resolve_approval'){
@@ -51,6 +52,22 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   await page.evaluate(()=>__emitApproval({...__pending['command-2'],status:'pending',reason:'review_unavailable'}));
   await page.getByRole('button',{name:'Consenti una volta',exact:true}).waitFor();assert.match(await page.locator('.approval-card__reason').innerText(),/non è disponibile/);
   await page.getByRole('button',{name:'Consenti una volta',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.approval-card').length===0);
+  await page.evaluate(()=>__emitApproval({id:'reference-1',conversation_id:'c',turn_id:'t',status:'pending',reviewer:'user',action:{kind:'reference_access',path:'C:\\References\\<img onerror=unsafe>\\Research',is_directory:true,access:'read',scope:'chat_session'},created_at:Date.now()}));
+  await page.getByText('Consentire la lettura del riferimento esterno?',{exact:true}).waitFor();
+  assert.match(await page.locator('.approval-card__path').innerText(),/C:\\References/);
+  assert.equal(await page.locator('.approval-card img').count(),0);
+  assert.match(await page.locator('.approval-card__reason').innerText(),/Sola lettura/);
+  assert.match(await page.locator('.approval-card__reason').innerText(),/logout/);
+  assert.match(await page.locator('.approval-card__reason').innerText(),/Non viene aggiunto al progetto/);
+  assert.equal(await page.locator('.approval-details').count(),0);
+  const referenceShots=resolve(__dirname,'../../.artifact/operations');mkdirSync(referenceShots,{recursive:true});
+  await page.screenshot({path:resolve(referenceShots,'reference-desktop.png')});
+  await page.evaluate(()=>openConversation('other',false,'recents'));assert.equal(await page.locator('#permission-requests').isHidden(),true);
+  await page.evaluate(()=>openConversation('c',false,'projects'));
+  await page.getByRole('button',{name:'Consenti per questa chat',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelectorAll('.approval-card').length===0);
+  assert.deepEqual(await page.evaluate(()=>__calls.find(c=>c.cmd==='resolve_approval'&&c.args.id==='reference-1').args),{conversation_id:'c',id:'reference-1',allow:true,scope:'chat_session'});
+  assert.equal(await page.evaluate(()=>__calls.some(c=>['grant_project_folder','pick_project_folder','save_data'].includes(c.cmd))),false);
   await page.evaluate(()=>__emitApproval({id:'mcp-1',conversation_id:'c',turn_id:'t',status:'pending',reviewer:'user',action:{kind:'mcp',server:'global:fixture',tool:'lookup_record',arguments:{id:'123'}},created_at:Date.now()}));
   await page.getByText('global:fixture · lookup_record',{exact:true}).waitFor();
   await page.getByText('Mostra chiamata MCP',{exact:true}).click();
@@ -92,7 +109,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   assert.equal(await page.locator('.agent-detail-status').innerText(),locales['activity.cancelled']);
   await page.emulateMedia({reducedMotion:'reduce'});assert.equal(await page.locator('.msg--stream .turn-history[data-live-history] > summary > svg').first().evaluate(el=>getComputedStyle(el).animationName),'none');
   await page.click('#browser-close');await page.click('#sidebar-collapse');await page.setViewportSize({width:700,height:820});
-  await page.evaluate(()=>__emitApproval({id:'write-3',conversation_id:'c',turn_id:'t',status:'pending',reviewer:'user',action:{kind:'write',path:'C:/work/AuraChat/note.md',content:'Nuovo contenuto'},created_at:Date.now()}));
+  await page.evaluate(()=>__emitApproval({id:'reference-3',conversation_id:'c',turn_id:'t',status:'pending',reviewer:'user',action:{kind:'reference_access',path:'C:\\References\\Research\\Notes',access:'read',scope:'chat_session'},created_at:Date.now()}));
   await page.locator('.approval-card').waitFor();await page.screenshot({path:resolve(shots,'approval-compact.png')});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   await page.getByRole('button',{name:'Rifiuta',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.approval-card').length===0);
   await page.evaluate(()=>window.__finish());await page.waitForFunction(()=>!state.busy);

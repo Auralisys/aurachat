@@ -35,7 +35,7 @@ function fixture(locales) {
   window.__data={projects:[],conversations:[
     {id:'a',title:'Rifinitura della conversazione',created_at:5,updated_at:5,messages_loaded:true,messages:turns},
     {id:'b',title:'Una sola domanda',created_at:4,updated_at:4,messages_loaded:true,messages:[{role:'user',content:'Spiegami tutto.'},{role:'assistant',content:'Una risposta molto lunga.\n\n'.repeat(60)}]},
-    {id:'c',title:'Tre scambi brevi',created_at:3,updated_at:3,messages_loaded:true,messages:Array.from({length:3},(_,index)=>[{role:'user',content:`Ciao ${index+1}`},{role:'assistant',content:'Ciao!'}]).flat()},
+    {id:'c',title:'Due scambi brevi',created_at:3,updated_at:3,messages_loaded:true,messages:Array.from({length:2},(_,index)=>[{role:'user',content:`Ciao ${index+1}`},{role:'assistant',content:'Ciao!'}]).flat()},
     {id:'d',title:'Archivio molto lungo',created_at:2,updated_at:2,messages_loaded:true,messages:archive}
   ]};
   window.__events={};window.__runs={};window.__calls=[];
@@ -165,15 +165,14 @@ async function run() {
     state=await rail();assert.equal(state.current,'12');assert.deepEqual(state.aria,['12']);
     await page.waitForTimeout(250);assert.equal(await page.locator('#chat-latest').isVisible(),true);
 
-    // The wheel over the rail scrolls the chat, and reader scrolling briefly peeks at the current message.
+    // The wheel over the rail scrolls the chat; scrolling the chat never opens the card.
     await away();
     const before=await scrollTop();
     await page.locator('.chat-rail__tick').nth(20).hover();await page.mouse.wheel(0,200);await settled();
     assert.ok(Math.abs(await scrollTop()-before-200)<=1);
     await away();
     await page.mouse.wheel(0,-300);
-    await page.waitForFunction(()=>document.querySelector('.chat-rail__card').classList.contains('is-open'));
-    await page.waitForFunction(()=>!document.querySelector('.chat-rail__card').classList.contains('is-open'),null,{timeout:4000});
+    for(let i=0;i<6;i++){await page.waitForTimeout(60);assert.equal(await page.evaluate(()=>document.querySelector('.chat-rail__card').classList.contains('is-open')),false);}
 
     // Dragging along the rail scrubs the conversation and does not click-jump twice.
     const track=await page.locator('.chat-rail__track').boundingBox(),step=track.height/40;
@@ -188,7 +187,8 @@ async function run() {
     await page.locator('.chat-rail__tick[tabindex="0"]').focus();await page.keyboard.press('ArrowUp');
     shown=await card();
     assert.equal(await page.evaluate(()=>document.activeElement.dataset.tick),'17');
-    assert.equal(shown.open,true);assert.equal(shown.text,'Domanda 18: come procede la verifica?');
+    assert.equal(shown.open,false,'Keyboard focus does not open the card');
+    assert.match(await page.evaluate(()=>document.activeElement.getAttribute('aria-label')),/Domanda 18/);
     await page.keyboard.press('End');assert.equal(await page.evaluate(()=>document.activeElement.dataset.tick),'39');
     await page.keyboard.press('Home');await page.keyboard.press('Enter');await settled();
     assert.equal(await scrollTop()<=1,true);assert.equal(await page.evaluate(()=>document.activeElement.classList.contains('chat-rail__tick')),true);
@@ -242,7 +242,7 @@ async function run() {
     }
     await open('a');assert.equal((await rail()).hidden,false);
     assert.deepEqual(errors,[]);
-    console.log('PASS: one tick per user message, centred on the window 6px clear of the chat edge and of header/composer, hover/peek/keyboard/scrub navigation, card with the message time (own or borrowed from its reply) on the left and the compact position on the right, image thumbnails, grouped ticks for long archives, optimistic messages and hidden rail on short chats.');
+    console.log('PASS: one tick per user message, centred on the window 6px clear of the chat edge and of header/composer, hover/keyboard/scrub navigation, card with the message time (own or borrowed from its reply) on the left and the compact position on the right, image thumbnails, grouped ticks for long archives, optimistic messages and hidden rail on short chats.');
   } finally {await browser.close();}
 }
 module.exports={fixture};

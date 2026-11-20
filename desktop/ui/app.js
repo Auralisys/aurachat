@@ -44,6 +44,7 @@ const state = {
   get busy() { return !!this.runs.get(this.activeConversationId)?.pending; },
   preparing: false,
   loadingConversation: false,
+  conversationLoadFailed: false,
   preloaded: new Map(),
   conversationLoadEpoch: 0,
   changingModel: false,
@@ -250,6 +251,9 @@ async function saveChatData({throwOnError = false}, owner, desired, base) {
 function renderSidebar() {
   closeTreeMenu();
   hideProjectPreview();
+  if (foldedOwner !== state.config.firebase_email) {
+    foldedChats.projects.clear();foldedChats.recents.clear();foldedOwner = state.config.firebase_email;
+  }
   const tree = $('#sidebar-tree');
   const collapsed = new Set([...tree.querySelectorAll('details:not([open])')].map(el => el.dataset.projectId));
   tree.innerHTML = '';
@@ -260,7 +264,10 @@ function renderSidebar() {
     const element = projectEl(project);element.open = !collapsed.has(project.id);tree.appendChild(element);
   }
   const recent = $('#recent-chats');
-  recent.replaceChildren(...allConversations().slice().sort((a,b) => b.updated_at-a.updated_at).slice(0,12).map(conv => conversationEl(conv, 'recents')));
+  const owners = new Map();
+  for (const project of state.data.projects) for (const chat of project.conversations) owners.set(chat.id,project);
+  recent.replaceChildren();
+  appendChatTree(recent,allConversations().sort((a,b) => b.updated_at-a.updated_at),'recents',chat => owners.get(chat.id),12);
   if (!recent.children.length) {
     const create = document.createElement('button');create.className = 'tree-empty-action';create.textContent = t('sidebar.new_chat');create.onclick = () => newChat();
     recent.appendChild(create);
@@ -455,13 +462,22 @@ function deferHideProjectPreview() {
   previewTimer = setTimeout(hideProjectPreview, 120);
 }
 
-function scheduleProjectPreview(row, id) {
+function scheduleTreePreview(row, trigger, populate) {
   hideProjectPreview();
   if (treeMenuTrigger) return;
   previewTimer = setTimeout(() => {
-    const project = state.data.projects.find(p => p.id === id);
-    if (!row.isConnected || !project || treeMenuTrigger || row.querySelector('input')) return;
+    if (!row.isConnected || !row.getClientRects().length || treeMenuTrigger || row.querySelector('input')) return;
     const panel = $('#project-preview');
+    populate(panel);panel.hidden = false;
+    previewRow = trigger;trigger.setAttribute('aria-describedby',panel.id);
+    positionTreeOverlay(panel, row);
+  }, 300);
+}
+
+function scheduleProjectPreview(row, id) {
+  const project = state.data.projects.find(p => p.id === id);
+  if (!project) return;
+  scheduleTreePreview(row,row,panel => {
     const title = document.createElement('strong');
     title.append(icon('project'), document.createTextNode(project.name));
     const count = document.createElement('p');
@@ -477,11 +493,7 @@ function scheduleProjectPreview(row, id) {
     }
     if (!project.source_folders.length) folders.textContent = t('project.no_source');
     panel.replaceChildren(title, count, folders);
-    panel.hidden = false;
-    previewRow = row;
-    row.setAttribute('aria-describedby', 'project-preview');
-    positionTreeOverlay(panel, row);
-  }, 250);
+  });
 }
 
 function setupTreeOverlays() {
@@ -520,7 +532,7 @@ function projectEl(project) {
   el.className = 'tree-project';el.dataset.projectId = project.id;
   el.appendChild(projectHeadEl(project));
   const chats = document.createElement('div');chats.className = 'tree-project__chats';
-  for (const conversation of project.conversations) chats.appendChild(conversationEl(conversation, 'projects'));
+  appendChatTree(chats, project.conversations, 'projects', () => project);
   if (!project.conversations.length) {
     const empty = document.createElement('button');empty.className = 'tree-empty-action';
     empty.textContent = t('project.first_chat');empty.onclick = () => newChat(project.id);
@@ -537,34 +549,38 @@ function linkedLabel(parent) {
   return t('chat.linked_from').replace('{title}', parent.title || t('sidebar.new_chat'));
 }
 
-function linkedChatIcon(conv) {
-  const parent = linkedParent(conv);
-  if (!parent) return null;
-  const mark = document.createElement('span');mark.className = 'linked-chat';
-  const label = linkedLabel(parent);
-  mark.title = label;mark.setAttribute('role','img');mark.setAttribute('aria-label',label);mark.append(icon('link'));
-  return mark;
-}
-
-function conversationEl(conv, section) {
+function conversationEl(conv, section, project) {
   const el = document.createElement('div');
   const active = conv.id === state.activeConversationId && section === state.activeConversationSection;
   el.className = 'tree-conv' + (active ? ' is-active' : '');
   el.dataset.conversationId = conv.id;
+  const status = chatStatus(conv.id);el.dataset.chatStatus = status.kind;
+  const mark = document.createElement('span');mark.className = 'chat-mark';
+  const indicator = document.createElement('span');indicator.className = 'chat-indicator';
+  if (['running','loading','waiting'].includes(status.kind)) indicator.classList.add('tree-conv__spinner');
+  if (status.kind === 'waiting') indicator.classList.add('is-waiting');
+  if (state.unread.has(conv.id) && !state.runs.get(conv.id)?.pending) indicator.classList.add('tree-conv__unread');
+  indicator.setAttribute('role','status');
+  indicator.setAttribute('aria-label',status.label === status.description ? status.label : `${status.label} · ${status.description}`);
+  indicator.title = status.description;mark.append(indicator);el.append(mark);
   const computer = remoteComputerIcon(conv.id);
   if (computer) el.append(computer);
-  const linked = linkedChatIcon(conv);
-  if (linked) el.append(linked);
   const title = document.createElement('span');
   title.className = 'tree-conv__title';
   title.tabIndex = 0;
   title.setAttribute('role', 'button');
+  title.setAttribute('aria-description',indicator.getAttribute('aria-label'));
   if (active) title.setAttribute('aria-current', 'page');
   title.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openConversation(conv.id, true, section); } });
-  title.textContent = conv.title || t('sidebar.new_chat');
+  const name = document.createElement('span');name.textContent = conv.title || t('sidebar.new_chat');title.append(name);
   el.addEventListener('click', e => { if (!e.target.closest('button, input')) openConversation(conv.id, true, section); });
   title.addEventListener('dblclick', () => renameInline(title, conv.title, (n) => renameConversation(conv.id, n)));
   el.appendChild(title);
+  if (project) {
+    const hint = document.createElement('span');hint.className = 'chat-project-hint';
+    hint.textContent = project.name;hint.setAttribute('aria-hidden','true');el.append(hint);
+  }
+  setupChatPeek(el,title,conv,project);
 
   const actions = document.createElement('div');
   actions.className = 'tree-actions';
@@ -583,19 +599,6 @@ function conversationEl(conv, section) {
     if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) { e.preventDefault();openMenu(); }
   });
   el.appendChild(actions);
-  if (state.runs.get(conv.id)?.pending || (state.loadingConversation && conv.id === state.activeConversationId)) {
-    const spinner = document.createElement('span');
-    const questionWaiting = pendingQuestions(conv.id).length > 0;
-    const waiting = questionWaiting || [...(permissionRequests.get(conv.id)?.values() || [])].some(r => r.status === 'pending');
-    spinner.className = `tree-conv__spinner${waiting ? ' is-waiting' : ''}`;
-    spinner.setAttribute('role', 'status');
-    spinner.setAttribute('aria-label', t(questionWaiting ? 'questions.waiting' : waiting ? 'permissions.waiting' : 'chat.thinking'));
-    spinner.title = spinner.getAttribute('aria-label');
-    el.appendChild(spinner);
-  } else if (state.unread.has(conv.id)) {
-    const dot = document.createElement('span');dot.className = 'tree-conv__unread';
-    dot.setAttribute('role','status');dot.setAttribute('aria-label',t('chat.unread'));dot.title=t('chat.unread');el.append(dot);
-  }
   return el;
 }
 
@@ -847,19 +850,27 @@ async function openConversation(id, refresh = true, section = null) {
   saveChatDraft();
   if (id !== state.activeConversationId) releaseRemoteTurn(state.activeConversationId);
   const epoch=++state.conversationLoadEpoch;
-  state.loadingConversation=false;
+  state.loadingConversation=false;state.conversationLoadFailed=false;
   state.attachments=[];state.editingMessageIndex=null;renderDraft();composerStatus();window.speechSynthesis?.cancel();
   state.activeConversationId = id;
   reportViewingChat(id);
-  state.unread.delete(id);
   const run = state.runs.get(id);
   const found = findConversation(id);
   state.activeConversationSection = section || (found?.project ? 'projects' : 'recents');
+  // Navigation from the header/history can land inside a manually closed branch.
+  const scope = state.activeConversationSection;
+  const list = $(scope === 'projects' ? '#sidebar-tree' : '#recent-chats');
+  let group = list.querySelector(`[data-conversation-id="${CSS.escape(id)}"]`)?.closest('.chat-children');
+  while (group) {
+    foldedChats[scope].delete(group.parentElement.firstElementChild.dataset.conversationId);
+    group = group.parentElement.closest('.chat-children');
+  }
   const freshPreload = state.preloaded.get(id) != null && Date.now() - state.preloaded.get(id) < 60000;
-  const needsLoad=found && !run?.pending && (found.conversation.messages_loaded===false || (refresh && found.conversation.revision != null && !freshPreload));
+  const needsLoad=found && !run?.pending && (run?.awaitingHistory || found.conversation.messages_loaded===false || (refresh && found.conversation.revision != null && !freshPreload));
   state.loadingConversation=!!needsLoad;
   restoreConversationHistory(id,found?.conversation);
   restoreChatDraft(id);
+  markConversationRead(id);
   renderSidebar();
   renderMessages();
   updateContextInfo();
@@ -868,17 +879,23 @@ async function openConversation(id, refresh = true, section = null) {
   voiceUi();
   if (needsLoad) {
     state.loadingConversation=true;voiceUi();
+    let loaded = false;
     try {
       const conversation=await invoke('get_conversation',{conversation_id:id});
       if (epoch !== state.conversationLoadEpoch) return;
       const target=findConversation(id);if(!target)return;
       Object.assign(target.conversation,conversation);
       const baseline = state.persistedData && conversationInData(state.persistedData, id);if (baseline) Object.assign(baseline, structuredClone(conversation));
+      if (run?.awaitingHistory) {
+        run.messages = (conversation.messages || []).slice();run.awaitingHistory=false;
+        run.baseRevision=conversation.revision;run.baseUpdatedAt=conversation.updated_at;
+      }
       restoreConversationHistory(id,conversation);renderMessages();updateContextInfo();
+      loaded = true;
     } catch(e) {
-      if(epoch===state.conversationLoadEpoch) composerStatus(localizeError(e));
+      if(epoch===state.conversationLoadEpoch) {state.conversationLoadFailed=true;composerStatus(localizeError(e));}
     } finally {
-      if(epoch===state.conversationLoadEpoch){state.loadingConversation=false;renderSidebar();renderMessages();voiceUi();}
+      if(epoch===state.conversationLoadEpoch){state.loadingConversation=false;if(loaded)markConversationRead(id);renderSidebar();renderMessages();voiceUi();}
     }
   }
   if (epoch === state.conversationLoadEpoch && !state.pendingConversations.has(id)) refreshRemoteTurn();
@@ -1180,7 +1197,7 @@ async function readMessage(content, button) {
 }
 
 function editMessage(index) {
-  if (state.busy || state.preparing) return;
+  if (state.busy || state.preparing || state.loadingConversation || state.messages[index]?.role !== 'user') return;
   const message = state.messages[index];state.editingMessageIndex = index;
   state.attachments = structuredClone(message.attachments || []);
   restoreMessageDraft(message);autoGrow();renderDraft();$('#composer-input').focus();
@@ -1221,9 +1238,12 @@ function messageEl(m, index) {
       ...(latest ? [['retry','chat.regenerate',regenerateReply]] : []),
     ]));configureMenuTrigger(more);actions.appendChild(more);
   } else if (role === 'user') {
-    const edit = messageAction('rename','chat.edit',() => editMessage(index));edit.disabled = state.busy;actions.appendChild(edit);el._busyControls.push(edit);
+    const edit = messageAction('rename','chat.edit',() => editMessage(index));
+    edit.classList.add('message-action--edit');edit.append(document.createTextNode(t('chat.edit_short')));
+    edit.disabled = state.busy;actions.appendChild(edit);el._busyControls.push(edit);
   } else if (state.failedSend) actions.appendChild(messageAction('retry','chat.retry',() => {
-    restoreMessageDraft(state.failedSend);state.attachments = structuredClone(state.failedSend.attachments);renderDraft();autoGrow();send();
+    restoreMessageDraft(state.failedSend);state.editingMessageIndex = state.failedSend.edit_index ?? null;
+    state.attachments = structuredClone(state.failedSend.attachments);renderDraft();autoGrow();send();
   }));
   el.appendChild(actions);return el;
 }
@@ -1383,17 +1403,18 @@ async function requestChat(payload) {
     if (run.stream?.content || run.stream?.activity.length) run.messages.push({role:'assistant', content:run.stream.content, activity:run.stream.activity});
     run.messages.push({role:'error',content:localizeError(e)});
     run.queueOutcome = 'failed';
-    if (!payload.retry) run.failedSend = {content:payload.content, attachments:payload.attachments || [],...pasteMetadata(payload)};
+    if (!payload.retry) run.failedSend = {content:payload.content, attachments:payload.attachments || [],edit_index:payload.edit_index,...pasteMetadata(payload)};
     return false;
   }
   finally {
     state.pendingConversations.delete(id);
     run.pending = false;run.submitting = false;stopTimer();invalidateBalances();
-    if (state.activeConversationId !== id && findConversation(id)) state.unread.add(id);
     if (state.activeConversationId === id) {
+      state.conversationLoadFailed = false;
       state.messages = run.messages;state.lastUsage = run.usage;state.failedSend = run.failedSend;
       renderMessages();updateContextInfo();
     }
+    markConversationFinished(id);
     renderSidebar();updateComposerControls();
     // Completed or stopped: the user's drafts continue in FIFO order. Only an
     // unknown failure pauses the queue to avoid replaying a lost request.
@@ -1444,7 +1465,7 @@ function updateComposerControls() {
   stop.disabled = !busy || notReady || dictating || recording || !!run?.stopping;
   send.hidden = busy && !composerHasContent() && !recording && !preparingImages;
   send.disabled = notReady || dictating || preparingImages;
-  const label = t(busy ? 'chat.queue_send' : 'titlebar.send');
+  const label = t(busy ? 'chat.queue_send' : state.editingMessageIndex !== null ? 'chat.send_edit' : 'titlebar.send');
   send.setAttribute('aria-label', label);
   send.title = label;
   skillsChooser?.sync();mentionsChooser?.sync();
@@ -2079,6 +2100,7 @@ function closeSettings() {
   $('#settings-overlay').hidden = true;
   $('.app').inert = false;
   $('#btn-settings').focus();
+  acknowledgeVisibleChat();
 }
 
 // ===== Utility =====
@@ -2129,6 +2151,7 @@ async function init() {
     el.replaceWith(icon(el.dataset.icon));
   });
   setupChatScroll();
+  setupChatReadStatus();
   setupTreeOverlays();
   setupProjectEditor();
   setupComposerExtras();
@@ -2146,7 +2169,7 @@ async function init() {
   await appWindow.listen('companion-started', async ({payload}) => {
     const id = payload?.conversation_id;if (!id || state.runs.get(id)?.pending) return;
     const run = {pending:true, external:true, since:Date.now(), messages:[], usage:null};
-    state.runs.set(id,run);
+    state.runs.set(id,run);state.unread.delete(id);
     try {
       applyChatData(await invoke('get_data'));
       const saved = findConversation(id)?.conversation;
@@ -2159,19 +2182,34 @@ async function init() {
   });
   await appWindow.listen('companion-updated', async ({payload}) => {
     const run = state.runs.get(payload?.conversation_id);
-    if (run?.external) {run.pending=false;await finishLiveTurn(run);}
+    const completed = !!run?.external && run.pending && ['completed','failed'].includes(payload.status);
+    if (completed) {
+      run.pending=false;run.awaitingHistory=true;
+      run.queueOutcome=payload.status === 'failed' ? 'failed' : payload.cancelled ? 'cancelled' : 'completed';
+      await finishLiveTurn(run);stopTimer();
+      if (findConversation(payload.conversation_id)) state.unread.add(payload.conversation_id);
+      renderSidebar();
+    }
     if (state.preparing || [...state.runs.values()].some(run => run.pending && !run.external)) return;
     try {
       const data = await invoke('get_data');
       applyChatData(data);
+      const completedChat = run?.external && run.awaitingHistory && conversationInData(data,payload.conversation_id);
+      if (completedChat?.messages_loaded) {
+        run.messages = (completedChat.messages || []).slice();run.awaitingHistory=false;
+        run.baseRevision = completedChat.revision;run.baseUpdatedAt = completedChat.updated_at;
+      }
       if (state.activeConversationId && !findConversation(state.activeConversationId)) clearChat();
       const active = findConversation(state.activeConversationId)?.conversation;
-      if (active?.messages_loaded) { restoreConversationHistory(state.activeConversationId,active);renderMessages();updateContextInfo(); }
-      if (run?.external) {run.messages=(conversationInData(data,payload.conversation_id)?.messages || run.messages).slice();stopTimer();}
-      if (run?.external && state.activeConversationId !== payload.conversation_id) state.unread.add(payload.conversation_id);
+      if (active?.messages_loaded) {
+        restoreConversationHistory(state.activeConversationId,active);state.conversationLoadFailed=false;
+        renderMessages();updateContextInfo();markConversationRead();
+      }
+      if (run?.external && !run.pending) {run.messages=(conversationInData(data,payload.conversation_id)?.messages || run.messages).slice();stopTimer();}
       renderSidebar();updateComposerControls();
       // The turn ended elsewhere: continue this chat's local FIFO queue.
-      if (run?.external) flushQueue(payload.conversation_id);
+      if (completed && run.queueOutcome === 'failed') {if (state.queues.get(payload.conversation_id)?.length) queuedTurns.paused.add(payload.conversation_id);}
+      else if (completed) flushQueue(payload.conversation_id);
     } catch (error) { showError(localizeError(error)); }
   });
   await appWindow.listen('open-conversation', ({payload}) => {
@@ -2464,9 +2502,65 @@ function setupAppMenus() {
   });
 }
 
+function setupSidebarResize(compact) {
+  const sidebar = $('#sidebar'), handle = $('#sidebar-resize'), workspace = $('.workspace');
+  const panel = $('#browser-panel'), main = $('.main'), key = 'aurachat.sidebarWidth';
+  const min = parseFloat(getComputedStyle(sidebar).getPropertyValue('--sidebar-min-width'));
+  let preferred = min, drag = null;
+  try {
+    const saved = Number(localStorage.getItem(key));
+    if (Number.isFinite(saved) && saved >= min) preferred = saved;
+  } catch (error) {console.warn('Sidebar width could not be read:', error);}
+  function maximum() {
+    const occupied = getComputedStyle(main).display === 'none' ? 0 : panel.offsetWidth;
+    return Math.max(min, Math.min(480, workspace.clientWidth - occupied - BROWSER_WIDTH.keep));
+  }
+  function apply(width = preferred) {
+    const max = maximum(), next = Math.round(Math.max(min, Math.min(width, max)));
+    sidebar.style.setProperty('--sidebar-width', `${next}px`);
+    handle.setAttribute('aria-valuemin', min);handle.setAttribute('aria-valuemax', max);handle.setAttribute('aria-valuenow', next);
+    return next;
+  }
+  function save(width) {
+    preferred = width;
+    try {localStorage.setItem(key, String(width));} catch (error) {console.warn('Sidebar width could not be saved:', error);}
+  }
+  handle.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || !event.isPrimary || drag) return;
+    event.preventDefault();handle.focus({preventScroll:true});handle.setPointerCapture(event.pointerId);
+    drag = {id:event.pointerId, x:event.clientX, width:sidebar.offsetWidth};
+    handle.classList.add('is-resizing');
+  });
+  handle.addEventListener('pointermove', event => {
+    if (drag?.id === event.pointerId) apply(drag.width + event.clientX - drag.x);
+  });
+  handle.addEventListener('pointerup', event => {
+    if (drag?.id !== event.pointerId) return;
+    const next = apply(drag.width + event.clientX - drag.x);
+    if (next !== drag.width) save(next);
+    handle.releasePointerCapture(event.pointerId);
+  });
+  handle.addEventListener('lostpointercapture', event => {
+    if (drag?.id !== event.pointerId) return;
+    drag = null;handle.classList.remove('is-resizing');apply();
+  });
+  handle.addEventListener('keydown', event => {
+    const step = event.shiftKey ? 80 : 24;
+    const next = {ArrowLeft:sidebar.offsetWidth - step, ArrowRight:sidebar.offsetWidth + step, Home:min, End:maximum()}[event.key];
+    if (next === undefined) return;
+    event.preventDefault();save(apply(next));
+  });
+  // Keep the preferred width when the window or the opposite panel temporarily limits it.
+  const refresh = () => {if (!compact.matches && !drag) apply();};
+  const observer = new ResizeObserver(refresh);
+  observer.observe(workspace);observer.observe(panel);
+  compact.addEventListener('change', refresh);refresh();
+}
+
 function setupShell() {
   window.addEventListener('resize',closeChoiceMenus);
   const compact = matchMedia('(max-width:850px)');
+  setupSidebarResize(compact);
   const shade = document.createElement('button');shade.className = 'sidebar-shade';shade.type = 'button';
   shade.tabIndex = -1;shade.setAttribute('aria-label',t('ui.collapse'));$('.sidebar').after(shade);
   const setSidebar = collapsed => {

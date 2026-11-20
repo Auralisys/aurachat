@@ -8,14 +8,18 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
     const created={kind:'tool',id:'t1',action:'create_chat',arguments:{title:'Seguito',message:'Handoff completo'},status:'completed',output:JSON.stringify({chat_id:'child',title:'Seguito',linked:true,status:'started'})};
     const missing={kind:'tool',id:'t2',action:'create_chat',arguments:{title:'Persa',message:'x'},status:'completed',output:JSON.stringify({chat_id:'gone',title:'Persa',linked:false,status:'started'})};
     const chat=(id,title,updated_at,extra={})=>({id,title,created_at:1,updated_at,context_tokens:0,messages:[],messages_loaded:true,revision:'r0',...extra});
-    window.__data={projects:[],conversations:[
+    window.__data={projects:[{id:'p',name:'Archivio',source_folders:[],conversations:[
+      chat('files','Riordino dei documenti',8),
+      chat('notes','Verifica dei documenti ricevuti e dei campi mancanti nel riepilogo finale',9,{linked_from:'files',created_at:1795172400000,model:'demo'}),
+      chat('review','Revisione finale',7,{linked_from:'notes'}),
+    ]}],conversations:[
       chat('parent','Chat madre',5,{messages:[{role:'user',content:'Prepara tutto'},{role:'assistant',content:'Fatto, ho aperto una chat.',activity:[created,missing]}]}),
       chat('child','Seguito',4,{linked_from:'parent',messages:[{role:'user',content:'Handoff completo'},{role:'assistant',content:'Riparto da qui.'}]}),
       chat('orphan','Orfana',3,{linked_from:'deleted'}),
       chat('free','Libera',2),
     ]};
     window.__calls=[];window.__events={};
-    const conversation=(data,id)=>data.conversations.find(c=>c.id===id);
+    const conversation=(data,id)=>[...data.conversations,...data.projects.flatMap(p=>p.conversations)].find(c=>c.id===id);
     const config={firebase_email:'demo@example.com',firebase_auth_set:true,api_key_set:true,models:['demo'],active_model:'demo'};
     window.__TAURI__={window:{getCurrentWindow:()=>({async listen(name,fn){window.__events[name]=fn;return()=>{};}})},core:{invoke:async(cmd,args)=>{
       window.__calls.push({cmd,args});
@@ -40,12 +44,39 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   const row=id=>page.locator(`#recent-chats [data-conversation-id="${id}"]`);
   const shots=resolve(__dirname,'../../.artifact/chat-links');mkdirSync(shots,{recursive:true});
 
-  // Sidebar: only chats whose parent still exists are marked.
+  // The same family can be explored independently in Projects and Recents.
   const label=locales['chat.linked_from'].replace('{title}','Chat madre');
-  assert.equal(await row('child').locator('.linked-chat').count(),1);
-  assert.equal(await row('child').locator('.linked-chat').getAttribute('title'),label);
-  assert.equal(await row('orphan').locator('.linked-chat').count(),0);
-  assert.equal(await row('free').locator('.linked-chat').count(),0);
+  assert.equal(await row('child').locator('xpath=../..').getAttribute('id'),'chat-children-recents-parent');
+  assert.equal(await row('orphan').locator('xpath=ancestor::div[@class="chat-children"]').count(),0);
+  const projectRow=id=>page.locator(`#sidebar-tree [data-conversation-id="${id}"]`);
+  const branch=projectRow('files').locator('.chat-toggle');
+  await branch.focus();await page.keyboard.press('Space');
+  assert.equal(await projectRow('review').isVisible(),false);assert.equal(await row('review').isVisible(),true);
+  await page.evaluate(()=>renderSidebar());
+  assert.equal(await branch.getAttribute('aria-expanded'),'false');await branch.click();
+  await page.evaluate(()=>document.activeElement.blur());
+  const name=projectRow('notes').locator('.tree-conv__title');
+  await name.hover();const peek=page.locator('#project-preview');await peek.waitFor({state:'visible'});
+  assert.match(await peek.innerText(),/Creata:.*Verifica.*Archivio.*demo/s);
+  assert.equal(await peek.locator('.chat-preview__status').textContent(),locales['sidebar.chat_idle']);
+  assert.equal(await projectRow('notes').locator('.chat-toggle > .chat-indicator[role="status"]').count(),1);
+  assert.equal(await projectRow('notes').locator('.chat-project-hint').isVisible(),true);
+  const motion=await name.locator('span').evaluate(el=>({animation:getComputedStyle(el).animationName,travel:parseFloat(el.style.getPropertyValue('--title-travel')),diff:el.scrollWidth-el.parentNode.clientWidth}));
+  assert.equal(motion.animation,'chat-title-pan');assert.ok(motion.diff>0 && Math.abs(motion.travel+motion.diff)<=1);
+  assert.equal(await projectRow('review').locator('xpath=../..').getAttribute('id'),'chat-children-projects-notes');
+  await page.screenshot({path:resolve(shots,'chat-tree-preview.png'),clip:{x:50,y:45,width:555,height:375}});
+  await page.keyboard.press('Escape');await peek.waitFor({state:'hidden'});
+  await page.emulateMedia({reducedMotion:'reduce'});assert.equal(await name.locator('span').evaluate(el=>getComputedStyle(el).animationName),'none');
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  const recentIds=await page.evaluate(()=>{
+    const nav=document.createElement('nav');
+    const chats=[{id:'fresh',linked_from:'old'},...Array.from({length:15},(_,i)=>({id:`separate-${i}`})),
+      {id:'old'}, {id:'sibling',linked_from:'old'}];
+    appendChatTree(nav,chats,'recents',()=>null,12);
+    return [...nav.querySelectorAll('.tree-conv')].map(row=>row.dataset.conversationId);
+  });
+  assert.deepEqual(recentIds.slice(0,3),['old','fresh','sibling']);
+  assert.equal(new Set(recentIds).size,recentIds.length);
   await page.screenshot({path:resolve(shots,'sidebar.png')});
 
   // The step that created a chat links to it; a deleted chat leaves no button.
@@ -59,8 +90,11 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   assert.equal(await page.locator('#conversation-link').count(),0);
   await page.screenshot({path:resolve(shots,'created-step.png')});
   assert.equal(await steps.first().evaluate(el=>el.open),false);
+  await row('parent').locator('.chat-toggle').click();
+  assert.equal(await row('child').isVisible(),false);
   await steps.first().locator('.turn-step__open').click();
   assert.equal(await page.evaluate(()=>state.activeConversationId),'child');
+  assert.equal(await row('child').isVisible(),true);
 
   // The linked chat points back at its parent.
   const chip=page.locator('#conversation-link');

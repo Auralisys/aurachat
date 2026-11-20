@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'prompt_edit.dart';
 
 /// Opzioni dell'app Android. Non usarle su iOS: un appId `:android:` è
 /// invalido per Firebase iOS e fa terminare l'app all'avvio.
@@ -32,6 +33,7 @@ Future<void> backgroundMessage(RemoteMessage message) async {
 }
 
 String friendlyError(Object error) {
+  if (error is EditUnavailable) return EditUnavailable.message;
   if (error.toString().contains('GoogleService-Info.plist')) {
     return 'Configurazione iOS mancante: aggiungi GoogleService-Info.plist al target Runner.';
   }
@@ -135,9 +137,10 @@ class DictationException implements Exception {
 }
 
 class Companion {
-  Companion(this.uid);
+  Companion(this.uid, {FirebaseFirestore? firestore})
+    : db = firestore ?? FirebaseFirestore.instance;
   final String uid;
-  final db = FirebaseFirestore.instance;
+  final FirebaseFirestore db;
   DocumentReference<Map<String, dynamic>> get user =>
       db.collection('users').doc(uid);
   CollectionReference<Map<String, dynamic>> get devices =>
@@ -153,7 +156,7 @@ class Companion {
       .doc(id)
       .collection('messages')
       .orderBy('sequence')
-      .snapshots();
+      .snapshots(includeMetadataChanges: true);
   CollectionReference<Map<String, dynamic>> requests(String device) =>
       devices.doc(device).collection('requests');
   Future<String> send(
@@ -165,36 +168,104 @@ class Companion {
     String action = 'chat',
     Map<String, dynamic> extra = const {},
     List<Map<String, dynamic>> attachments = const [],
+    ({SavedPromptEdit prompt, bool Function() current})? edit,
   }) async {
+    if (edit != null) {
+      final prompt = edit.prompt;
+      if (newConversation ||
+          action != 'chat' ||
+          !SavedPromptEdit.answered(prompt.history, prompt.index) ||
+          prompt.attachmentProblem != null ||
+          !prompt.accepts(content)) {
+        throw const EditUnavailable();
+      }
+      attachments = prompt.attachments;
+    }
     // One document per attachment: a few photos together would exceed the
     // 1 MiB Firestore document limit.
     final parts = [for (final _ in attachments) requests(device).doc()];
     final request = requests(device).doc();
+    Map<String, dynamic> partData(int i) => {
+      'conversation_id': conversation,
+      'content': '',
+      'action': 'attachment',
+      'status': 'attachment',
+      'created_at': DateTime.now().millisecondsSinceEpoch,
+      'attachment': attachments[i],
+    };
+    final envelope = {
+      'conversation_id': conversation,
+      'content': content,
+      'new_conversation': newConversation,
+      'project_id': project,
+      'action': action,
+      'created_at': DateTime.now().millisecondsSinceEpoch,
+      'status': 'pending',
+      if (parts.isNotEmpty)
+        'attachment_parts': [for (final part in parts) part.id],
+      ...extra,
+      if (edit != null) 'edit_index': edit.prompt.index,
+    };
+    if (edit != null) {
+      // Unlike an append, a positional edit must never sit in the offline
+      // write queue. Check the server and publish parts + request atomically.
+      final target = devices.doc(device);
+      final chat = user.collection('conversations').doc(conversation);
+      final prompt = edit.prompt;
+      await db.runTransaction<void>((tx) async {
+        final pc = (await tx.get(target)).data();
+        final protocol = pc?['protocol'];
+        if (pc == null ||
+            !deviceOnline(pc) ||
+            protocol is! int ||
+            protocol < SavedPromptEdit.protocol ||
+            parts.isNotEmpty && protocol < attachmentProtocol ||
+            !prompt.matchesMetadata((await tx.get(chat)).data()) ||
+            (await tx.get(
+                  target.collection('live_turns').doc(conversation),
+                )).data()?['status'] ==
+                'running') {
+          throw const EditUnavailable();
+        }
+        final doc = chat
+            .collection('messages')
+            .doc('m${prompt.index.toString().padLeft(12, '0')}');
+        final header = (await tx.get(doc)).data();
+        Object? stored = header;
+        if (header?['chunked'] == true) {
+          final count = header?['part_count'];
+          if (count is! int ||
+              count < 1 ||
+              count > 16 ||
+              header?['sequence'] != prompt.index) {
+            throw const EditUnavailable();
+          }
+          final json = StringBuffer();
+          for (var i = 0; i < count; i++) {
+            final part = doc
+                .collection('parts')
+                .doc('p${i.toString().padLeft(6, '0')}');
+            final chunk = (await tx.get(part)).data()?['data'];
+            if (chunk is! String) throw const EditUnavailable();
+            json.write(chunk);
+          }
+          stored = jsonDecode(json.toString());
+        }
+        if (!prompt.matchesOriginal(stored) || !edit.current()) {
+          throw const EditUnavailable();
+        }
+        for (var i = 0; i < parts.length; i++) {
+          tx.set(parts[i], partData(i));
+        }
+        tx.set(request, envelope);
+      }, maxAttempts: 1);
+      return request.id;
+    }
     try {
       await Future.wait([
-        for (var i = 0; i < parts.length; i++)
-          parts[i].set({
-            'conversation_id': conversation,
-            'content': '',
-            'action': 'attachment',
-            'status': 'attachment',
-            'created_at': DateTime.now().millisecondsSinceEpoch,
-            'attachment': attachments[i],
-          }),
+        for (var i = 0; i < parts.length; i++) parts[i].set(partData(i)),
       ]);
-      // A unique request is written once; ambiguous outcomes are never auto-replayed.
-      await request.set({
-        'conversation_id': conversation,
-        'content': content,
-        'new_conversation': newConversation,
-        'project_id': project,
-        'action': action,
-        'created_at': DateTime.now().millisecondsSinceEpoch,
-        'status': 'pending',
-        if (parts.isNotEmpty)
-          'attachment_parts': [for (final part in parts) part.id],
-        ...extra,
-      });
+      await request.set(envelope);
     } catch (_) {
       discardParts(device, [for (final part in parts) part.id]);
       rethrow;
@@ -342,13 +413,13 @@ class Companion {
         if (parts.docs.length != value['part_count']) {
           throw StateError('incomplete_message');
         }
-        result.add(
-          Map<String, dynamic>.from(
-            jsonDecode(
-              parts.docs.map((p) => p.data()['data'] as String).join(),
-            ),
-          ),
+        final message = Map<String, dynamic>.from(
+          jsonDecode(parts.docs.map((p) => p.data()['data'] as String).join()),
         );
+        if (message['sequence'] != value['sequence']) {
+          throw StateError('invalid_message_sequence');
+        }
+        result.add(message);
       } else {
         result.add(value);
       }

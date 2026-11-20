@@ -145,11 +145,24 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  await page.getByRole('link',{name:'fonte',exact:true}).click({modifiers:['Control']});assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='open_external_url').at(-1).args.url),'https://example.com/');
  await page.locator('#context-info summary').click();assert.match(await page.locator('#context-details').innerText(),/33/);
  await page.locator('#context-info summary').click();await page.screenshot({path:resolve(shots,'markdown-desktop.png')});
- // Editing resubmits the selected user turn and replaces its following answer.
- await page.locator('.msg--user').hover();await page.getByRole('button',{name:'Modifica messaggio',exact:true}).click();
+ // Edit a completed prompt with a later exchange. Entering and cancelling the editor are non-destructive.
+ await page.fill('#composer-input','Seconda domanda da sostituire');await page.click('#composer-send');
+ await page.waitForFunction(()=>window.__store.conversations[0].messages.length===4 && !state.busy);
+ const firstEdit=page.locator('.msg--user').first().getByRole('button',{name:'Modifica messaggio',exact:true});
+ await firstEdit.click();await page.click('#cancel-edit');
+ assert.equal(await page.locator('.msg--user').count(),2);
+ await firstEdit.click();
  assert.equal(await page.locator('#editing-message').isVisible(),true);
- await page.fill('#composer-input','Messaggio modificato');await page.click('#composer-send');await page.waitForFunction(()=>window.__store.conversations[0].messages[0].content==='Messaggio modificato');
+ await page.fill('#composer-input','Messaggio modificato');
+ await page.locator('.composer').screenshot({path:resolve(shots,'edit-prompt.png')});
+ await page.evaluate(()=>window.__failChat=true);
+ await page.getByRole('button',{name:'Invia modifica',exact:true}).click();
+ await page.locator('.msg--error').waitFor();
+ assert.equal(await page.evaluate(()=>window.__store.conversations[0].messages.length),4);
+ await page.locator('.msg--error .message-action').last().click();
+ await page.waitForFunction(()=>window.__store.conversations[0].messages[0].content==='Messaggio modificato');
  assert.equal(await page.evaluate(()=>window.__store.conversations[0].messages.length),2);
+ assert.equal(await page.locator('.msg--user').count(),1);
  // A failed regeneration cannot remove the saved answer.
  const saved=await page.evaluate(()=>window.__store.conversations[0].messages);
  await page.evaluate(()=>window.__failChat=true);await page.getByRole('button',{name:'Rigenera risposta',exact:true}).click();await page.locator('.msg--error').waitFor();

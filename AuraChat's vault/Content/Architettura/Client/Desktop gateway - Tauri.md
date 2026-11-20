@@ -35,6 +35,25 @@ Il processo resta attivo nel tray; il frontend statico comunica con Rust via IPC
 
 ## Permessi e operazioni locali — 17 ottobre 2026
 
+Aggiornamento 20 novembre: i tool file accettano percorsi assoluti, senza
+richiedere un indice root. Accesso completo non chiede altri consensi per
+riferimenti esterni, entro i permessi del sistema operativo. In Ask/Auto,
+lettura, elenco e ricerca fuori dal progetto richiedono una conferma esplicita
+**Consenti per questa chat**, mai delegata al reviewer automatico.
+Il consenso è di sola lettura sul percorso canonico e sui suoi discendenti
+se è una cartella; vale per account, progetto e chat nella sessione dell'app,
+inclusi i subagenti della stessa chat, non le nuove chat collegate.
+È conservato soltanto in memoria e si perde al logout o all'uscita completa
+da AuraChat (nascondere la finestra nel tray non basta). Nessuna modifica a
+cartelle del progetto, consensi persistenti o Firestore. Lo spostamento della
+chat in un altro progetto o la sua eliminazione rimuove il consenso quando
+viene ricaricato o salvato l'albero.
+I percorsi vengono ricontrollati dopo l'attesa; scritture e comandi fuori root
+non sono autorizzati da un riferimento in sola lettura. Resta necessario il
+consenso iniziale a una cartella del progetto per esporre gli strumenti.
+La risposta deve specificare `scope: chat_session` per ricordare il consenso:
+le risposte dei vecchi client senza scope restano monouso.
+
 Il selettore a sinistra del composer, accanto al +, salva la modalità per
 account e progetto: Richiedi approvazione (default), Approva per me e Accesso
 completo. Il backend conferma il cambio; full access richiede conferma iniziale.
@@ -237,7 +256,10 @@ Nessuna blacklist di estensioni: Markdown e script richiesti come deliverable
 restano pubblicabili. Le pubblicazioni si ricostruiscono anche dai sub-agenti.
 
 La riga Modifiche apre la scheda Git; il menu ellissi separato offre Commit,
-Commit e push e dettaglio completo. Il dettaglio
+Commit e push e dettaglio completo. I primi due inviano un prompt al modello:
+solo le modifiche della chat, senza toccare altro lavoro già in stage; se non
+si possono separare o il push porterebbe con sé altri commit, chiedere conferma.
+Il dettaglio
 separa stage reale/non staged, con azioni +/− e operazioni su tutto il gruppo.
 Nel gruppo Non staged, cestino per singolo file e Scarta tutti richiedono conferma
 con l'elenco dei file. Il ripristino usa l'indice corrente: lo stage, anche
@@ -522,6 +544,11 @@ macOS usa la versione con sfondo scuro come l'app mobile.
 
 ## Dettatura, coda e sidebar — 22 ottobre 2026
 
+La colonna desktop **Progetti e Recenti** ha un separatore sul bordo destro:
+248 px di base, fino a 480 px secondo lo spazio rimasto alla chat e al pannello
+laterale. La larghezza scelta viene salvata in `localStorage` sul dispositivo,
+non nel progetto o nella conversazione. Il cassetto compatto resta indipendente.
+
 **Dettatura** (`8b21617`). Dopo l'invio dell'audio `voice.status`
 (`ui/voice.js:83`) resta visibile finché la trascrizione è in corso, con tre
 puntini animati e testo shimmer; con riduzione movimento l'animazione è
@@ -603,7 +630,7 @@ silenziosamente i campi. Il companion mobile resta compatibile.
 
 `remoteComputerIcon` aggiunge il glifo Lucide Monitor a sinistra del titolo della
 chat nella sidebar e nell'intestazione, con tooltip e nome accessibile del
-computer. Il loader resta a destra. Errori e offline sono espliciti: mai ripiego
+computer. L'indicatore di stato precede il titolo. Errori e offline sono espliciti: mai ripiego
 sull'esecuzione locale.
 
 ## Titoli sintetici delle chat — 26 ottobre 2026
@@ -1078,9 +1105,27 @@ così non si formano catene automatiche.
 `Conversation.linked_from` (opzionale, solo informativo) conserva l'id della chat
 madre per le chat collegate; entra nel riepilogo dell'albero (`storage_tree`) e
 sopravvive ai salvataggi della UI e a `load_conversation`. Il telefono ignora il
-campo. UI: icona a catena nella sidebar, chip «Collegata a …» nell'intestazione,
+campo. UI: ramo rientrato e richiudibile sotto la madre sia in Progetti sia in
+Recenti; la freccia non apre una conversazione. Passando sul titolo o dandogli
+il focus si vedono progetto, stato, data e modello senza caricare la cronologia.
+Il titolo lungo scorre fino alla fine (statico con movimento ridotto).
+Lo stato nella scheda e l'indicatore prima del titolo usano la stessa derivazione
+(`sidebar-chats.js`): **Done** verde e pallino blu per un risultato da leggere,
+**Idle** neutro dopo la lettura. Restano distinti In corso, Caricamento,
+In attesa, Errore e Interrotta. Il semplice hover non segna nulla come letto;
+occorrono cronologia caricata, chat visibile, finestra a fuoco e nessuna schermata
+impostazioni sopra di essa. Un caricamento fallito conserva il non letto.
+La lettura è locale alla sessione desktop, non salvata su Firestore.
+I completamenti companion e `create_chat` includono esito e interruzione:
+aggiornamenti di soli metadati non riattivano Done; errori e Stop non sono successi.
+Test degli stati e delle transizioni in `desktop/tests/background-chats.cjs`.
+Restano il chip «Collegata a …» nell'intestazione,
 pulsante «Apri chat» nel passo `create_chat` della cronologia e, nel menu opzioni
 della chat, «Handoff in una nuova chat» / «Handoff in una chat collegata», che
 inviano un prompt preimpostato localizzato (il modello scrive l'handoff, usa la
 skill se disponibile, chiama `create_chat`). Test: `desktop/tests/chat-links.cjs` e
 `chat_links::tests`.
+
+Sotto ogni messaggio utente «Modifica» permette di ripartire da quel punto:
+solo «Invia modifica» invia `edit_index` e sostituisce il seguito; annullare
+l'editor non modifica la cronologia.

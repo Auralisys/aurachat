@@ -72,6 +72,14 @@ const assert=require('node:assert/strict');
     assert.equal(await page.locator('.git-group button').count(),2);
     assert.equal(await page.locator('.git-group .activity-pill').count(),0);
     const shots=resolve(__dirname,'../../.artifact/git');mkdirSync(shots,{recursive:true});
+    // Exercise both recap shortcuts without sending a real instruction or touching the index.
+    await page.evaluate(()=>{window.__normalSend=send;send=()=>{window.__instruction=composerText();};});
+    for (const [action,pattern] of [['Commit…',/commit solo.*questa chat/i],['Commit e push…',/commit e il push solo.*questa chat/i]]) {
+      await page.locator('.git-group .git-menu-trigger').click();
+      await page.getByRole('menuitem',{name:action,exact:true}).click();
+      assert.match(await page.evaluate(()=>__instruction),pattern);
+    }
+    await page.evaluate(()=>{send=window.__normalSend;clearComposer();});
     await card.hover();
     await page.screenshot({path:resolve(shots,'recap-desktop.png')});
     assert.equal(await page.locator('#activity-card [data-activity-focus="group:outputs"]').innerText(),'Output');

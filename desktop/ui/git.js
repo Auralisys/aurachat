@@ -112,7 +112,7 @@ function renderGitCard(card) {
 function openGitMenu(row, trigger) {
   const epoch = gitView.epoch, root = gitView.root;
   const current = action => () => {if (epoch === gitView.epoch && root === gitView.root) action();};
-  const unavailable = gitView.working || !!gitView.staging || state.busy || !gitView.data?.files.length;
+  const unavailable = gitView.working || !!gitView.staging || state.busy || state.editingMessageIndex !== null || !gitView.data?.files.length;
   showTreeMenu(row, trigger, t('git.changes'), [
     ['check', 'git.commit', current(() => gitChatCommit(false)), unavailable],
     ['send', 'git.commit_push', current(() => gitChatCommit(true)), unavailable || !gitView.data?.upstream],

@@ -29,6 +29,7 @@ import 'chat_recap.dart';
 import 'chat_scroll.dart';
 import 'question_card.dart';
 import 'message_images.dart';
+import 'prompt_edit.dart';
 
 final push = PushNotifications();
 void startAuraChat() {
@@ -312,7 +313,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
   requestSubscription;
   final List<Map<String, dynamic>> devices = [];
-  List<Map<String, dynamic>> chats = [], messages = [], approvals = [], questions = [];
+  List<Map<String, dynamic>> chats = [],
+      messages = [],
+      approvals = [],
+      questions = [];
   Map<String, Map<String, dynamic>> liveTurns = {};
   Map<String, dynamic> tree = {};
   String? deviceId,
@@ -325,6 +329,8 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       error,
       pendingText;
   bool loading = true, sending = false, loadingMessages = false;
+  bool editHistoryReady = false, requestRestored = false;
+  int? pendingEditIndex;
   bool notificationIndexReady = false, notificationDevicesReady = false;
   Timer? notificationWait;
   NotificationTarget? waitingNotification;
@@ -339,6 +345,31 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       : null;
   bool get liveRunning => activeLive != null;
   bool get turnBusy => busy || liveRunning;
+  int? get chatUpdatedAt {
+    final time = chats
+        .where((c) => c['id'] == conversationId)
+        .firstOrNull?['updated_at'];
+    return time is int ? time : null;
+  }
+
+  bool get editContextReady =>
+      !libraryVisible &&
+      online &&
+      editHistoryReady &&
+      requestRestored &&
+      chatUpdatedAt != null &&
+      (device?['protocol'] as num? ?? 0) >= SavedPromptEdit.protocol &&
+      requestStatus != 'pending' &&
+      requestStatus != 'running' &&
+      liveTurns[conversationId]?['status'] != 'running' &&
+      !micActive &&
+      !micTranscribing &&
+      (currentGuides?.items.isEmpty ?? true) &&
+      !outbox.values.any(
+        (q) =>
+            q.device == deviceId &&
+            (q.drafts.isNotEmpty || q.operation != null),
+      );
 
   /// Current step of the live turn, used instead of a generic loader.
   String? get livePhase {
@@ -615,24 +646,22 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     if (deviceId == null) {
       return;
     }
-    questionSubscription = api
-        .questions(deviceId!)
-        .listen((snapshot) {
-          if (mounted) {
-            setState(
-              () => questions = snapshot.docs
-                  .map((d) => d.data())
-                  .where(
-                    (q) =>
-                        q['status'] == 'pending' &&
-                        DateTime.now().millisecondsSinceEpoch -
-                                ((q['created_at'] as num?)?.toInt() ?? 0) <
-                            600000,
-                  )
-                  .toList(),
-            );
-          }
-        }, onError: fail);
+    questionSubscription = api.questions(deviceId!).listen((snapshot) {
+      if (mounted) {
+        setState(
+          () => questions = snapshot.docs
+              .map((d) => d.data())
+              .where(
+                (q) =>
+                    q['status'] == 'pending' &&
+                    DateTime.now().millisecondsSinceEpoch -
+                            ((q['created_at'] as num?)?.toInt() ?? 0) <
+                        600000,
+              )
+              .toList(),
+        );
+      }
+    }, onError: fail);
   }
 
   void watchLiveTurns() {
@@ -684,14 +713,16 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   }
 
   Future<void> restoreRequest() async {
+    final target = deviceId;
+    requestRestored = false;
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString('request_${widget.user.uid}');
-    if (!mounted || saved == null) {
-      return;
-    }
-    final parts = saved.split('/');
-    if (parts.length == 2 && parts.first == deviceId) {
+    if (!mounted || target != deviceId) return;
+    final parts = saved?.split('/');
+    if (parts != null && parts.length == 2 && parts.first == deviceId) {
       watchRequest(parts.last);
+    } else {
+      setState(() => requestRestored = true);
     }
   }
 
@@ -702,20 +733,26 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     requestSubscription = api
         .requests(watchedDevice)
         .doc(id)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .listen((snapshot) {
-          if (!mounted ||
-              deviceId != watchedDevice ||
-              activeRequestId != id ||
-              snapshot.data() == null) {
+          if (!mounted || deviceId != watchedDevice || activeRequestId != id) {
+            return;
+          }
+          if (snapshot.data() == null) {
+            setState(() => requestRestored = !snapshot.metadata.isFromCache);
             return;
           }
           final data = snapshot.data()!;
           setState(() {
+            requestRestored = !snapshot.metadata.isFromCache;
             final previous = requestStatus;
             requestStatus = data['status'];
             requestConversation = data['conversation_id'];
             pendingText = busy ? data['content'] : null;
+            final index = data['edit_index'];
+            pendingEditIndex = busy && index is int && index >= 0
+                ? index
+                : null;
             if (!busy) pendingAttachments = const [];
             for (final lane in outbox.values.where(
               (q) => q.device == watchedDevice,
@@ -739,6 +776,8 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       push.visibleDevice = id;
       requestStatus = null;
       activeRequestId = null;
+      pendingEditIndex = null;
+      requestRestored = false;
       pendingText = null;
       pendingAttachments = const [];
     });
@@ -798,6 +837,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       conversationId = chat?['id'];
       projectId = chat?['project_id'];
       messages = [];
+      editHistoryReady = false;
       landingAnchor = null;
       loadingMessages = chat != null;
       error = null;
@@ -806,47 +846,105 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     if (chat == null) {
       return;
     }
-    messageSubscription = api.messages(conversationId!).listen((
-      snapshot,
-    ) async {
-      try {
-        final decoded = await api.decodeMessages(snapshot.docs);
-        if (!mounted || version != loadVersion) {
-          return;
-        }
-        final wasLoading = loadingMessages;
-        final follow =
-            wasLoading ||
-            !scroll.hasClients ||
-            scroll.positions.length == 1 && scroll.position.extentAfter < 100;
-        // A chat at rest opens on its last exchange; one with a turn running,
-        // waiting or queued opens at the bottom, where it is moving.
-        final atRest =
-            !(busy && requestConversation == conversationId) &&
-            !liveRunning &&
-            (currentQueue?.drafts.isEmpty ?? true) &&
-            (currentGuides?.items.isEmpty ?? true);
-        setState(() {
-          messages = decoded;
-          loadingMessages = false;
-          if (wasLoading) {
-            landingAnchor = atRest ? lastPromptIndex(decoded) : null;
-          }
-        });
-        // The list lands by itself when it is built; later snapshots only
-        // follow the bottom if the user is already there.
-        if (follow && !wasLoading) {
-          scrollToBottom(animated: scroll.hasClients);
-        }
-      } catch (e) {
-        if (version == loadVersion) {
-          fail(e);
-        }
-      }
-    }, onError: fail);
+    var latestSnapshot = 0;
+    messageSubscription = api
+        .messages(conversationId!)
+        .listen(
+          (snapshot) async {
+            if (!mounted || version != loadVersion) return;
+            final revision = ++latestSnapshot;
+            if (editHistoryReady) setState(() => editHistoryReady = false);
+            try {
+              final decoded = await api.decodeMessages(snapshot.docs);
+              if (!mounted ||
+                  version != loadVersion ||
+                  revision != latestSnapshot) {
+                return;
+              }
+              final wasLoading = loadingMessages;
+              final follow =
+                  wasLoading ||
+                  !scroll.hasClients ||
+                  scroll.positions.length == 1 &&
+                      scroll.position.extentAfter < 100;
+              // A chat at rest opens on its last exchange; one with a turn running,
+              // waiting or queued opens at the bottom, where it is moving.
+              final atRest =
+                  !(busy && requestConversation == conversationId) &&
+                  !liveRunning &&
+                  (currentQueue?.drafts.isEmpty ?? true) &&
+                  (currentGuides?.items.isEmpty ?? true);
+              setState(() {
+                messages = decoded;
+                editHistoryReady =
+                    !snapshot.metadata.isFromCache &&
+                    decoded.indexed.every(
+                      (entry) => entry.$2['sequence'] == entry.$1,
+                    );
+                loadingMessages = false;
+                if (wasLoading) {
+                  landingAnchor = atRest ? lastPromptIndex(decoded) : null;
+                }
+              });
+              // The list lands by itself when it is built; later snapshots only
+              // follow the bottom if the user is already there.
+              if (follow && !wasLoading) {
+                scrollToBottom(animated: scroll.hasClients);
+              }
+            } catch (e) {
+              if (version == loadVersion && revision == latestSnapshot) {
+                fail(e);
+              }
+            }
+          },
+          onError: (Object e) {
+            if (!mounted || version != loadVersion) return;
+            latestSnapshot++;
+            editHistoryReady = false;
+            fail(e);
+          },
+        );
+  }
+
+  Future<void> editPrompt(int index, Map<String, dynamic> original) async {
+    if (sending ||
+        !editContextReady ||
+        !SavedPromptEdit.answered(messages, index) ||
+        !identical(messages[index], original)) {
+      return;
+    }
+    final prompt = SavedPromptEdit(messages, index, chatUpdatedAt!);
+    final target = deviceId, chat = conversationId;
+    final problem =
+        prompt.hasAttachments && device!['protocol'] < attachmentProtocol
+        ? 'Aggiorna AuraChat sul PC per modificare messaggi con allegati.'
+        : prompt.attachmentProblem;
+    if (problem != null) {
+      setState(() => error = problem);
+      return;
+    }
+    bool current() =>
+        mounted &&
+        editContextReady &&
+        deviceId == target &&
+        conversationId == chat &&
+        identical(messages, prompt.history) &&
+        chatUpdatedAt == prompt.updatedAt;
+    final replacement = await showDialog<String>(
+      context: context,
+      builder: (_) => EditPromptDialog(prompt: prompt),
+    );
+    if (!mounted || replacement == null) return;
+    if (sending || !current() || !prompt.accepts(replacement)) {
+      setState(() => error = EditUnavailable.message);
+      return;
+    }
+    // A positional edit never enters the append/steer queue or the composer.
+    await submitChat(replacement, edit: (prompt: prompt, current: current));
   }
 
   Future<void> send() async {
+    if (pendingEditIndex != null && busy) return;
     // Same as desktop: sending while dictating stops, transcribes, then sends.
     if (micActive) {
       await finishDictation(true);
@@ -861,8 +959,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         : attachments.problem != null
         ? remoteError(attachments.problem)
         : attachments.isNotEmpty &&
-              ((device?['protocol'] as num?)?.toInt() ?? 0) <
-                  attachmentProtocol
+              ((device?['protocol'] as num?)?.toInt() ?? 0) < attachmentProtocol
         ? 'Aggiorna AuraChat sul PC per inviare allegati dal telefono.'
         : null;
     if (notReady != null) {
@@ -873,8 +970,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       final target = conversationId;
       if (target == null) return;
       final asGuide =
-          guideEdit == (deviceId, target) &&
-          liveTurnRunning(liveTurns[target]);
+          guideEdit == (deviceId, target) && liveTurnRunning(liveTurns[target]);
       guideEdit = null;
       late final ConversationQueue lane;
       final draft = QueuedDraft(const Uuid().v4(), text, attachments.take());
@@ -904,16 +1000,28 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       return;
     }
     guideEdit = null;
+    await submitChat(text);
+  }
+
+  Future<void> submitChat(
+    String text, {
+    ({SavedPromptEdit prompt, bool Function() current})? edit,
+  }) async {
     final isNew = conversationId == null;
     final id = conversationId ?? const Uuid().v4();
     final targetDevice = deviceId!;
     final targetProject = projectId;
-    final files = attachments.take();
-    final payloads = [for (final file in files) file.payload];
+    final files = edit == null ? attachments.take() : <ComposerAttachment>[];
+    final payloads =
+        edit?.prompt.attachments ?? [for (final file in files) file.payload];
     setState(() {
       sending = true;
+      // The previous, already terminal receipt must not overwrite this edit
+      // while its transaction is being checked.
+      if (edit != null) activeRequestId = null;
       error = null;
       pendingText = text;
+      pendingEditIndex = edit?.prompt.index;
       pendingAttachments = payloads;
       requestConversation = id;
     });
@@ -928,12 +1036,13 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         project: targetProject,
         extra: {if (isNew && chosenModel != null) 'model': chosenModel},
         attachments: payloads,
+        edit: edit,
       );
       sent = true;
       if (!mounted) {
         return;
       }
-      if (composer.text.trim() == text) composer.clear();
+      if (edit == null && composer.text.trim() == text) composer.clear();
       for (final lane in outbox.values.where(
         (q) =>
             q.device == targetDevice &&
@@ -945,22 +1054,20 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       if (isNew && conversationId == null && deviceId == targetDevice) {
         selectChat({'id': id, 'project_id': targetProject});
       }
+      if (deviceId == targetDevice) {
+        setState(() => requestStatus = 'pending');
+        watchRequest(request);
+      }
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(
         'request_${widget.user.uid}',
         '$targetDevice/$request',
       );
-      if (!mounted) {
-        return;
-      }
-      if (deviceId == targetDevice) {
-        setState(() => requestStatus = 'pending');
-        watchRequest(request);
-      }
     } catch (e) {
       // Like the text, attachments that never reached the PC stay in the draft.
       if (!sent && mounted) {
-        attachments.restore(files);
+        if (edit == null) attachments.restore(files);
+        pendingEditIndex = null;
         pendingAttachments = const [];
       }
       fail(e);
@@ -1044,11 +1151,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                       result is Map &&
                       result['id'] is String &&
                       lane.device == deviceId) {
-                    guides
-                        .putIfAbsent(
-                          (lane.device, lane.conversation),
-                          PendingGuides.new,
-                        )
+                    guides.putIfAbsent((
+                        lane.device,
+                        lane.conversation,
+                      ), PendingGuides.new)
                       ..sync(liveTurns[lane.conversation])
                       ..accepted(
                         result['id'] as String,
@@ -1166,9 +1272,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       setState(() {
         guide.withdrawing = false;
         if (read) tracker.items.remove(guide);
-        error = read
-            ? 'Il modello ha già letto la guida.'
-            : friendlyError(e);
+        error = read ? 'Il modello ha già letto la guida.' : friendlyError(e);
       });
     }
   }
@@ -2081,6 +2185,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         .where((c) => c['id'] == conversationId)
         .firstOrNull;
     final activeRequest = busy && requestConversation == conversationId;
+    final visibleMessages = activeRequest && pendingEditIndex != null
+        ? messages.take(pendingEditIndex!.clamp(0, messages.length))
+        : messages;
+    final canEdit = !sending && editContextReady;
     final activeLiveTurn = activeLive;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     final keyboard = MediaQuery.viewInsetsOf(context).bottom > 0;
@@ -2342,19 +2450,30 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                               controller: scroll,
                               anchorIndex: landingAnchor,
                               children: [
-                                ...messages.map(
-                                  (message) => MessageView(message: message),
-                                ),
+                                for (final (index, message)
+                                    in visibleMessages.indexed)
+                                  MessageView(
+                                    message: message,
+                                    onEdit:
+                                        canEdit &&
+                                            SavedPromptEdit.answered(
+                                              messages,
+                                              index,
+                                            )
+                                        ? () => editPrompt(index, message)
+                                        : null,
+                                  ),
                                 if (activeRequest &&
                                     pendingText != null &&
                                     (pendingText!.isNotEmpty ||
                                         pendingAttachments.isNotEmpty) &&
-                                    !messages.any(
-                                      (m) =>
-                                          m['role'] == 'user' &&
-                                          m['content'] == pendingText &&
-                                          m == messages.last,
-                                    ))
+                                    (pendingEditIndex != null ||
+                                        !messages.any(
+                                          (m) =>
+                                              m['role'] == 'user' &&
+                                              m['content'] == pendingText &&
+                                              m == messages.last,
+                                        )))
                                   MessageView(
                                     message: {
                                       'role': 'user',
@@ -2545,12 +2664,28 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.stretch,
                                     children: [
-                                      const Text(
-                                        'È richiesta la tua approvazione',
-                                        style: TextStyle(
+                                      Text(
+                                        approval['action']?['kind'] ==
+                                                'reference_access'
+                                            ? 'Consentire la lettura del riferimento esterno?'
+                                            : 'È richiesta la tua approvazione',
+                                        style: const TextStyle(
                                           fontWeight: FontWeight.w600,
                                         ),
                                       ),
+                                      if (approval['action']?['kind'] ==
+                                          'reference_access') ...[
+                                        SelectableText(
+                                          '${approval['action']['path']}',
+                                        ),
+                                        const Text(
+                                          'Sola lettura del percorso indicato e dei file al suo interno, '
+                                          'solo per questa chat, fino al logout o all’uscita da AuraChat sul computer. '
+                                          'Nascondere la finestra non basta. Non viene aggiunto al progetto '
+                                          'e non autorizza scritture o comandi. I contenuti letti vengono '
+                                          'inviati al modello configurato.',
+                                        ),
+                                      ],
                                       ExpansionTile(
                                         tilePadding: EdgeInsets.zero,
                                         title: const Text(
@@ -2587,10 +2722,16 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                               extra: {
                                                 'approval_id': approval['id'],
                                                 'allow': true,
+                                                if (approval['action']?['kind'] ==
+                                                    'reference_access')
+                                                  'scope': 'chat_session',
                                               },
                                             ),
-                                            child: const Text(
-                                              'Consenti una volta',
+                                            child: Text(
+                                              approval['action']?['kind'] ==
+                                                      'reference_access'
+                                                  ? 'Consenti per questa chat'
+                                                  : 'Consenti una volta',
                                             ),
                                           ),
                                         ],
@@ -2648,7 +2789,9 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                             focusNode: composerFocus,
                             online: online,
                             busy: turnBusy,
-                            allowQueue: conversationId != null,
+                            allowQueue:
+                                conversationId != null &&
+                                pendingEditIndex == null,
                             onSend: send,
                             onStop: () => action('stop'),
                             onAttach: attachFiles,
@@ -2700,6 +2843,7 @@ String remoteError(String? error) => switch (error) {
     'Questa chat è già in uso sul desktop. Attendi che termini.',
   'conversation_conflict' =>
     'La chat è cambiata su un altro dispositivo. Riaprila prima di riprovare.',
+  'invalid_message_index' => EditUnavailable.message,
   'conversation_not_found' => 'Questa conversazione non è più disponibile.',
   'question_not_found' =>
     'La domanda è già stata risolta o non è più disponibile.',
@@ -2790,10 +2934,12 @@ class MessageView extends StatelessWidget {
     this.live = false,
     this.onStopAgent,
     this.onStopShell,
+    this.onEdit,
   });
   final Map<String, dynamic> message;
   final bool live;
   final ValueChanged<String>? onStopAgent, onStopShell;
+  final VoidCallback? onEdit;
   @override
   Widget build(BuildContext context) {
     final user = message['role'] == 'user';
@@ -2821,12 +2967,13 @@ class MessageView extends StatelessWidget {
           if (images.isNotEmpty)
             LayoutBuilder(
               builder: (context, constraints) => ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: constraints.maxWidth * .88),
+                constraints: BoxConstraints(
+                  maxWidth: constraints.maxWidth * .88,
+                ),
                 child: MessageImages(images: images),
               ),
             ),
-          if (images.isNotEmpty && hasText)
-            const SizedBox(height: 8),
+          if (images.isNotEmpty && hasText) const SizedBox(height: 8),
           if (hasText || images.isEmpty && files.isEmpty)
             LayoutBuilder(
               builder: (context, constraints) => Align(
@@ -2876,11 +3023,19 @@ class MessageView extends StatelessWidget {
             if (images.isNotEmpty || hasText) const SizedBox(height: 8),
             LayoutBuilder(
               builder: (context, constraints) => ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: constraints.maxWidth * .88),
+                constraints: BoxConstraints(
+                  maxWidth: constraints.maxWidth * .88,
+                ),
                 child: MessageFiles(files: files),
               ),
             ),
           ],
+          if (!live && onEdit != null)
+            IconButton(
+              tooltip: 'Modifica messaggio',
+              onPressed: onEdit,
+              icon: const Icon(Icons.edit_outlined, size: 18, color: muted),
+            ),
         ],
       ),
     );

@@ -91,9 +91,11 @@ fn start(app: tauri::AppHandle, owner: String, id: String, message: String) {
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
         let result = crate::run_chat(app.clone(), state, id.clone(), message, None, vec![], Some(false), None, Some(owner)).await;
-        if let Err(error) = result { eprintln!("Created chat failed: {error}"); }
+        if let Err(error) = &result { eprintln!("Created chat failed: {error}"); }
         app.state::<AppState>().spawned_chats.lock().unwrap().remove(&id);
-        let _ = app.emit("companion-updated", json!({"conversation_id": id}));
+        let _ = app.emit("companion-updated", json!({"conversation_id": id,
+            "status": if result.is_ok() { "completed" } else { "failed" },
+            "cancelled": result.as_ref().is_ok_and(|reply| reply.cancelled)}));
     });
 }
 

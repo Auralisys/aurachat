@@ -17,12 +17,16 @@ pub struct Snapshot {
     pub revision: u64,
     pub usage: Value,
 }
-struct Entry { owner: String, snapshot: Snapshot, sender: Option<mpsc::Sender<bool>> }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scope { #[default] Once, ChatSession }
+pub struct Decision { pub allow: bool, pub scope: Scope }
+struct Entry { owner: String, snapshot: Snapshot, sender: Option<mpsc::Sender<Decision>> }
 #[derive(Default)]
 pub struct Approvals { entries: Mutex<HashMap<String, Entry>> }
 
 impl Approvals {
-    pub fn begin(&self, owner: &str, mut snapshot: Snapshot) -> (Snapshot, mpsc::Receiver<bool>) {
+    pub fn begin(&self, owner: &str, mut snapshot: Snapshot) -> (Snapshot, mpsc::Receiver<Decision>) {
         static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         snapshot.id = format!("approval-{}-{}",crate::data::now_millis(),SEQUENCE.fetch_add(1,std::sync::atomic::Ordering::Relaxed));
         let (sender, receiver) = mpsc::channel();
@@ -32,16 +36,23 @@ impl Approvals {
     pub fn update(&self, mut snapshot: Snapshot) -> Snapshot {
         if let Some(entry) = self.entries.lock().unwrap().get_mut(&snapshot.id) {snapshot.revision=entry.snapshot.revision+1;entry.snapshot = snapshot.clone();}snapshot
     }
-    pub fn resolve(&self, owner: &str, conversation: &str, id: &str, allow: bool) -> Result<(),String> {
+    pub fn resolve(&self, owner: &str, conversation: &str, id: &str, allow: bool, scope: Scope) -> Result<(),String> {
         let mut entries = self.entries.lock().unwrap();
         let entry = entries.get_mut(id).filter(|e|e.owner == owner && e.snapshot.conversation_id == conversation && e.snapshot.status == "pending").ok_or("approval_not_found")?;
-        entry.sender.take().ok_or("approval_not_found")?.send(allow).map_err(|_|"approval_expired".to_string())
+        if scope == Scope::ChatSession && entry.snapshot.action["kind"] != "reference_access" {return Err("Chat-session consent is only valid for read-only references.".into());}
+        entry.sender.take().ok_or("approval_not_found")?.send(Decision {allow, scope}).map_err(|_|"approval_expired".to_string())
     }
     pub fn list(&self, owner: &str, conversation: &str) -> Vec<Snapshot> {
         let mut snapshots:Vec<_> = self.entries.lock().unwrap().values().filter(|e|e.owner == owner && e.snapshot.conversation_id == conversation).map(|e|e.snapshot.clone()).collect();
         snapshots.sort_by_key(|s|s.created_at); snapshots
     }
     fn denied(&self,owner:&str,conversation:&str,turn:&str,action:&Value)->bool {self.entries.lock().unwrap().values().any(|e|e.owner==owner && e.snapshot.conversation_id==conversation && e.snapshot.turn_id==turn && matches!(e.snapshot.status.as_str(),"denied"|"cancelled") && e.snapshot.action==*action)}
+    pub fn reference_denied(&self, owner: &str, conversation: &str, turn: &str, path: &std::path::Path) -> bool {
+        self.entries.lock().unwrap().values().any(|e|
+            e.owner == owner && e.snapshot.conversation_id == conversation && e.snapshot.turn_id == turn &&
+            matches!(e.snapshot.status.as_str(), "denied" | "cancelled") && e.snapshot.action["kind"] == "reference_access" &&
+            e.snapshot.action["path"].as_str().is_some_and(|denied| path.starts_with(denied) || std::path::Path::new(denied).starts_with(path)))
+    }
     pub fn take_turn(&self, owner: &str, conversation: &str, turn: &str) -> Vec<Snapshot> {
         let mut entries=self.entries.lock().unwrap();
         let ids:Vec<_>=entries.iter().filter(|(_,e)|e.owner==owner && e.snapshot.conversation_id==conversation && e.snapshot.turn_id==turn).map(|(id,_)|id.clone()).collect();
@@ -73,14 +84,18 @@ async fn automatic_review(execution: &crate::permissions::Execution, action: &Va
 }
 
 pub fn approve(execution: &crate::permissions::Execution, action: Value, routine: bool) -> Result<(),String> {
+    approve_scoped(execution, action, routine).map(|_| ())
+}
+
+pub fn approve_scoped(execution: &crate::permissions::Execution, action: Value, routine: bool) -> Result<Scope,String> {
     let mode=execution.mode()?;
     let registry=execution.app.state::<Approvals>();
     if registry.denied(&execution.owner,&execution.conversation,&execution.turn_id,&action) {return Err("This action was already denied in the current turn. Do not retry or bypass it.".into());}
-    let automatic=mode==crate::permissions::Mode::Auto && !routine;
+    let (mut allowed, automatic)=approval_policy(mode, routine, &action);
     let (mut snapshot,receiver)=registry.begin(&execution.owner,Snapshot {id:String::new(),conversation_id:execution.conversation.clone(),turn_id:execution.turn_id.clone(),agent_id:execution.agent_id.clone(),action,
         status:if automatic {"reviewing"} else {"pending"}.into(),reviewer:if automatic {"automatic"} else {"user"}.into(),reason:String::new(),created_at:crate::data::now_millis(),revision:0,usage:Value::Null});
     let publish=|snapshot:&mut Snapshot| { *snapshot=registry.update(snapshot.clone());let _=execution.app.emit("approval-activity",&*snapshot); };
-    let mut allowed=!crate::permissions::requires_approval(mode,routine);
+    let mut scope = Scope::Once;
     if allowed { snapshot.reviewer="policy".into(); }
     else if automatic {
         publish(&mut snapshot);
@@ -95,19 +110,38 @@ pub fn approve(execution: &crate::permissions::Execution, action: Value, routine
         for _ in 0..600 {
             if let Err(error)=execution.mode() {snapshot.status="cancelled".into();publish(&mut snapshot);return Err(error);}
             match receiver.recv_timeout(Duration::from_secs(1)) {
-                Ok(value)=>{allowed=value;break;}
+                Ok(value)=>{allowed=value.allow;scope=value.scope;break;}
                 Err(mpsc::RecvTimeoutError::Disconnected)=>break,
                 Err(mpsc::RecvTimeoutError::Timeout)=>continue,
             }
         }
     }
+    if allowed && snapshot.action["kind"] == "reference_access" {snapshot.action["scope"] = json!(scope);}
     snapshot.status=if allowed {"approved"} else {"denied"}.into();publish(&mut snapshot);
     if !allowed {return Err("Action denied or approval expired. Do not retry or bypass this denial.".into());}
-    execution.mode()?;Ok(())
+    execution.mode()?;Ok(scope)
+}
+
+fn approval_policy(mode: crate::permissions::Mode, routine: bool, action: &Value) -> (bool, bool) {
+    // An automatic reviewer cannot expand the chat's file-reading scope.
+    if action["kind"] == "reference_access" {
+        return (mode == crate::permissions::Mode::Full, false);
+    }
+    (!crate::permissions::requires_approval(mode, routine), mode == crate::permissions::Mode::Auto && !routine)
 }
 
 #[cfg(test)] mod tests {
     use super::*;
+    #[test] fn external_references_require_human_consent_except_in_full_mode() {
+        use crate::permissions::Mode;
+        let action = json!({"kind":"reference_access","path":"reference","access":"read","scope":"chat_session"});
+        for mode in [Mode::Ask, Mode::Auto] {
+            for routine in [true, false] {assert_eq!(approval_policy(mode, routine, &action), (false, false));}
+        }
+        assert_eq!(approval_policy(Mode::Full, false, &action), (true, false));
+        assert_eq!(approval_policy(Mode::Auto, false, &json!({"kind":"command"})), (false, true));
+        assert_eq!(approval_policy(Mode::Auto, true, &json!({"kind":"write"})), (true, false));
+    }
     #[test] fn review_requires_explicit_low_risk_and_valid_json() {
         assert!(review_result(r#"{"decision":"allow","risk":"low","reason":"Local inspection"}"#).unwrap().0);
         assert!(!review_result(r#"{"decision":"allow","risk":"high","reason":"Destructive"}"#).unwrap().0);
@@ -116,10 +150,26 @@ pub fn approve(execution: &crate::permissions::Execution, action: Value, routine
     #[test] fn decisions_are_account_conversation_scoped_and_one_shot() {
         let approvals=Approvals::default();
         let (s,rx)=approvals.begin("u",Snapshot{id:"".into(),conversation_id:"c".into(),turn_id:"t".into(),agent_id:None,action:json!({}),status:"pending".into(),reviewer:"user".into(),reason:"".into(),created_at:1,revision:0,usage:Value::Null});
-        assert!(approvals.resolve("other","c",&s.id,true).is_err());assert!(approvals.resolve("u","other",&s.id,true).is_err());
-        approvals.resolve("u","c",&s.id,false).unwrap();assert!(!rx.recv().unwrap());assert!(approvals.resolve("u","c",&s.id,true).is_err());
+        assert!(approvals.resolve("other","c",&s.id,true,Scope::Once).is_err());assert!(approvals.resolve("u","other",&s.id,true,Scope::Once).is_err());
+        assert!(approvals.resolve("u","c",&s.id,true,Scope::ChatSession).is_err());
+        approvals.resolve("u","c",&s.id,false,Scope::Once).unwrap();assert!(!rx.recv().unwrap().allow);assert!(approvals.resolve("u","c",&s.id,true,Scope::Once).is_err());
         let mut denied=s.clone();denied.status="denied".into();let denied=approvals.update(denied);assert_eq!(denied.revision,1);
         assert!(approvals.denied("u","c","t",&json!({})));assert!(!approvals.denied("u","other","t",&json!({})));
+        let path = std::env::temp_dir().join("reference-denied");
+        let mut reference = denied;reference.action = json!({"kind":"reference_access","path":path});
+        approvals.update(reference);
+        for requested in [&path, path.parent().unwrap(), &path.join("file.txt")] {
+            assert!(approvals.reference_denied("u","c","t",requested));
+        }
+        assert!(!approvals.reference_denied("u","c","t",&path.with_extension("sibling")));
+        assert!(!approvals.reference_denied("u","other","t",&path));
+        assert!(!approvals.reference_denied("u","c","next-turn",&path));
         assert!(approvals.list("other","c").is_empty());assert_eq!(approvals.take_turn("u","c","t").len(),1);assert!(approvals.list("u","c").is_empty());
+        for scope in [Scope::default(), Scope::ChatSession] {
+            let (snapshot, receiver) = approvals.begin("u", Snapshot {id:"".into(),conversation_id:"c".into(),turn_id:"t".into(),agent_id:None,
+                action:json!({"kind":"reference_access","path":path}),status:"pending".into(),reviewer:"user".into(),reason:"".into(),created_at:1,revision:0,usage:Value::Null});
+            approvals.resolve("u","c",&snapshot.id,true,scope).unwrap();
+            let decision=receiver.recv().unwrap();assert!(decision.allow);assert_eq!(decision.scope,scope);
+        }
     }
 }

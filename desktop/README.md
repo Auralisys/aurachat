@@ -122,7 +122,7 @@ Vedi la sezione finale e `../mobile/README.md` per lo stato delle verifiche.
 Il desktop segue anche il turno della chat aperta su un altro computer dello
 stesso account: usa i documenti `devices/{device}/live_turns/{chat}` gia pubblicati
 per il companion. Un'icona computer a sinistra del titolo (sidebar e intestazione)
-indica il dispositivo remoto nel tooltip; il loader resta a destra della riga.
+indica il dispositivo remoto nel tooltip; l'indicatore di stato precede il titolo.
 Messaggi, coda, **Invia subito**, **Stop**, domande interattive e approvazioni
 usano le richieste `devices/{device}/requests` del companion: l'esecuzione e i
 permessi restano sul computer di origine. La destinazione resta associata alla
@@ -175,8 +175,11 @@ Nascondi torna alla chat senza chiudere le schede. Sotto i 1000 px chat e pannel
 si alternano a tutta larghezza. Quando alla chat restano al massimo 700 px,
 il riepilogo si dispone sopra i messaggi con altezza limitata e scroll proprio,
 mai in overlay, anche con il pannello a schede aperto.
-La sidebar di navigazione
-parte chiusa sotto gli 850 px e si apre sopra il contenuto, con chiusura tramite
+La colonna **Progetti e Recenti** parte da 248 px. Trascinando il bordo destro
+si allarga fino a 480 px, o meno se serve spazio alla conversazione. Sul bordo,
+le frecce regolano la larghezza e Home/Fine portano al minimo/massimo. La scelta
+è salvata su questo dispositivo e si ritrova anche dopo aver richiuso la colonna.
+Fino a 850 px la sidebar parte chiusa e si apre sopra il contenuto, con chiusura tramite
 Escape, sfondo o selezione della chat. Con `prefers-reduced-motion` gli
 spostamenti sono immediati.
 
@@ -248,7 +251,9 @@ riconosce anche i worktree (`.git` come file), non segue link/junction e salta
 segnala esplicitamente la ricerca incompleta: collegare una sottocartella per
 restringerla. Errori reali di accesso o di Git restano visibili.
 Non usa mai il repository antenato di una sottocartella autorizzata e ricontrolla
-che ogni repository selezionato sia dentro un consenso locale valido. Tutti i file già
+che ogni repository selezionato sia dentro un consenso locale valido. Dal menu **Modifiche**,
+«Commit…» e «Commit e push…» chiedono al modello di includere solo il lavoro di
+questa chat e di fermarsi se non riesce a isolarlo. Nel **dettaglio Git manuale**, tutti i file già
 staged fanno parte del commit: controllare l'intero gruppo Staged, non solo le
 ultime aggiunte. Cambiamenti esterni dello stage o di HEAD invalidano l'anteprima
 senza perdere il messaggio scritto; modifiche solo al working tree non la invalidano.
@@ -710,10 +715,25 @@ Le chat di progetto espongono al modello `list_project_files`,
 file fino a 1 MiB), con ID root, percorsi relativi, controllo canonico anche
 su link/junction, limiti di dimensione per singolo file. `edit_project_file`
 gestisce automaticamente file CRLF e prefissi di riga copiati dalla lettura. L’esplorazione prosegue fino alla risposta del modello, senza soglie arbitrarie sul numero di passaggi o sul totale letto. Vengono consultati
-solo i consensi locali dell'utente/progetto e le cartelle ancora collegate.
+per il progetto solo i consensi locali dell'utente/progetto e le cartelle ancora collegate.
 I file letti per la richiesta vengono inviati al provider LLM configurato;
 non avviene scansione o caricamento automatico dell'intera root. Le modifiche verificano la revisione del file e i comandi passano dal controllo
-permessi. Solo Accesso completo abilita percorsi assoluti esterni. Il provider
+permessi. Gli strumenti accettano anche percorsi assoluti, senza indice root.
+**Accesso completo** legge e opera anche fuori dal progetto senza ulteriori
+conferme, entro i permessi dell'account di sistema. In **Richiedi approvazione**
+e **Approva per me**, leggere, elencare o cercare un riferimento esterno apre
+**Consenti per questa chat**: sola lettura del percorso richiesto (e dei
+discendenti, per una cartella), solo per quella chat su quel computer, fino al
+logout o all'uscita completa dall'app, non quando la finestra viene nascosta.
+Il consenso resta in memoria: non aggiunge cartelle al progetto, non viene
+sincronizzato e non passa a nuove chat, neppure collegate. I subagenti della
+stessa chat lo condividono. Le scritture e le directory di lavoro esterne dei
+comandi continuano a richiedere Accesso completo; il reviewer automatico non
+può concedere questo accesso di lettura al posto dell'utente.
+I percorsi vengono risolti canonicamente e ricontrollati dopo il consenso.
+I client meno recenti che inviano ancora **Consenti una volta** autorizzano
+solo quella operazione: il consenso di sessione richiede una scelta esplicita.
+Il provider
 deve supportare tool calling.
 
 Se il modello non vede strumenti file, la chat non appartiene a un progetto
@@ -834,14 +854,32 @@ una chat collegata», «fai un handoff») il modello dispone dello strumento
 `create_chat`: crea nello stesso progetto una chat con titolo e primo messaggio
 suoi e la avvia subito, in parallelo alla chat corrente. Al massimo tre per turno;
 una chat appena creata non ne crea altre nel suo primo turno. Se `linked` è vero la
-nuova chat è **collegata**: nella sidebar compare un'icona a catena e
-nell'intestazione il chip «Collegata a …» riporta alla chat madre (il collegamento
+nuova chat è **collegata**: in Progetti e Recenti appare rientrata sotto la
+madre. La freccia richiude il ramo senza cambiare chat; il titolo apre la chat.
+Al passaggio del mouse o con il focus compare una scheda con titolo, stato,
+data di creazione, progetto e modello, se disponibili. I titoli troncati
+scorrono una volta, a meno che sia attiva la riduzione del movimento.
+La scheda mostra **Done** in verde quando il turno è concluso ma non letto
+(pallino blu nella sidebar), **Idle** in grigio dopo la lettura. Il semplice
+hover non cambia lo stato: la chat deve essere aperta, caricata e visibile in una
+finestra a fuoco. Un risultato arrivato mentre la finestra è in background o
+le impostazioni sono aperte resta da leggere. Attività in corso, caricamento,
+attesa di una risposta/approvazione, errore e interruzione hanno stati distinti;
+errori e turni interrotti non diventano Done. Lo stato di lettura rimane locale
+alla sessione desktop, senza modificare la cronologia condivisa.
+Nell'intestazione il chip «Collegata a …» riporta alla chat madre (il collegamento
 è solo informativo; il telefono lo ignora). Il passo nella cronologia ha il
 pulsante «Apri chat». Dal menu ⋯ dell'intestazione, «Handoff in una nuova chat» e
 «Handoff in una chat collegata» chiedono al modello di scrivere un riassunto
 autosufficiente (obiettivo, stato, decisioni, file, prossimi passi; usa la skill
 handoff se c'è) e di passarlo direttamente come primo messaggio, senza salvare file.
-Verifica: `desktop/tests/chat-links.cjs` e `chat_links::tests`.
+Verifica: `desktop/tests/chat-links.cjs`, `desktop/tests/background-chats.cjs` e
+`chat_links::tests`.
+
+**Ripartire da un messaggio precedente.** Sotto ogni tuo prompt trovi **Modifica**,
+anche se il modello ha già risposto. Annulla lascia intatta la cronologia.
+**Invia modifica** sostituisce quel prompt e i messaggi successivi con il prompt
+corretto e la nuova risposta. Non annulla operazioni già eseguite su file o Git.
 
 Lo streaming raggruppa gli aggiornamenti per frame e conserva i nodi Markdown
 invariati: selezione del testo, copia del codice e scorrimento orizzontale restano
