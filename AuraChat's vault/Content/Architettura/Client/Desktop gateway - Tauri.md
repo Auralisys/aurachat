@@ -127,9 +127,10 @@ reducer live.
 
 ## Refactor UI (17 ottobre 2026)
 
-La shell ha una barra stretta persistente (Home, impostazioni, avatar), una barra
-superiore con navigazione e menu e un pannello arrotondato che contiene sidebar
-progetti/recenti e chat. Nuova chat centrale con scelta facoltativa del progetto;
+Nel refactor di ottobre la shell aveva una barra stretta per Home, impostazioni
+e avatar. La revisione successiva sposta account e impostazioni nella sidebar
+Progetti/Recenti e riserva il pannello arrotondato alla chat e alle sue attività.
+Restano la barra superiore con navigazione e menu e Nuova chat centrale con scelta facoltativa del progetto;
 le chat senza progetto sono salvate in `ChatData.conversations`, con default per
 leggere i vecchi alberi. Superfici flat e sfondo viola statico mantenuti.
 Dettagli verificati, schermate e limiti in
@@ -177,15 +178,28 @@ una vecchia istanza aperta continua a eseguire il codice precedente.
 
 ## Voce locale
 
-Cohere Transcribe INT4, scaricabile in Impostazioni → Voce (~2 GB), con verifica
-SHA-256 e download riprendibile. Inferenza locale su CPU; audio solo in memoria,
+Whisper Large v3 (ggml f16, `ggml-large-v3.bin`), scaricabile in Impostazioni →
+Voce (~3,1 GB), con verifica SHA-256 e download riprendibile. Inferenza locale con
+whisper.cpp (transcribe-rs, feature `whisper-vulkan`) sulla GPU tramite Vulkan;
+audio solo in memoria,
 mono a 16 kHz, massimo due minuti. Stop trascrive nella bozza; Invio trascrive e
 invia insieme a testo e allegati; X scarta la registrazione. La forma d'onda
 avanza di una barretta ogni 100 ms, indipendentemente dalla frequenza del
 microfono (circa 12,5 volte più lenta della versione iniziale a 16 kHz).
 Dettagli UI in [[UI desktop - Refactor flat]]. Test browser con AudioWorklet
-reale e microfono simulato; trascrizione CPU di un campione pubblico verificata.
+reale e microfono simulato.
 Il microfono fisico e il dialogo permessi del WebView restano da provare manualmente.
+
+**Da Cohere a Whisper.** Whisper sostituisce del tutto Cohere Transcribe INT4
+(CPU, ~2 GB): all'avvio `Speech::new` elimina in background
+`models/cohere-int4-2c870f89`. Il clip intero (≤120 s) va a `WhisperEngine`
+con la lingua scelta, senza più spezzarlo. Test reale
+(`speech::tests::real_download_and_transcription`, `AURACHAT_TEST_WAV`,
+`AURACHAT_TEST_LANG`, `AURACHAT_TEST_EXPECT`) su RX 9070 XT: caricamento ~4,9 s,
+frase inglese 2,4 s al primo giro e 0,73 s al secondo, frase italiana 0,8 s,
+entrambe esatte. Build: Vulkan SDK in `VULKAN_SDK`, ambiente `vcvars64` e
+`CARGO_TARGET_DIR` corto (es. `C:\act`): con il target nel repo MSBuild fallisce
+nel sottoprogetto `vulkan-shaders-gen` (FTK1011, «No CMAKE_C_COMPILER»).
 
 ### Lettura ad alta voce con Kokoro — 12 novembre 2026
 
@@ -330,7 +344,7 @@ microfono mostra il proprio stato.
 `ModelStatus` espone `loading` e `loaded` oltre a `ready`/`busy`, letti senza
 lock e sempre disponibili (`speech.rs:16`, `speech.rs:41`). Un guard RAII
 `Loading` copre tutta la finestra lenta — hash SHA-256 dei file e
-`CohereModel::load` — non solo il termine (`speech.rs:29`, `speech.rs:130`).
+`CohereModel::load` (oggi `WhisperEngine::load`) — non solo il termine.
 `prepare()` esce subito se il modello è già in memoria, senza occupare `busy`
 (`speech.rs:141`); `remove()` azzera `loaded` (`speech.rs:114`).
 `prepare_speech_model` emette `speech-model-progress` anche al termine
@@ -1205,5 +1219,5 @@ dell'ultima chat usata.
   vincoli (`save_tree` + snapshot del turno). Test: `tests/project-menus.cjs`.
 
 Test: `tests/permissions.cjs`, `question-dictation.cjs`, `sidebar-startup.cjs` e
-`cargo test permissions`. Il motore di trascrizione resta Cohere Transcribe su
-CPU; Whisper (whisper.cpp con Vulkan per la GPU AMD) non è implementato.
+`cargo test permissions`. Il motore di trascrizione è ora Whisper Large v3 su
+GPU via Vulkan (vedi «Voce locale»).

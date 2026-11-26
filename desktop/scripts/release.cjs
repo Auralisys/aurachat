@@ -8,7 +8,12 @@ const {createHash} = require('node:crypto');
 const desktop = path.resolve(__dirname, '..');
 const configPath = path.join(desktop, 'src-tauri', 'tauri.conf.json');
 const cargoPath = path.join(desktop, 'src-tauri', 'Cargo.toml');
-const output = path.join(desktop, 'src-tauri', 'target', 'release', 'updater');
+const output = path.join(cargoTarget(), 'release', 'updater');
+
+// Windows builds use a short CARGO_TARGET_DIR: whisper.cpp's Vulkan sub-build breaks MSBuild on long paths.
+function cargoTarget() {
+  return process.env.CARGO_TARGET_DIR ? path.resolve(desktop, 'src-tauri', process.env.CARGO_TARGET_DIR) : path.join(desktop, 'src-tauri', 'target');
+}
 
 function run(program, args, options = {}) {
   const result = spawnSync(program, args, {
@@ -94,7 +99,7 @@ function credentialEnvironment(repo) {
 
 function artifact(config, platform = process.platform, arch = process.arch) {
   const version = config.version;
-  const release = path.join(desktop, 'src-tauri', 'target', 'release', 'bundle');
+  const release = path.join(cargoTarget(), 'release', 'bundle');
   if (platform === 'win32' && ['x64', 'arm64'].includes(arch)) {
     const cpu = arch === 'x64' ? 'x64' : 'arm64';
     return {target: `windows-${arch === 'x64' ? 'x86_64' : 'aarch64'}`, file: path.join(release, 'nsis', `AuraChat_${version}_${cpu}-setup.exe`)};

@@ -21,9 +21,9 @@ in `desktop/`: non ricreare lo scaffold. Leggi `Overview.md` del vault, poi
 [[Account - Login e ripristino sessione]], [[Firebase - trasporto e push]],
 [[Problemi noti]] e [[Roadmap]].
 
-Mantieni la shell approvata: barra stretta con Home/impostazioni/avatar, barra
-superiore con navigazione e menu, pannello arrotondato con sidebar interna e
-chat. Mantieni lo sfondo viola statico della nuova chat, compositore centrale e
+Mantieni la shell approvata: barra superiore con navigazione e menu, sidebar
+unica con account e impostazioni in basso, pannello arrotondato più scuro per
+chat e attività. Mantieni lo sfondo viola statico della nuova chat, compositore centrale e
 progetto facoltativo. Modifica solo quanto richiesto dall'utente.
 
 La cronologia usa Firestore v2: `users/{uid}.tree` contiene mappe native di

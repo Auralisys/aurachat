@@ -169,7 +169,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  assert.deepEqual(await page.evaluate(()=>window.__store.conversations[0].messages),saved);
  await page.getByRole('button',{name:'Rigenera risposta',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.msg--error').length===0);
  // Attachments stay visible as chips and reach the backend only on send.
- await page.click('#nav-home');await page.click('#composer-attach');
+ await page.keyboard.press('Control+n');await page.click('#composer-attach');
  await page.locator('#composer-attachments .attachment-chip').waitFor();assert.equal(await page.locator('#attachment-note').isVisible(),true);
  await page.fill('#composer-input','Riassumi il file');await page.click('#composer-send');await page.waitForFunction(()=>window.__store.conversations.length===2);
  await page.waitForFunction(()=>document.querySelectorAll('.msg--assistant').length===1);
@@ -177,14 +177,14 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  assert.equal(request.attachments[0].name,'notes.md');assert.equal(request.attachments[0].content,'Private text selected by the user.');
  assert.equal(await page.locator('.message-attachments .attachment-chip').innerText(),'notes.md');
  assert.equal(await page.getByText('Private text selected by the user.',{exact:true}).count(),0);
- await page.click('#nav-home');await page.click('#composer-mic');await page.locator('#settings-voice').waitFor({state:'visible'});assert.equal(await page.locator('#composer-input').textContent(),'');
+ await page.keyboard.press('Control+n');await page.click('#composer-mic');await page.locator('#settings-voice').waitFor({state:'visible'});assert.equal(await page.locator('#composer-input').textContent(),'');
  assert.equal(await page.locator('#settings-voice [data-i18n="voice.tts_title"]').innerText(),'Lettura ad alta voce · Kokoro');
  assert.equal(await page.locator('#tts-voice option').count(),2);assert.equal(await page.locator('#tts-download').isVisible(),true);
  await page.click('#tts-download');await page.waitForFunction(()=>window.__ttsStatus.ready);assert.equal(await page.locator('#tts-remove').isVisible(),true);
  await page.click('#tts-remove');await page.waitForFunction(()=>!window.__ttsStatus.ready);assert.equal(await page.locator('#tts-remove').isVisible(),false);await page.click('#modal-close');
  await page.evaluate(()=>window.__nextFiles=Array.from({length:5},()=>({name:'x.txt',content:'x'})));await page.click('#composer-attach');await page.locator('#composer-status').waitFor({state:'visible'});
  assert.equal(await page.locator('#composer-attachments').isVisible(),false);
- await page.click('#nav-home');await page.evaluate(()=>delete window.__nextFiles);await page.click('#composer-attach');await page.fill('#composer-input','Riassumi queste note e proponi i prossimi passi.');
+ await page.keyboard.press('Control+n');await page.evaluate(()=>delete window.__nextFiles);await page.click('#composer-attach');await page.fill('#composer-input','Riassumi queste note e proponi i prossimi passi.');
  await page.setViewportSize({width:720,height:680});await page.screenshot({path:resolve(shots,'composer-compact.png')});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  assert.deepEqual(errors,[]);await browser.close();console.log('PASS: chat layout, safe Markdown, copy/code/link, feedback, read aloud/dictation contract, regenerate/edit, failure preservation and text attachments; mocked services.');

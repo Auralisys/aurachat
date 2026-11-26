@@ -3,7 +3,7 @@
 param([switch]$NoLaunch, [switch]$SkipBuild)
 $ErrorActionPreference = 'Stop'
 $desktop = Split-Path $PSScriptRoot -Parent
-$release = Join-Path $desktop 'src-tauri\target\release'
+$release = if ($env:CARGO_TARGET_DIR) { Join-Path $env:CARGO_TARGET_DIR 'release' } else { Join-Path $desktop 'src-tauri\target\release' }
 $exe = Join-Path $env:LOCALAPPDATA 'AuraChat\aurachat.exe'
 
 if (-not $SkipBuild) {

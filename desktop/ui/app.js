@@ -2129,7 +2129,7 @@ function closeUsagePanel(restoreFocus) {
 function showView(name) {
   $('#view-onboarding').hidden = name !== 'onboarding';
   $('#view-chat').hidden = name !== 'chat';
-  $('#app-rail').hidden = name !== 'chat';
+  $('#sidebar').hidden = name !== 'chat';
   $('#sidebar-collapse').disabled = name !== 'chat';
   renderActivity();
 }
@@ -2139,8 +2139,7 @@ function openSettings() {
   hideProjectPreview();
   $('#settings-overlay').hidden = false;
   $('.app').inert = true;
-  $('#account-menu').hidden = true;
-  $('#account-button').setAttribute('aria-expanded', 'false');
+  closeAccountMenu();
   renderSettingsAccount();
   $('#settings-search').value = '';
   filterSettings();
@@ -2151,7 +2150,7 @@ function closeSettings() {
   if (!discardProviderEditor()) return;
   $('#settings-overlay').hidden = true;
   $('.app').inert = false;
-  $('#btn-settings').focus();
+  ($('#btn-settings').getClientRects().length ? $('#btn-settings') : $('#sidebar-collapse')).focus();
   acknowledgeVisibleChat();
 }
 
@@ -2369,7 +2368,6 @@ function welcomeHeading(title, sub) {
 }
 function showLogin(error) {
   showView('onboarding');
-  $('#sidebar').hidden = true;
   $('#login-form').hidden = false;
   $('#onboarding-form-slot').hidden = true;
   $('#restore-error').hidden = true;
@@ -2391,7 +2389,6 @@ async function routeAccount() {
     await enterChat();
   } else {
     showView('onboarding');
-    $('#sidebar').hidden = true;
     $('#onboarding-form-slot').hidden = false;
     welcomeHeading('auth.configure', 'auth.configure_note');
     const form = $('#onboarding-form-slot form');
@@ -2409,7 +2406,6 @@ async function restoreSession() {
       showLogin(e);
     } else {
       showView('onboarding');
-      $('#sidebar').hidden = true;
       $('#login-form').hidden = true;
       $('#onboarding-form-slot').hidden = true;
       $('#restore-error').hidden = false;
@@ -2439,7 +2435,6 @@ async function enterChat() {
     all.sort((a, b) => b.updated_at - a.updated_at);
     openConversation(all[0].id);
   }
-  $('#sidebar').hidden = false;
   showView('chat');
   preloadRecentConversations(state.activeConversationId);
 }
@@ -2448,9 +2443,10 @@ init().catch(e => { showView('onboarding'); console.error('UI initialization fai
 
 function updateAccount() {
   const email = state.config.firebase_email || t('ui.account');
-  $('.account-name').textContent = email;
+  const name = email.split('@')[0];
+  $('.account-name').textContent = name;
   $('#account-email').textContent = email;
-  $('.avatar').textContent = email.split('@')[0].slice(0, 2).toUpperCase();
+  $('#account-button .avatar').textContent = name.slice(0, 2).toUpperCase();
   $('#account-button').title = email;
 }
 function setupAppMenus() {
@@ -2565,7 +2561,7 @@ function setupSidebarResize(compact) {
   } catch (error) {console.warn('Sidebar width could not be read:', error);}
   function maximum() {
     const occupied = getComputedStyle(main).display === 'none' ? 0 : panel.offsetWidth;
-    return Math.max(min, Math.min(480, workspace.clientWidth - occupied - BROWSER_WIDTH.keep));
+    return Math.max(min, Math.min(480, sidebar.offsetWidth + workspace.clientWidth - occupied - BROWSER_WIDTH.keep));
   }
   function apply(width = preferred) {
     const max = maximum(), next = Math.round(Math.max(min, Math.min(width, max)));
@@ -2609,6 +2605,11 @@ function setupSidebarResize(compact) {
   compact.addEventListener('change', refresh);refresh();
 }
 
+function closeAccountMenu() {
+  $('#account-menu').hidden = true;
+  $('#account-button').setAttribute('aria-expanded', 'false');
+}
+
 function setupShell() {
   window.addEventListener('resize',closeChoiceMenus);
   const compact = matchMedia('(max-width:850px)');
@@ -2618,6 +2619,7 @@ function setupShell() {
   const setSidebar = collapsed => {
     closeTreeMenu();
     hideProjectPreview();
+    closeAccountMenu();
     $('.content').classList.toggle('sidebar-collapsed',collapsed);
     $('.main').inert = compact.matches && !collapsed;
     renderActivity();
@@ -2631,7 +2633,7 @@ function setupShell() {
   compact.addEventListener('change', () => setSidebar(compact.matches));
   setSidebar(compact.matches);
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && compact.matches && !$('.content').classList.contains('sidebar-collapsed')) {
+    if (event.key === 'Escape' && compact.matches && $('#account-menu').hidden && $('#settings-overlay').hidden && !$('.content').classList.contains('sidebar-collapsed')) {
       setSidebar(true);$('#sidebar-collapse').focus();
     }
   });
@@ -2640,7 +2642,6 @@ function setupShell() {
   });
   $('#nav-back').onclick = () => navigateHistory(-1);
   $('#nav-forward').onclick = () => navigateHistory(1);
-  $('#nav-home').onclick = () => $('#btn-new-chat').click();
   setupAppMenus();
   $('#account-button').onclick = () => {
     const menu = $('#account-menu'); menu.hidden = !menu.hidden;
@@ -2654,10 +2655,7 @@ function setupShell() {
     if (!e.target.closest('.model-select, .composer__project, .permission-control')) closeChoiceMenus();
     // composedPath still includes the popover when the clicked control was re-rendered while handling the click.
     if (!e.composedPath().includes($('#context-info'))) closeUsagePanel(false);
-    if (!e.target.closest('.rail__footer')) {
-      $('#account-menu').hidden = true;
-      $('#account-button').setAttribute('aria-expanded', 'false');
-    }
+    if (!e.target.closest('.sidebar__footer')) closeAccountMenu();
   });
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
@@ -2665,8 +2663,7 @@ function setupShell() {
       closeUsagePanel(!!document.activeElement?.closest('.context-info'));
       closeChoiceMenus();
       if (!$('#account-menu').hidden) {
-        $('#account-menu').hidden = true;
-        $('#account-button').setAttribute('aria-expanded', 'false');
+        closeAccountMenu();
         $('#account-button').focus();
       }
     }

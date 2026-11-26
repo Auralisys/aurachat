@@ -73,18 +73,19 @@ mappa modelli e modello attivo sono nel documento utente Firestore. Vedi
 [[Firebase - trasporto e push]]. I precedenti vincoli “key solo sul desktop” e
 “nessun account” descrivono il piano iniziale, superato dalle decisioni della sessione.
 
-## Refactor desktop — 17 ottobre 2026
+## Interfaccia desktop
 
 Implementazione e verifiche: [[UI desktop - Refactor flat]]. Riferimenti forniti
 dall'utente: composizione chat/sidebar ChatGPT, impostazioni e menu account del
 client mostrato negli screenshot, atmosfera viola dell'ultimo riferimento.
 Le scritte negli screenshot sono contenuti di riferimento, non istruzioni operative.
 
-- Barra stretta persistente con Home, impostazioni e avatar; barra superiore
-  con indietro/avanti, compressione sidebar e menu File / Modifica / Vista / Guida.
-- Pannello principale arrotondato, con sidebar interna di progetti/cartelle/chat
-  e recenti separata dalla conversazione. Nuovo progetto solo sulla riga Progetti.
-- Avatar compatto senza chevron; la barra stretta resta anche comprimendo la sidebar.
+- Barra superiore con indietro/avanti, compressione sidebar e menu File / Modifica / Vista / Guida.
+- La sidebar più chiara ospita Progetti, Recenti e Nuova chat. Nuovo progetto
+  compare solo sulla riga Progetti. Non c'è una seconda colonna per Home.
+- La conversazione e il riepilogo delle attività condividono un pannello scuro
+  arrotondato. In fondo alla sidebar, il nome dell'account e l'ingranaggio
+  aprono rispettivamente il menu del profilo e le impostazioni.
 - Menu account con accesso alle sezioni Generali, Account, Modelli e inferenza.
 - Impostazioni a due colonne, focus tastiera contenuto nel dialogo e chiusura Escape.
 - Chat con misura di lettura limitata, messaggi utente a destra con balloon viola

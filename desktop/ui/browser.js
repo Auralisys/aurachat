@@ -71,6 +71,7 @@ function syncBrowser() {
 }
 
 function panelTabTitle(tab) {
+  if (tab.terminal) return t('terminal.title');
   if (tab.section === 'git') return `${t('git.changes')}${gitProject() ? ` · ${gitProject().name}` : ''}`;
   if (tab.section) return t(`activity.${tab.section}`);
   if (tab.title) return tab.title;
@@ -109,9 +110,9 @@ function renderPanelTabs() {
     const select = node.querySelector('[role=tab]');
     select.setAttribute('aria-selected', String(selected));select.tabIndex = selected ? 0 : -1;select.title = title;
     node.querySelector('.panel-tab__label').textContent = title;
-    const glyphName = tab.section === 'git' ? 'git' : {outputs:'file',sources:'sources',agents:'agents',shells:'terminal'}[tab.section] || 'globe';
+    const glyphName = tab.terminal ? 'terminal' : tab.file ? tab.file.icon : tab.section === 'git' ? 'git' : {outputs:'file',sources:'sources',agents:'agents',shells:'terminal'}[tab.section] || 'globe';
     const glyph = node.querySelector('.panel-tab__icon');
-    if (glyph.dataset.icon !== glyphName) {glyph.dataset.icon = glyphName;glyph.replaceChildren(icon(glyphName));}
+    if (glyph.dataset.icon !== glyphName) {glyph.dataset.icon = glyphName;glyph.replaceChildren(tab.file ? browserIcon(glyphName) : icon(glyphName));}
     glyph.classList.toggle('is-loading', !!tab.loading);
     const close = node.querySelector('.panel-tab__close');
     close.setAttribute('aria-label', `${t('panel.close_tab')}: ${title}`);
@@ -132,8 +133,9 @@ function renderBrowser() {
   expand.setAttribute('aria-pressed', String(browserPage.expanded));
   expand.replaceChildren(icon(browserPage.expanded ? 'restore' : 'expand'));
   renderPanelTabs();
-  const browser = tab && !tab.section;
-  $('#browser-bar').hidden = !browser;$('#browser-view').hidden = !browser;
+  const browser = tab && !tab.section && !tab.terminal;
+  renderTerminalPanel(tab);
+  $('#browser-bar').hidden = !browser || (tab.file && !tab.file.html);$('#browser-view').hidden = !browser;
   $('#activity-panel').hidden = !tab?.section;
   const reload = $('#browser-reload');
   reload.replaceChildren(browserIcon(tab?.loading ? 'X' : 'RotateCw'));
@@ -141,14 +143,17 @@ function renderBrowser() {
   reload.title = reloadLabel;reload.setAttribute('aria-label', reloadLabel);
   ['#browser-back', '#browser-forward', '#browser-reload', '#browser-external'].forEach(id => {$(id).disabled = !browser || !tab.page;});
   const capture = $('#browser-capture');
-  capture.hidden = !!(tab?.page && !tab.capture);
+  capture.hidden = !!tab?.file || !!(tab?.page && !tab.capture);
   capture.disabled = !browser || !tab.page || tab.busy || tab.oauth;
   panel.setAttribute('aria-busy', String(!!(browser && tab.loading)));
   $('#browser-progress').hidden = !browser || !tab.loading;
-  $('#browser-empty').hidden = !browser || tab.page || tab.opening;
+  $('#file-previews').hidden = !tab?.file;
+  for (const view of $('#file-previews').children) view.hidden = view !== tab?.file?.view;
+  if (tab?.file) reload.disabled = !!tab.busy || !!tab.loading;
+  $('#browser-empty').hidden = !browser || tab.file || tab.page || tab.opening;
   if (!$('#browser-empty').hidden) renderNewTab();
   const address = $('#browser-address');
-  address.readOnly = !!tab?.oauth;
+  address.readOnly = !!(tab?.oauth || tab?.file);
   const value = tab?.address ?? tab?.url ?? '';
   if (address.value !== value) address.value = value;
   address.title = tab?.title || tab?.url || '';
@@ -286,6 +291,7 @@ function pageRecent(step) {
 }
 
 function setupNewTab() {
+  $('#panel-open-terminal').onclick = event => {if (event.isTrusted) openTerminalTab();};
   for (const tool of document.querySelectorAll('[data-panel-tool]')) tool.onclick = () => openActivity(tool.dataset.panelTool);
   $('#panel-recent-newer').replaceChildren(browserIcon('ChevronUp'));
   $('#panel-recent-older').replaceChildren(browserIcon('ChevronDown'));
@@ -311,7 +317,7 @@ function rememberPanelTab(tab) {
   if (!tab) return;
   if (tab.section) {
     Object.assign(tab, {selected:activity.selected, filter:activity.filter, scroll:$('#activity-panel-content').scrollTop});
-  } else tab.address = $('#browser-address').value;
+  } else if (!tab.terminal) tab.address = $('#browser-address').value;
 }
 
 function selectPanelTab(tab, {focus = false} = {}) {
@@ -327,14 +333,16 @@ function selectPanelTab(tab, {focus = false} = {}) {
     $('#browser-address').value = tab.address ?? tab.url;
   }
   if (focus) $(`#panel-tab-${tab.id}`).focus({preventScroll:true});
+  else if (tab.terminal) tab.terminal.term.focus();
   $(`#panel-tab-${tab.id}`).parentElement.scrollIntoView({block:'nearest', inline:'nearest'});
 }
 
-function newPanelTab(section = null, id = crypto.randomUUID(), oauth = false) {
+function newPanelTab(section = null, id = crypto.randomUUID(), oauth = false, file = null) {
   const tab = {id, oauth, section, page:false, capture:false, url:'', address:'', title:'', loading:false, busy:false, opening:false, closing:false, stateVersion:0, shown:null, status:'', selected:null, filter:'all', scroll:0};
+  if (file) Object.assign(tab, {file, title:pathName(file.path), address:file.url, url:file.url});
   browserPage.tabs.push(tab);
   selectPanelTab(tab);
-  if (!section) {$('#browser-address').focus();$('#browser-address').select();}
+  if (!section && !file) {$('#browser-address').focus();$('#browser-address').select();}
   return tab;
 }
 
@@ -342,7 +350,7 @@ function openPanelSection(section, selected = null) {
   let tab = browserPage.tabs.find(tab => tab.section === section);
   if (!tab) {
     const blank = activePanelTab();
-    if (blank && !blank.section && !blank.page && !blank.opening && !blank.address.trim()) {
+    if (blank && !blank.section && !blank.terminal && !blank.page && !blank.opening && !blank.address.trim()) {
       tab = blank;tab.section = section;
     } else tab = newPanelTab(section);
   }
@@ -358,8 +366,14 @@ function openPanelSection(section, selected = null) {
 
 async function closePanelTab(tab = activePanelTab()) {
   if (!panelHasTab(tab) || tab.busy || tab.closing) return;
+  if (tab.file?.dirty && !confirm(t('preview.discard'))) return;
+  if (tab.terminal && (!await confirmTerminalClose(tab.terminal) || !panelHasTab(tab) || tab.closing)) return;
   tab.closing = true;renderPanelTabs();
-  if (!tab.section) {
+  if (tab.terminal) {
+    try {await closeTerminal(tab.terminal);}
+    catch (error) {tab.closing = false;composerStatus(localizeError(error));renderPanelTabs();return;}
+  } else if (tab.file) disposeFilePreview(tab.file);
+  else if (!tab.section) {
     try {await queueBrowser(() => invoke('browser_close', {tab_id:tab.id}));}
     catch (error) {
       tab.closing = false;tab.shown = null;
@@ -393,7 +407,8 @@ function closeBrowser() {
 
 async function openBrowser(url, {focus = false, newTab = false} = {}) {
   let tab = activePanelTab();
-  if (newTab || !tab || tab.section) tab = newPanelTab();
+  if (!tab?.oauth && typeof url === 'string' && /^(?:file:|[a-z]:[\\/]|[\\/])/i.test(url)) return openProjectFile(url);
+  if (newTab || !tab || tab.section || tab.file || tab.terminal) tab = newPanelTab();
   else selectPanelTab(tab);
   if (!url) {
     if (focus) {$('#browser-address').focus();$('#browser-address').select();}
@@ -476,8 +491,7 @@ async function openLink(url, event) {
 
 function maxBrowserWidth() {
   const workspace = document.querySelector('.workspace').clientWidth;
-  const sidebar = $('.sidebar').getBoundingClientRect().width;
-  return Math.max(BROWSER_WIDTH.min, workspace - sidebar - BROWSER_WIDTH.keep);
+  return Math.max(BROWSER_WIDTH.min, workspace - BROWSER_WIDTH.keep);
 }
 
 function setBrowserWidth(width, save = true) {
@@ -527,10 +541,13 @@ function resetPanelAccount() {
   const owner = state.config.firebase_auth_set ? (state.config.firebase_email || '') : null;
   if (owner === browserPage.owner) return;
   browserPage.owner = owner;
+  if ($('#terminal-close-confirm').open) $('#terminal-close-confirm').close('cancel');
   const tabs = browserPage.tabs;
   browserPage.tabs = [];browserPage.active = null;browserPage.open = false;browserPage.expanded = false;
   activity.section = null;activity.selected = null;
-  for (const tab of tabs.filter(tab => !tab.section)) {
+  for (const tab of tabs.filter(tab => tab.file)) disposeFilePreview(tab.file);
+  for (const tab of tabs.filter(tab => tab.terminal)) disposeTerminal(tab.terminal);
+  for (const tab of tabs.filter(tab => !tab.section && !tab.file && !tab.terminal)) {
     queueBrowser(() => invoke('browser_close', {tab_id:tab.id})).catch(error => {
       console.error('Browser session could not close:', error);showError(localizeError(error));
     });
@@ -542,16 +559,22 @@ async function setupBrowser() {
   $('#browser-close').onclick = closeBrowser;
   $('#panel-add-tab').onclick = () => newPanelTab();
   $('#panel-expand').onclick = () => {browserPage.expanded = !browserPage.expanded;renderBrowser();};
+  $('#terminal-confirm-close').checked = terminalConfirmEnabled();
+  $('#terminal-confirm-close').onchange = event => setTerminalConfirm(event.target.checked);
   setupNewTab();
   $('#browser-back').onclick = () => browserAction('back');
   $('#browser-forward').onclick = () => browserAction('forward');
-  $('#browser-reload').onclick = () => browserAction(activePanelTab()?.loading ? 'stop' : 'reload');
+  $('#browser-reload').onclick = () => {
+    const tab = activePanelTab();
+    if (tab?.file) reloadFileTab(tab);
+    else browserAction(tab?.loading ? 'stop' : 'reload');
+  };
   $('#browser-capture').onclick = captureBrowser;
   $('#browser-external').onclick = openExternalBrowserPage;
   $('#browser-address').oninput = event => {const tab = activePanelTab();if (tab && !tab.section) tab.address = event.target.value;};
   $('#browser-bar').addEventListener('submit', event => {
     event.preventDefault();
-    if (activePanelTab()?.oauth) return;
+    if (activePanelTab()?.oauth || activePanelTab()?.file) return;
     const value = $('#browser-address').value.trim();
     if (value) {$('#browser-address').blur();openBrowser(value);}
   });
@@ -571,7 +594,7 @@ async function setupBrowser() {
   });
   new MutationObserver(syncBrowser).observe(document.body, {subtree:true, attributes:true, attributeFilter:['open', 'hidden', 'inert']});
   await appWindow.listen('browser-state', ({payload}) => {
-    const tab = browserPage.tabs.find(tab => tab.id === payload?.tab_id && !tab.section);
+    const tab = browserPage.tabs.find(tab => tab.id === payload?.tab_id && !tab.section && !tab.terminal);
     if (!tab) return;
     tab.stateVersion++;
     if (typeof payload.url === 'string') {

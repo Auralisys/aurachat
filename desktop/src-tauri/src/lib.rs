@@ -14,6 +14,7 @@ mod project_files;
 mod mentions;
 mod git;
 mod managed_shells;
+mod terminal;
 mod permissions;
 mod approvals;
 mod agent_runs;
@@ -297,6 +298,7 @@ async fn login(app: tauri::AppHandle, state: tauri::State<'_, AppState>, email: 
     candidate.refresh_token.clear();
     candidate.uid.clear();
     if !candidate.firestore_auth().configured() { return Err("login_required".into()); }
+    app.state::<terminal::Terminals>().close_all();
     if let Some(owner) = state.firestore.uid() { browser::close_owner(&app, &owner)?; }
     state.firestore.login(&candidate.firestore_auth()).await?;
     let (uid, refresh) = state.firestore.session().ok_or("session_expired")?;
@@ -424,6 +426,7 @@ async fn provider_balance(state: tauri::State<'_, AppState>, provider_id: String
 async fn logout(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let _account=state.account_lock.lock().await;
     if !state.running_chats.lock().unwrap().is_empty() { return Err("account_busy".into()); }
+    app.state::<terminal::Terminals>().close_all();
     if let Some(owner) = state.firestore.uid() { browser::close_owner(&app, &owner)?; }
     let mut cfg = state.config.lock().unwrap().clone();
     cfg.firebase_email.clear();
@@ -1057,6 +1060,15 @@ async fn preview_project_path(state:tauri::State<'_,AppState>,project_id:String,
 }
 
 #[tauri::command(rename_all = "snake_case")]
+async fn save_project_markdown(webview:tauri::Webview,state:tauri::State<'_,AppState>,project_id:String,path:String,previous:String,content:String)->Result<(),String>{
+    if webview.label() != "main" {return Err("browser_forbidden".into());}
+    let _account=state.account_lock.lock().await;
+    let uid=state.firestore.uid().ok_or("login_required")?;
+    let roots=readable_roots(&state,&uid,&project_id)?;
+    tauri::async_runtime::spawn_blocking(move||mentions::save_markdown(&roots,&path,&previous,&content)).await.map_err(|e|e.to_string())?
+}
+
+#[tauri::command(rename_all = "snake_case")]
 async fn set_skill_enabled(app:tauri::AppHandle,state:tauri::State<'_,AppState>,project_id:Option<String>,id:String,enabled:bool)->Result<(),String>{
     let _account=state.account_lock.lock().await;
     let uid=state.firestore.uid().ok_or("login_required")?;
@@ -1470,6 +1482,12 @@ pub fn run() {
         .manage(std::sync::Arc::new(media::Media::default()))
         .manage(approvals::Approvals::default())
         .manage(browser::Browser::default())
+        .manage(terminal::Terminals::default())
+        .on_page_load(|view, load| {
+            if view.label() == "main" && matches!(load.event(), tauri::webview::PageLoadEvent::Started) {
+                view.state::<terminal::Terminals>().close_all();
+            }
+        })
         .manage(mcp_oauth::OAuth::default())
         .manage(questions::Questions::default())
         .manage(agent_runs::AgentRuns::default())
@@ -1531,6 +1549,7 @@ pub fn run() {
                 capture_window(window);
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" { window.state::<terminal::Terminals>().close_all(); }
                 let quitting = window
                     .state::<AppState>()
                     .quitting
@@ -1547,6 +1566,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             mcp::mcp_integrations, mcp::mcp_connect, mcp::mcp_disconnect,
             browser::browser_preferences,
+            terminal::terminal_open, terminal::terminal_read, terminal::terminal_write,
+            terminal::terminal_resize, terminal::terminal_close,
             updates::check_app_update, updates::finish_update_check, updates::install_app_update,
             get_config,
             get_local_config,
@@ -1571,6 +1592,7 @@ pub fn run() {
             project_skills,
             search_project_paths,
             preview_project_path,
+            save_project_markdown,
             set_skill_enabled,
             search_skills,
             install_skill,
@@ -1599,6 +1621,7 @@ pub fn run() {
         .expect("errore durante l'avvio di AuraChat")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                app.state::<terminal::Terminals>().close_all();
                 app.state::<std::sync::Arc<managed_shells::Shells>>().stop_all();
                 let media=app.state::<std::sync::Arc<media::Media>>().inner().clone();
                 // The window thread is STA; media restoration runs in its own MTA.

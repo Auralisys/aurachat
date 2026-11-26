@@ -56,11 +56,27 @@ pub fn search(roots: &[PathBuf], query: &str) -> Value {
 
 /// A read-only view of a file inside one of `roots`. Symbolic links and `..` are resolved before the
 /// containment check, so a path can never reach outside the folders the user authorized.
-pub fn preview(roots: &[PathBuf], path: &str) -> Result<Value, String> {
+fn authorized_file(roots: &[PathBuf], path: &str) -> Result<PathBuf, String> {
     if !crate::llm::valid_link_path(path) { return Err("invalid_path".into()); }
     let target = Path::new(path).canonicalize().map_err(|_| "file_unavailable".to_string())?;
     if !roots.iter().filter_map(|root| root.canonicalize().ok()).any(|root| target.starts_with(root)) { return Err("outside_project".into()); }
-    let size = std::fs::metadata(&target).map_err(|e| e.to_string()).and_then(|meta| if meta.is_file() { Ok(meta.len()) } else { Err("not_a_file".to_string()) })?;
+    if !target.is_file() { return Err("not_a_file".into()); }
+    Ok(target)
+}
+
+pub fn save_markdown(roots: &[PathBuf], path: &str, previous: &str, content: &str) -> Result<(), String> {
+    let target = authorized_file(roots, path)?;
+    if !target.extension().and_then(|v| v.to_str()).is_some_and(|ext| ["md","markdown"].iter().any(|e|ext.eq_ignore_ascii_case(e))) {
+        return Err("file_not_editable".into());
+    }
+    if content.len() > MAX_PREVIEW_TEXT || previous.len() > MAX_PREVIEW_TEXT || content.contains('\0') || previous.contains('\0') { return Err("file_edit_limit".into()); }
+    if target.metadata().map_err(|e| e.to_string())?.len() != previous.len() as u64 { return Err("file_edit_conflict".into()); }
+    crate::project_files::write_file(&target, content, Some(previous)).map_err(|e| if e == "file changed while awaiting approval" { "file_edit_conflict".into() } else { e })
+}
+
+pub fn preview(roots: &[PathBuf], path: &str) -> Result<Value, String> {
+    let target = authorized_file(roots, path)?;
+    let size = target.metadata().map_err(|e| e.to_string())?.len();
     let mut bytes = Vec::new();
     std::fs::File::open(&target).map_err(|e| e.to_string())?.take(MAX_PREVIEW_IMAGE as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     if let Some(mime) = crate::llm::image_mime(&bytes) {
@@ -114,6 +130,25 @@ mod tests {
         assert_eq!(words["files"].as_array().unwrap().len(), 1);
         assert_eq!(search(&[root.clone()], "")["files"].as_array().unwrap().len(), 3);
         assert!(search(&[root.clone()], "does-not-exist")["files"].as_array().unwrap().is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn markdown_save_requires_the_complete_current_authorized_file() {
+        let root = fixture("edit");
+        let path = root.join("Note.MD");
+        std::fs::write(&path, "before\r\n").unwrap();
+        let roots = std::slice::from_ref(&root);
+        let name = path.to_str().unwrap();
+        assert!(save_markdown(&[], name, "before\r\n", "replacement").is_err());
+        assert_eq!(save_markdown(roots, name, "staler\r\n", "replacement"), Err("file_edit_conflict".into()));
+        assert_eq!(save_markdown(roots, name, "before\r\n", &"x".repeat(MAX_PREVIEW_TEXT+1)), Err("file_edit_limit".into()));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "before\r\n");
+        save_markdown(roots, name, "before\r\n", "after\r\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "after\r\n");
+        let other = root.join("other.txt");
+        std::fs::write(&other, "text").unwrap();
+        assert_eq!(save_markdown(roots, other.to_str().unwrap(), "text", "no"), Err("file_not_editable".into()));
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -172,10 +172,15 @@ Le viste elenco non mostrano intestazione propria: il titolo è nella scheda. Og
 riutilizza la propria scheda e segue la conversazione corrente; i browser
 rimangono aperti passando tra chat. Espandi usa tutto lo spazio di lavoro,
 Nascondi torna alla chat senza chiudere le schede. Sotto i 1000 px chat e pannello
-si alternano a tutta larghezza. Quando alla chat restano al massimo 700 px,
+si alternano a tutta larghezza. Quando alla chat restano al massimo 760 px,
 il riepilogo si dispone sopra i messaggi con altezza limitata e scroll proprio,
 mai in overlay, anche con il pannello a schede aperto.
-La colonna **Progetti e Recenti** parte da 248 px. Trascinando il bordo destro
+**Progetti e Recenti** si trovano sullo sfondo della finestra, fuori dal pannello
+più scuro condiviso da conversazione e riepilogo attività. In fondo alla sidebar
+il nome dell'account apre il suo menu; l'ingranaggio accanto apre le impostazioni.
+Non c'è una barra Home separata. A sidebar chiusa, File e le scorciatoie `Ctrl+N`
+e `Ctrl+,` danno accesso a Nuova chat e Impostazioni.
+La colonna parte da 248 px. Trascinando il bordo destro
 si allarga fino a 480 px, o meno se serve spazio alla conversazione. Sul bordo,
 le frecce regolano la larghezza e Home/Fine portano al minimo/massimo. La scelta
 è salvata su questo dispositivo e si ritrova anche dopo aver richiuso la colonna.
@@ -193,6 +198,21 @@ Le vecchie scritture senza pubblicazione esplicita non vengono più elencate.
 Ogni riga mostra tipo, dimensione e agente; il pannello conserva i filtri per tipo.
 Per le integrazioni native `artifact-created` richiede `final_output: true`,
 oltre a un percorso/link o un documento/immagine valido.
+
+Un clic su un file locale in **Output** o **Fonti** apre una scheda dedicata,
+anche mentre il modello lavora. Le righe di Git, Output, Fonti, Subagenti e Shell
+restano montate durante gli aggiornamenti, anche nelle liste complete delle attività.
+Le pagine HTML mostrano il documento e le immagini raster e i fogli di stile locali
+della sua cartella, senza script né caricamenti dalla rete. I link ad altri file
+apribili restano nell'app. Le immagini si possono ingrandire; JSON e XML hanno
+sintassi evidenziata e numeri di riga, gli altri testi anche senza estensione
+sono mostrati come sorgente. Ogni scheda identifica il formato con un'icona.
+Per Markdown si passa dall'occhio (**Anteprima**) a `<>` (**Sorgente**):
+**Salva** (o `Ctrl+S` nell'editor) aggiorna il file solo se non è cambiato sul disco.
+Le letture usano le cartelle autorizzate sul dispositivo, non inviano il contenuto
+alla chat e non modificano la cronologia del browser. I testi oltre 256 KB hanno
+un'anteprima troncata e non sono modificabili; i binari non supportati mostrano
+un avviso.
 
 **Modifiche +N −N** mostra branch, upstream e conteggi locali (senza fetch).
 Nel riepilogo è una riga di testo sopra Output, con conteggi verde/rosso:
@@ -434,7 +454,7 @@ effettivamente fornite dall'utente.
 I due eventi usano `{conversation_id, id, title, kind, summary?, content?, url?, path?}`.
 `kind: image` abilita l'anteprima; `document` abilita Markdown sanificato; gli altri
 contenuti sono testo inerte. Le immagini accettano URL HTTP(S) o data URL raster
-PNG/JPEG/WebP/GIF. I percorsi locali sono mostrati come riferimento; non sono eseguiti.
+PNG/JPEG/WebP/GIF. I percorsi locali aprono la scheda file del progetto; non vengono eseguiti.
 Gli artefatti e le fonti ricevuti tramite eventi durano per la sessione. Allegati e
 link nei messaggi si ricostruiscono dalla cronologia salvata. Le immagini allegate
 compaiono tra le fonti con anteprima (vedi «Immagini in input e output»); non
@@ -492,6 +512,8 @@ quattro deleghe per turno e i figli non possono delegare a loro volta.
 Nel riepilogo la sezione **Subagenti** mostra fino a due agenti attivi
 (orb animato e titolo), poi righe compatte con orb di stato: «+N in esecuzione»,
 «N completati», «N non riusciti», «N interrotti»; un clic apre la vista.
+Un clic sulla riga di un subagente apre il suo dettaglio anche mentre sta lavorando:
+gli aggiornamenti in streaming non interrompono il clic né spostano il focus.
 La vista **Subagenti** divide **Attivi · N** (con «Nessun subagente al lavoro.»
 se vuota) e **Conclusi · N**; ogni riga combina orb, titolo, ultima attività,
 stato e tempo trascorso. Il dettaglio ha un'intestazione con orb, titolo, modello
@@ -734,9 +756,13 @@ allegano **per percorso**: fino a 16 per messaggio, senza copiarli nella chat. I
 riquadro mostra un chip «solo percorso» e al modello arriva il percorso assoluto,
 che legge con i suoi strumenti solo se serve. Il telefono non può inviarli.
 
-Impostazioni → Voce gestisce Cohere Transcribe INT4 (~2 GB): download da una
+Impostazioni → Voce gestisce Whisper Large v3 (ggml f16, ~3,1 GB): download da una
 revisione immutabile, controllo SHA-256, interruzione/ripresa e rimozione locale.
-Il modello usa ONNX Runtime su CPU, senza Python, chiavi o servizi di trascrizione.
+Il modello gira con whisper.cpp su GPU tramite Vulkan (CPU se non c'è una GPU
+compatibile), senza Python, chiavi o servizi di trascrizione. All'avvio l'app
+elimina in background la vecchia cartella di Cohere Transcribe. La build richiede
+il Vulkan SDK (`VULKAN_SDK`) e un `CARGO_TARGET_DIR` corto su Windows: i percorsi
+lunghi del sottoprogetto `vulkan-shaders-gen` fanno fallire MSBuild (FTK1011).
 Con il modello installato la verifica SHA-256 e il caricamento dei pesi partono da soli all'apertura dell'app: il microfono mostra un loader sull'icona, resta disabilitato finché il modello non è in memoria e diventa utilizzabile subito dopo. Impostazioni → Voce espone lo stesso stato (“Preparazione del modello locale…”), quindi non serve più cliccare il microfono per scoprirlo; su CPU i tempi dipendono dall'hardware.
 La stessa sezione gestisce Kokoro-82M per la lettura delle risposte: modello ONNX
 e voci italiane (~337 MiB), download riprendibile, verifica SHA-256, caricamento
@@ -1366,7 +1392,7 @@ controllo remoto invia annotazioni solo a gateway aggiornati
 
 **Dettatura nei commenti.** Ogni commento ha un microfono accanto al cestino
 (`image-annotations.js`): usa la stessa dettatura locale del compositore
-(Cohere Transcribe INT4, `prepare_speech_model`/`transcribe_audio`, pausa e ripresa
+(Whisper Large v3, `prepare_speech_model`/`transcribe_audio`, pausa e ripresa
 dei media di sistema, limite di 2 minuti, stessi messaggi e stato «Caricamento del
 modello…»). `voice.js` espone la pipeline di cattura (`captureVoice`) con due
 destinazioni: il compositore e un *campo* (`startFieldVoice`/`stopFieldVoice`/
@@ -1584,3 +1610,35 @@ righe per modello), `desktop/tests/settings-flow.cjs`
 riaperto) e test Rust su conteggio (con un evento `__usage` per richiesta), sconto orario, prezzi, round trip Firestore,
 lettura del saldo (risposta, codici d'errore, key come bearer) e provider che ne
 espongono il saldo.
+
+## Terminale manuale del progetto
+
+Dal **+** del pannello laterale scegli **Terminale** per avviare PowerShell su
+Windows (ConPTY) oppure `/bin/sh` su Unix (PTY). **Shell** resta il registro
+delle esecuzioni dell’agente. Aprire il pannello o una conversazione non avvia
+nessun processo. La shell parte nella prima cartella del progetto disponibile
+e autorizzata su questo dispositivo; non ripiega sulla home o sul checkout.
+I comandi che digiti hanno i permessi del tuo utente OS: la cartella iniziale
+non è una sandbox. Input e output non entrano nella chat né nei tool del modello.
+
+Nascondere il pannello e cambiare scheda conserva la sessione. **Maiusc+Esc**
+riporta il focus alle schede. La × della scheda chiede conferma finché la shell è
+attiva, con **Annulla** come scelta predefinita; «Non chiedere più» si può
+riattivare in Impostazioni → Generali → Terminale. Una shell già terminata si
+chiude subito. Il logout, il cambio account,
+la chiusura della finestra e l’uscita dall’app rilasciano il terminale.
+Su Windows i processi figli sono associati a un Job Object kill-on-close.
+Il renderer usa xterm.js 6.0.0 e addon-fit 0.11.0 distribuiti localmente
+(licenze MIT in `ui/vendor`); non richiede una CDN.
+
+Verifiche Windows dalla radice del checkout, senza client installato o account:
+
+```powershell
+Remove-Item Env:ORT_LIB_PATH -ErrorAction SilentlyContinue
+& .\desktop\tests\run-native.ps1 -TestArguments @('terminal')
+# Con Playwright in NODE_PATH e Edge disponibile:
+& .\desktop\tests\run-native.ps1 -TestArguments @('browser_terminal_fixture','--ignored','--nocapture')
+```
+
+Il secondo test collega via stdio il frontend completo a una PTY reale
+in una fixture eliminata al termine. Salva la finestra in `.artifact/terminal.png`.

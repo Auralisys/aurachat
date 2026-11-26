@@ -10,6 +10,8 @@
     <link rel="stylesheet" href="updates.css" />
     <link rel="stylesheet" href="annotations.css" />
     <link rel="stylesheet" href="browser.css" />
+    <link rel="stylesheet" href="vendor/xterm.css" />
+    <link rel="stylesheet" href="terminal.css" />
     <link rel="stylesheet" href="balance.css" />
     <link rel="stylesheet" href="chat-rail.css" />
   </head>
@@ -34,16 +36,6 @@
       </header>
 
       <div class="content">
-        <nav id="app-rail" class="app-rail" data-i18n-aria-label="ui.navigation" hidden>
-          <button id="nav-home" class="rail-button is-active" data-i18n-aria-label="ui.home" data-i18n-title="ui.home" aria-current="page"><svg data-icon="home" aria-hidden="true"></svg></button>
-          <div class="rail__bottom">
-          <button id="btn-settings" class="rail-button" data-i18n-aria-label="titlebar.settings" data-i18n-title="titlebar.settings" aria-label="" title="">
-            <svg data-icon="gear" aria-hidden="true"></svg>
-          </button>
-          <footer class="rail__footer"><div id="account-menu" class="account-menu" hidden><p id="account-email"></p><button data-settings-tab="account" data-i18n="ui.account"></button><button data-settings-tab="inference" data-i18n="ui.inference"></button><button data-settings-tab="voice" data-i18n="ui.voice"></button><button data-settings-tab="general" data-i18n="ui.general"></button></div><button id="account-button" class="account-button" aria-expanded="false" aria-controls="account-menu"><span class="avatar" aria-hidden="true">AU</span><span class="account-name sr-only">Account</span></button></footer>
-          </div>
-        </nav>
-        <div class="workspace">
         <aside id="sidebar" class="sidebar" hidden>
           <div class="sidebar__brand"><img src="assets/logo-auralisys.svg" alt="" /><strong>AuraChat</strong></div><div class="sidebar__actions">
             <button id="btn-new-chat" class="sidebar__btn" data-i18n-title="sidebar.new_chat"><svg data-icon="compose" aria-hidden="true"></svg><span data-i18n="sidebar.new_chat"></span></button>
@@ -64,9 +56,15 @@
               <nav id="recent-chats" data-i18n-aria-label="ui.recents"></nav>
             </details>
           </div>
+          <footer class="sidebar__footer">
+            <button type="button" id="account-button" class="account-button" aria-expanded="false" aria-controls="account-menu"><span class="avatar" aria-hidden="true"></span><span class="account-name" data-i18n="ui.account"></span></button>
+            <div id="account-menu" class="account-menu" hidden><p id="account-email"></p><button data-settings-tab="account" data-i18n="ui.account"></button><button data-settings-tab="inference" data-i18n="ui.inference"></button><button data-settings-tab="voice" data-i18n="ui.voice"></button><button data-settings-tab="general" data-i18n="ui.general"></button></div>
+            <button type="button" id="btn-settings" class="icon-button" data-i18n-aria-label="titlebar.settings" data-i18n-title="titlebar.settings"><svg data-icon="gear" aria-hidden="true"></svg></button>
+          </footer>
           <div id="sidebar-resize" class="sidebar__resize" role="separator" aria-orientation="vertical" aria-controls="sidebar" tabindex="0" data-i18n-aria-label="sidebar.resize" data-i18n-title="sidebar.resize"></div>
         </aside>
 
+        <div class="workspace">
         <main class="main">
           <section id="view-onboarding" class="view view--onboarding" hidden>
             <div class="onboarding">
@@ -158,11 +156,13 @@
           <div id="browser-progress" class="browser-progress" hidden></div>
           <p id="browser-status" class="browser-status" role="status" hidden></p>
           <div id="browser-view" class="browser-view">
+            <div id="file-previews" hidden></div>
             <div id="browser-empty" class="browser-empty">
               <section class="newtab-section" aria-labelledby="panel-tools-title">
                 <h2 id="panel-tools-title" data-i18n="panel.tools"></h2>
                 <div class="panel-tools">
                   <button id="panel-open-git" type="button" data-panel-tool="git"><svg data-icon="git" aria-hidden="true"></svg><span class="panel-tool__text"><span class="panel-tool__title" data-i18n="git.changes"></span><span class="panel-tool__info" data-panel-info="git"></span></span><kbd>Ctrl+Shift+G</kbd></button>
+                  <button id="panel-open-terminal" type="button"><svg data-icon="terminal" aria-hidden="true"></svg><span class="panel-tool__text"><span class="panel-tool__title" data-i18n="terminal.title"></span><span id="panel-terminal-info" class="panel-tool__info"></span></span></button>
                   <button type="button" data-panel-tool="shells"><svg data-icon="terminal" aria-hidden="true"></svg><span class="panel-tool__text"><span class="panel-tool__title" data-i18n="activity.shells"></span><span class="panel-tool__info" data-panel-info="shells"></span></span><kbd>Ctrl+Shift+S</kbd></button>
                   <button type="button" data-panel-tool="agents"><svg data-icon="agents" aria-hidden="true"></svg><span class="panel-tool__text"><span class="panel-tool__title" data-i18n="activity.agents"></span><span class="panel-tool__info" data-panel-info="agents"></span></span><kbd>Ctrl+Shift+A</kbd></button>
                   <button type="button" data-panel-tool="outputs"><svg data-icon="file" aria-hidden="true"></svg><span class="panel-tool__text"><span class="panel-tool__title" data-i18n="activity.outputs"></span><span class="panel-tool__info" data-panel-info="outputs"></span></span><kbd>Ctrl+Shift+O</kbd></button>
@@ -188,6 +188,7 @@
               </section>
             </div>
           </div>
+          <div id="panel-terminals" hidden></div>
           <section id="activity-panel" class="activity-panel" hidden>
             <header class="activity-panel__header" hidden><button id="activity-back" class="icon-button" data-i18n-aria-label="ui.back"><svg data-icon="back" aria-hidden="true"></svg></button><span id="activity-panel-orb" class="agent-orb" aria-hidden="true" hidden></span><h2 id="activity-panel-title" tabindex="-1"></h2><span id="activity-panel-meta" class="activity-panel__meta" hidden></span><button id="activity-panel-stop" type="button" class="icon-button agent-stop" hidden><svg data-icon="stop" aria-hidden="true"></svg></button></header>
             <div id="activity-panel-content" class="activity-panel__content"></div>
@@ -239,7 +240,7 @@
         </nav><div class="settings-content"><div class="modal__head">
           <h2 id="settings-title" class="modal__title" data-i18n="settings.title"></h2>
         </div>
-        <section id="settings-general" hidden><h3 data-i18n="ui.appearance"></h3><p data-i18n="ui.appearance_note"></p><div class="preference-row"><span data-i18n="ui.theme"></span><span data-i18n="ui.dark"></span></div><div class="preference-row"><span data-i18n="ui.language"></span><span id="settings-language"></span></div><div class="preference-row"><span data-i18n="ui.motion"></span><span data-i18n="ui.static"></span></div></section><section id="settings-voice" hidden>
+        <section id="settings-general" hidden><h3 data-i18n="ui.appearance"></h3><p data-i18n="ui.appearance_note"></p><div class="preference-row"><span data-i18n="ui.theme"></span><span data-i18n="ui.dark"></span></div><div class="preference-row"><span data-i18n="ui.language"></span><span id="settings-language"></span></div><div class="preference-row"><span data-i18n="ui.motion"></span><span data-i18n="ui.static"></span></div><h3 data-i18n="terminal.title"></h3><label class="preference-row"><span data-i18n="terminal.confirm_setting"></span><input id="terminal-confirm-close" type="checkbox"></label></section><section id="settings-voice" hidden>
 <h3 data-i18n="voice.title"></h3><p data-i18n="voice.note"></p>
 <div class="voice-model-card"><strong data-i18n="voice.transcribe_title"></strong><span class="voice-model-detail" data-i18n="voice.model_detail"></span><p id="voice-model-status" role="status"></p>
 <progress id="voice-model-progress" hidden></progress><div class="voice-model-actions"><button id="voice-download" class="primary" data-i18n="voice.download"></button><button id="voice-download-cancel" hidden data-i18n="voice.pause"></button><button id="voice-remove" hidden data-i18n="voice.remove"></button></div><p id="voice-error" class="form-error" role="alert"></p></div>
@@ -248,7 +249,7 @@
 <p id="tts-model-status" role="status"></p><progress id="tts-model-progress" hidden></progress>
 <div class="voice-model-actions"><button id="tts-download" class="primary" data-i18n="voice.tts_download"></button><button id="tts-download-cancel" hidden data-i18n="voice.pause"></button><button id="tts-remove" hidden data-i18n="voice.remove"></button></div><p id="tts-error" class="form-error" role="alert"></p>
 <p class="voice-privacy" data-i18n="voice.tts_privacy"></p><a class="voice-source" href="https://huggingface.co/hexgrad/Kokoro-82M" target="_blank" rel="noopener" data-i18n="voice.tts_source"></a></div>
-<p class="voice-privacy" data-i18n="voice.privacy"></p><a class="voice-source" href="https://huggingface.co/cstr/cohere-transcribe-onnx-int4" target="_blank" rel="noopener" data-i18n="voice.source"></a></section><section id="settings-account" hidden>
+<p class="voice-privacy" data-i18n="voice.privacy"></p><a class="voice-source" href="https://huggingface.co/ggerganov/whisper.cpp" target="_blank" rel="noopener" data-i18n="voice.source"></a></section><section id="settings-account" hidden>
           <div class="settings-section-head"><div><h3 data-i18n="settings.connected_account"></h3><p data-i18n="settings.account_note"></p></div></div>
           <div class="connected-account"><span class="avatar settings-avatar" id="settings-account-avatar" aria-hidden="true"></span><div><strong id="settings-account-name"></strong><span id="settings-account-email"></span></div><span class="settings-status"><svg data-icon="check" aria-hidden="true"></svg><span data-i18n="settings.signed_in"></span></span></div>
           <div class="settings-signout"><div><strong data-i18n="settings.session"></strong><p data-i18n="settings.session_note"></p></div><button id="settings-signout" class="btn" data-i18n="settings.sign_out"></button></div>
@@ -309,7 +310,12 @@
     <script src="images.js"></script>
     <script src="image-annotations.js"></script>
     <script src="browser.js"></script>
+    <script src="vendor/xterm.js"></script>
+    <script src="vendor/xterm-fit.js"></script>
+    <script src="terminal.js"></script>
+    <script src="file-preview.js"></script>
     <dialog id="git-push-confirm" class="permission-confirm" aria-labelledby="git-push-title"><form method="dialog"><h2 id="git-push-title" data-i18n="git.confirm_push"></h2><p id="git-push-target"></p><p data-i18n="git.push_note"></p><div><button value="cancel" data-i18n="project.cancel" autofocus></button><button value="push" class="approval-allow" data-i18n="git.push"></button></div></form></dialog>
+    <dialog id="terminal-close-confirm" class="permission-confirm" aria-labelledby="terminal-close-title" aria-describedby="terminal-close-note"><form method="dialog"><h2 id="terminal-close-title" data-i18n="terminal.close_title"></h2><p id="terminal-close-note"></p><label class="confirm-skip"><input id="terminal-close-skip" type="checkbox"><span data-i18n="terminal.close_skip"></span></label><div><button value="cancel" data-i18n="project.cancel" autofocus></button><button value="close" class="git-discard-confirm-action" data-i18n="terminal.close_confirm"></button></div></form></dialog>
     <dialog id="git-discard-confirm" class="permission-confirm" aria-labelledby="git-discard-title" aria-describedby="git-discard-note"><form method="dialog"><h2 id="git-discard-title" data-i18n="git.discard_title"></h2><p id="git-discard-note" data-i18n="git.discard_note"></p><ul id="git-discard-files"></ul><div><button value="cancel" data-i18n="project.cancel" autofocus></button><button value="discard" class="git-discard-confirm-action" data-i18n="git.discard_confirm"></button></div></form></dialog>
     <dialog id="update-dialog" class="update-dialog" aria-labelledby="update-title" aria-describedby="update-message" tabindex="-1">
       <img src="assets/logo-auralisys.svg" alt="" />

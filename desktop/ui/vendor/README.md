@@ -29,6 +29,6 @@ l'integrità e sostituire entrambi i file insieme.
 
 ## Dettatura locale
 
-Cohere Transcribe di Cohere Labs, conversione ONNX INT4 di cstr, licenza Apache 2.0 (speech-APACHE-2.0.txt). Pesi scaricati su richiesta da Hugging Face, revisione immutabile 2c870f89692c61348481884eb6e1222ec3ba25c9, verificati SHA-256. Motore Rust transcribe-rs 0.3.12 e ONNX Runtime tramite ort 2.0.0-rc.12. La conversione quantizza il modello originale senza addestramento aggiuntivo.
+Whisper Large v3 di OpenAI, conversione ggml f16 (ggml-large-v3.bin) del progetto whisper.cpp, licenza MIT (whisper-MIT.txt). Pesi scaricati su richiesta da Hugging Face, revisione immutabile 5359861c739e955e79d9a303bcbc70fb988958b1, verificati SHA-256. Motore Rust transcribe-rs 0.3.12 con whisper.cpp (whisper-rs) e backend Vulkan.
 
-Fonti: https://huggingface.co/CohereLabs/cohere-transcribe-03-2026, https://huggingface.co/cstr/cohere-transcribe-onnx-int4, https://github.com/cjpais/transcribe-rs.
+Fonti: https://huggingface.co/ggerganov/whisper.cpp, https://github.com/openai/whisper, https://github.com/cjpais/transcribe-rs.

@@ -130,7 +130,7 @@ stop durante la registrazione e uno spinner durante la trascrizione.
 L'audio viene diviso in parti da 500 KB e scritto in
 `users/{uid}/devices/{id}/requests` con `status: audio`; una richiesta
 `action: transcribe` contiene `audio_parts` e `language`. Il PC ricompone il WAV,
-trascrive con Cohere e riscrive `result.text` nella richiesta. Il telefono unisce
+trascrive con Whisper e riscrive `result.text` nella richiesta. Il telefono unisce
 il testo alla bozza già presente. Stop trascrive soltanto; invio durante la
 registrazione trascrive e invia subito, come sul desktop. Su timeout le parti non
 vengono cancellate, perché il PC potrebbe doverle ancora leggere.

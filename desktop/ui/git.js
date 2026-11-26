@@ -98,7 +98,7 @@ function renderGitCard(card) {
   if (gitView.data) heading.append(gitStats(gitView.data));
   heading.onclick = () => openActivity('git');
   const row = activityText('div', '', 'git-summary-row');
-  const more = activityButton(t('git.more'), 'more', () => openGitMenu(group, more));
+  const more = activityButton(t('git.more'), 'more', event => openGitMenu(event.currentTarget.closest('.git-group'), event.currentTarget));
   more.classList.add('git-menu-trigger');configureMenuTrigger(more, 'tree-menu');
   row.append(heading, more);group.append(row);
   const data = gitView.data;

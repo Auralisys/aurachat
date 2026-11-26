@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
  const errors=[]; page.on('pageerror', e=>errors.push(e.message));
  const locales=JSON.parse(readFileSync(resolve(__dirname,'../ui/locales/it.json'),'utf8'));
  await page.addInitScript(({locales})=>{
-  const data={projects:[{id:'p',name:'AuraChat',source_folders:[],conversations:[{id:'c',title:'Una nuova idea',updated_at:1,context_tokens:0,messages:[]}]}]};
+  const data={projects:[{id:'p',name:'AuraChat',source_folders:['C:\\Fixture'],conversations:[{id:'c',title:'Una nuova idea',updated_at:1,context_tokens:0,messages:[]}]}]};
   const config={firebase_email:'demo@example.com',firebase_project_id:'demo',firebase_api_key:'demo',firebase_auth_set:true,api_key_set:true,models:['deepseek-flash','deepseek-v4-pro'],active_model:'deepseek-flash'};
   window.__calls=[];
   window.__TAURI__={window:{getCurrentWindow:()=>({minimize(){},close(){},async listen(){return ()=>{};}})},core:{invoke:async(cmd,args)=>{
@@ -20,6 +20,8 @@ const assert = require('node:assert/strict');
    if(cmd==='set_model'){config.active_model=args.model;return config;}
    if(cmd==='set_conversation_model'){data.projects[0].conversations.find(c=>c.id===args.conversation_id).model=args.model;return data;}
    if(['get_data','refresh_data'].includes(cmd))return data;
+   if(cmd==='project_folder_access')return ['C:\\Fixture'];
+   if(cmd==='project_git' && args.action==='discover')return {repositories:[],truncated:false};
    if(cmd==='save_data')return args.data;
    if(cmd==='chat'){await new Promise(r=>setTimeout(r,150));return {data,messages:[{role:'user',content:args.content},{role:'assistant',content:'Risposta di prova.'}],usage:{prompt_tokens:12,completion_tokens:6}};}
   }}};
@@ -39,10 +41,22 @@ const assert = require('node:assert/strict');
  assert.equal(importedGlyphs.find(glyph => glyph.name === 'compose').viewBox,'0 0 16 16');
  assert.equal(importedGlyphs.find(glyph => glyph.name === 'home').stroke,'none');
  assert.equal(await page.locator('#btn-new-chat svg').getAttribute('viewBox'),'0 0 16 16');
- assert.equal(await page.locator('#app-rail').isVisible(),true);
- assert.equal(await page.locator('#app-rail #account-button').count(),1);
- assert.equal(await page.locator('.workspace #sidebar').count(),1);
- await page.click('#nav-home');
+ assert.equal(await page.locator('#nav-home, #app-rail').count(),0);
+ assert.equal(await page.locator('#sidebar .account-name').innerText(),'demo');
+ const footer = async () => {
+  const sidebar = await page.locator('#sidebar').boundingBox(), account = await page.locator('#account-button').boundingBox(), gear = await page.locator('#btn-settings').boundingBox();
+  assert.ok(account.x + account.width <= gear.x && Math.abs(account.y+account.height/2-gear.y-gear.height/2)<2);
+  assert.ok(sidebar.y+sidebar.height-account.y-account.height<=12,'The profile stays at the bottom, outside the scrolling projects');
+ };
+ await footer();
+ assert.equal(await page.locator('.workspace #sidebar').count(),0);
+ assert.equal(await page.locator('.workspace #messages, .workspace #activity-dock').count(),2);
+ assert.ok(await page.evaluate(()=>{
+  const rgb = el=>getComputedStyle(el).backgroundColor.match(/\d+/g).slice(0,3).map(Number);
+  const project=rgb(document.querySelector('#sidebar')), chat=rgb(document.querySelector('.workspace'));
+  return chat.every((v,i)=>v<project[i]) && getComputedStyle(document.querySelector('#activity-card')).backgroundColor==='rgba(0, 0, 0, 0)';
+ }),'Messages and activity share a surface darker than the projects sidebar');
+ await page.click('#btn-new-chat');
  assert.equal(await page.locator('#conversation-title').textContent(),'Nuova chat');
  await page.click('#nav-back');
  assert.equal(await page.locator('#conversation-title').textContent(),'Una nuova idea');
@@ -101,11 +115,11 @@ const assert = require('node:assert/strict');
  assert.equal(await page.locator('.composer__project').isVisible(),false);
  await page.click('#btn-new-chat');
  await page.click('#sidebar-collapse'); assert.equal(await page.locator('#sidebar').isVisible(),false);
- assert.equal(await page.locator('#app-rail').isVisible(),true);
- assert.equal(await page.locator('#account-button').isVisible(),true);
- await page.screenshot({path:resolve(process.env.TEMP,'aurachat-sidebar-rail.png')});
- await page.click('#account-button');assert.equal(await page.locator('#account-menu').isVisible(),true);
- await page.keyboard.press('Escape');assert.equal(await page.locator('#account-button').getAttribute('aria-expanded'),'false');
+ assert.equal(await page.locator('#account-button').isVisible(),false);
+ const full = await page.locator('.workspace').boundingBox();
+ assert.ok(full.x<=8 && full.width>=1080-16,'Collapsing the sidebar leaves no navigation strip');
+ await page.keyboard.press('Control+,');await page.locator('#settings-overlay').waitFor({state:'visible'});
+ await page.keyboard.press('Escape');assert.equal(await page.locator('#sidebar-collapse').evaluate(el=>el===document.activeElement),true);
  await page.click('#sidebar-collapse');
  await page.click('#menu-view');
  await page.getByRole('menuitem',{name:'Mostra / nascondi sidebar',exact:true}).click();
@@ -113,9 +127,15 @@ const assert = require('node:assert/strict');
  await page.keyboard.press('Control+b');
  assert.equal(await page.locator('#sidebar').isVisible(),true);
  await page.setViewportSize({width:720,height:680});
+ await page.click('#sidebar-collapse');await footer();
+ await page.click('#account-button');assert.equal(await page.locator('#account-menu').isVisible(),true);
+ await page.keyboard.press('Escape');assert.equal(await page.locator('#account-button').getAttribute('aria-expanded'),'false');
+ assert.equal(await page.locator('#account-button').evaluate(el=>el===document.activeElement),true);
+ await page.click('#btn-settings');await page.locator('#settings-overlay').waitFor({state:'visible'});await page.keyboard.press('Escape');
+ await page.keyboard.press('Escape');await page.locator('#sidebar').waitFor({state:'hidden'});
  await page.screenshot({path:resolve(process.env.TEMP,'aurachat-compact.png')});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await page.evaluate(()=>{document.querySelector('#sidebar').hidden=true;document.querySelector('#view-chat').hidden=true;document.querySelector('#view-onboarding').hidden=false;});
  await page.screenshot({path:resolve(process.env.TEMP,'aurachat-onboarding.png')});
- assert.deepEqual(errors,[]); await browser.close(); console.log('PASS: persistent rail, workspace, back/forward, desktop menus, help, edit selection, shortcuts, chat, settings, optional project, compact layout; no runtime errors.');
+ assert.deepEqual(errors,[]); await browser.close(); console.log('PASS: sidebar profile and settings, chat surface, back/forward, desktop menus, shortcuts, chat, optional project and compact layout.');
 })().catch(e=>{console.error(e);process.exit(1)});

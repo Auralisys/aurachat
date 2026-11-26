@@ -14,30 +14,35 @@ l'ultimo intervento. Lo sfondo viola statico della nuova chat è stato mantenuto
 su richiesta esplicita. Questa nota sostituisce la precedente composizione a
 sidebar unica con account nel footer.
 
-## Struttura approvata
+## Sidebar unica attuale
 
-- **Barra laterale stretta, sempre visibile nella chat:** Home in alto,
-  impostazioni e avatar in basso. Home apre una nuova chat. L'avatar mostra le
-  prime due lettere dell'account e apre il menu Account / Modelli e inferenza /
-  Generali, senza chevron. Non è un caricamento di foto profilo.
-- **Barra superiore:** indietro, avanti, compressione della sidebar interna e
+- **Navigazione:** niente barra Home. In fondo a Progetti e Recenti, le iniziali
+  e il nome dell'account aprono il menu del profilo; accanto c'è l'ingranaggio
+  delle impostazioni. Il footer resta fermo mentre l'elenco scorre.
+- **Barra superiore:** indietro, avanti, compressione della sidebar e
   menu File, Modifica, Vista e Guida; restano i controlli finestra Windows.
   Indietro e avanti navigano le viste chat visitate nella sessione.
-- **Pannello principale arrotondato:** contiene la sidebar interna e l'area chat,
-  separate da un bordo sottile. Comprimere la sidebar nasconde solo progetti e
-  recenti; la barra stretta con Home e avatar resta disponibile.
-- **Sidebar interna:** marchio AuraChat, Nuova chat, Progetti e Recenti.
+- **Pannello principale arrotondato:** la conversazione e il riepilogo attività
+  condividono la superficie più scura; Progetti e Recenti restano sullo sfondo
+  più chiaro della finestra. Comprimere la sidebar libera tutta la sua larghezza.
+- **Sidebar progetti:** marchio AuraChat, Nuova chat, Progetti e Recenti.
   Il pulsante Nuovo progetto compare soltanto sulla riga Progetti.
   Progetti e cartelle hanno icone SVG coerenti, senza il precedente quadrato
   vuoto; restano creazione, rinomina e organizzazione delle conversazioni.
 - **Area chat:** nome della conversazione in alto a sinistra, token/contesto
   nell'header, messaggi utente a destra e risposte senza card aggiuntive.
+- **Schede file:** globo per le pagine HTML locali, parentesi graffe per JSON,
+  tag per XML, libro per Markdown. Il documento Markdown alterna lettura (occhio)
+  e sorgente modificabile (`<>`); il salvataggio è esplicito.
+- **Terminale manuale:** + → Terminale apre PowerShell (ConPTY) nella cartella
+  del progetto; la sessione resta viva cambiando scheda. Chiudere una shell
+  attiva chiede conferma («Chiudi terminale?», Annulla predefinito) con
+  «Non chiedere più»; la conferma si riattiva in Impostazioni → Generali →
+  Terminale. Shell terminate o non avviate si chiudono senza dialogo; chiusura
+  e logout terminano i processi figli (Job Object). Codice: `desktop/ui/terminal.js`.
 
-Riferimenti: `desktop/ui/index.html:14` (barra superiore),
-`desktop/ui/index.html:38` (barra stretta), `desktop/ui/index.html:47`
-(pannello principale), `desktop/ui/index.html:48` (sidebar interna),
-`desktop/ui/index.html:77` (titolo chat), `desktop/ui/styles.css:105`
-(pannello), `desktop/ui/styles.css:152` (compressione).
+Riferimenti: `desktop/ui/index.html` (`#sidebar`, `.sidebar__footer`, `.workspace`),
+`desktop/ui/styles.css` e `desktop/ui/activity.css`.
 
 ## Nuova chat e compositore
 
@@ -234,7 +239,7 @@ balloon mantengono la palette viola Auralisys. Sostituito il precedente blu
 con voci del sistema. Allegati testuali dal +, visibili come chip e inviati col
 messaggio. Token raccolti nel dettaglio contesto.
 
-Dettatura locale Cohere scaricabile in Impostazioni → Voce. Nella toolbar,
+Dettatura locale Whisper Large v3 (GPU, Vulkan) scaricabile in Impostazioni → Voce. Nella toolbar,
 X / forma d'onda reale / Stop / Invio. Stop trascrive nella bozza, Invio trascrive
 e invia con testo e allegati preesistenti; X scarta solo l'audio. Icone centrate
 con grid, senza allineamento alla baseline del testo. Stati di preparazione,

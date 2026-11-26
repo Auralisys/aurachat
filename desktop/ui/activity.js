@@ -277,15 +277,14 @@ function activityDot(status) {
 
 function activityStatusPill(label, status) { return activityText('span', label, `activity-status activity-status--${status}`); }
 
-function activityRowBase(section, item) {
+function activityRowBase(section, {id}) {
   const row = document.createElement('button');row.type = 'button';row.className = 'activity-row';
-  row.dataset.activityFocus = `${section}:${item.id}`;
-  row.onclick = () => openActivity(section, item.id);
+  row.dataset.activityFocus = `${section}:${id}`;
+  row.onclick = () => openActivity(section, id);
   return row;
 }
 
 function activityRow(item, section, compact = false) {
-  if (section === 'agents') return agentRow(item, compact);
   if (section === 'shells') return shellRow(item, compact);
   if (section === 'outputs') return artifactRow(item, compact);
   return sourceRow(item, compact);
@@ -294,6 +293,7 @@ function activityRow(item, section, compact = false) {
 function sourceRow(item, compact = false) {
   const row = activityRowBase('sources', item);
   const web = /^https?:/.test(safeActivityURL(item.url) || '') && item.kind !== 'image';
+  if (item.path) {row.title = displayFilePath(item.path);row.onclick = () => openProjectFile(item.path);}
   if (web) {
     row.classList.add('activity-row--link');row.title = item.url;
     row.onclick = event => openLink(item.url, event);
@@ -309,6 +309,8 @@ function sourceRow(item, compact = false) {
 
 function artifactRow(item, compact = false) {
   const row = activityRowBase('outputs', item);
+  row.title = item.path ? displayFilePath(item.path) : item.title;
+  if (item.path && !item.pending) row.onclick = () => openProjectFile(item.path);
   row.classList.add('activity-row--artifact');
   if (item.pending) row.classList.add('is-pending');
   row.append(artifactLead(item));
@@ -343,16 +345,21 @@ function agentElapsed(agent, className = '') {
 }
 
 // The orb carries the state visually; assistive tech reads the label instead.
-function agentRow(agent, compact = false) {
-  const row = activityRowBase('agents', agent);
-  row.classList.add('activity-row--agent');
-  row.append(agentOrb(agent.status));
-  const text = activityText('span', '', 'activity-row__text');
-  const title = activityText('span', agent.title || t('activity.agent'), 'activity-row__title');
+function agentRow(agent, compact, previous) {
+  const row = previous.get(`agents:${agent.id}`) || activityRowBase('agents', agent);
+  if (!row.firstChild) {
+    row.classList.add('activity-row--agent');
+    const text = activityText('span', '', 'activity-row__text');
+    text.append(activityText('span', '', 'activity-row__title'), activityText('span', '', 'sr-only'));
+    row.append(agentOrb(agent.status), text);
+    if (!compact) row.append(agentElapsed(agent));
+  }
+  const [orb, text] = row.children, [title, status] = text.children;
+  const name = agent.title || t('activity.agent'), label = activityStatus(agent), orbClass = `agent-orb agent-orb--${agent.status}`;
+  if (orb.className !== orbClass) orb.className = orbClass;
+  if (title.textContent !== name) title.textContent = name;
+  if (status.textContent !== label) status.textContent = label;
   title.classList.toggle('is-working-text', agent.status === 'running');
-  text.append(title, activityText('span', activityStatus(agent), 'sr-only'));
-  row.append(text);
-  if (!compact) row.append(agentElapsed(agent));
   return row;
 }
 
@@ -360,24 +367,34 @@ function countLabel(key, count) {
   return t(`${key}_${count === 1 ? 'one' : 'many'}`).replace('{count}', String(count));
 }
 
-function renderAgentSummary(group, agents) {
+function activityRowMap(parent) {
+  return new Map(Array.from(parent.children, el => [el.dataset.activityFocus, el]));
+}
+
+function renderAgentSummary(group, header, agents) {
+  const previous = activityRowMap(group);
   const active = agents.filter(agent => ['running','waiting'].includes(agent.status));
-  for (const agent of active.slice(0, 2)) group.append(agentRow(agent, true));
+  const nodes = [group.firstElementChild?.isEqualNode(header) ? group.firstElementChild : header,
+    ...active.slice(0, 2).map(agent => agentRow(agent, true, previous))];
   const lines = [];
   if (active.length > 2) lines.push(['running', t('activity.more_running').replace('{count}', String(active.length - 2))]);
   for (const status of ['completed','failed','cancelled']) {
     const count = agents.filter(agent => agent.status === status).length;
     if (count) lines.push([status, countLabel(`activity.${status}`, count)]);
   }
-  if (!lines.length) return;
-  const summary = activityText('button', '', 'activity-agents-summary');summary.type = 'button';
-  summary.dataset.activityFocus = 'all:agents';summary.onclick = () => openActivity('agents');
-  for (const [status, label] of lines) {
-    const line = activityText('span', '', 'agent-status-line');
-    line.append(agentOrb(status), activityText('span', label));
-    summary.append(line);
+  if (lines.length) {
+    const summary = activityText('button', '', 'activity-agents-summary');summary.type = 'button';
+    summary.dataset.activityFocus = 'all:agents';summary.onclick = () => openActivity('agents');
+    for (const [status, label] of lines) {
+      const line = activityText('span', '', 'agent-status-line');
+      line.append(agentOrb(status), activityText('span', label));
+      summary.append(line);
+    }
+    const old = previous.get('all:agents');
+    if (old) syncActivityChildren(old, summary);
+    nodes.push(old || summary);
   }
-  group.append(summary);
+  reconcileActivityList(group, nodes);
 }
 
 // Images read faster as thumbnails; documents and links keep their rows.
@@ -431,13 +448,49 @@ function closeActivityPanel() {
   closePanelTab();
 }
 
+// Remove obsolete siblings first so a surviving, pressed button need not move.
+function reconcileActivityList(parent, nodes) {
+  const keep = new Set(nodes);
+  for (const child of [...parent.children]) if (!keep.has(child)) child.remove();
+  reconcileChildren(parent, nodes);
+}
+
+// Reconcile the small, button-based activity lists by identity, not by position.
+// A sibling arriving, a changing counter or shell output must not cancel a press.
+function syncActivityChildren(parent, next) {
+  const key = el => el.dataset.activityFocus || el.dataset.activityGroup || `${el.tagName}:${el.classList[0] || ''}`;
+  const previous = new Map();
+  for (const el of parent.children) {
+    const k = key(el);
+    if (!previous.has(k)) previous.set(k, []);
+    previous.get(k).push(el);
+  }
+  const nodes = [...next.children].map(el => {
+    const old = previous.get(key(el))?.shift();
+    if (!old || old.tagName !== el.tagName || old.namespaceURI !== el.namespaceURI) return el;
+    if (el.onclick) old.onclick = el.onclick;
+    if (old.isEqualNode(el)) return old;
+    for (const attr of [...old.attributes]) if (!el.hasAttribute(attr.name)) old.removeAttribute(attr.name);
+    for (const attr of el.attributes) if (old.getAttribute(attr.name) !== attr.value) old.setAttribute(attr.name, attr.value);
+    if (el.childElementCount) syncActivityChildren(old, el);
+    else if (!old.matches('.shell-elapsed,.agent-elapsed')) old.textContent = el.textContent;
+    return old;
+  });
+  reconcileActivityList(parent, nodes);
+}
+
 function renderActivity() {
   if (!$('#activity-dock')) return;
   resetPanelAccount();
+  if (activity.press?.button.isConnected && activity.press.conversation === state.activeConversationId && activity.press.owner === browserPage.owner) {
+    activity.press.refresh = true;return;
+  }
   if (treeMenuTrigger?.closest('.activity-card, .git-panel') && !$('#tree-menu').hidden) return;
-  const focusKey = document.activeElement?.dataset.activityFocus;
+  const focused = document.activeElement, focusKey = focused?.dataset.activityFocus;
   const restoreFocus = () => {
-    if (focusKey) [...document.querySelectorAll('#activity-dock [data-activity-focus], #activity-panel [data-activity-focus]')].find(el => el.dataset.activityFocus === focusKey)?.focus({preventScroll:true});
+    if (!focusKey || document.activeElement === focused) return;
+    const target = focused.isConnected ? focused : [...document.querySelectorAll('#activity-dock [data-activity-focus], #activity-panel [data-activity-focus]')].find(el => el.dataset.activityFocus === focusKey);
+    target?.focus({preventScroll:true});
   };
   if (activity.conversationId !== state.activeConversationId) {
     activity.conversationId = state.activeConversationId;activity.selected = null;activity.filter = 'all';
@@ -456,10 +509,10 @@ function renderActivity() {
   $('#activity-toggle').hidden = !hasActivity;
   $('#activity-toggle').setAttribute('aria-expanded', String(visible));
   $('#activity-toggle').classList.toggle('is-active', visible);
-  const card = $('#activity-card');card.replaceChildren();
+  const card = document.createDocumentFragment();
   const heading = activityText('div', '', 'activity-card__header');
   const scope = activityText('span', gitProject()?.name || t('activity.title'));scope.title = scope.textContent;
-  const more = activityButton(t('activity.more'), 'more', () => showTreeMenu(heading, more, t('activity.title'), [
+  const more = activityButton(t('activity.more'), 'more', event => showTreeMenu(event.currentTarget.parentElement, event.currentTarget, t('activity.title'), [
     ['sources', 'activity.sources', () => openActivity('sources')],
     ['file', 'activity.outputs', () => openActivity('outputs')],
     ['minimize', 'activity.hide', () => {activity.visible = false;renderActivity();$('#activity-toggle').focus();}],
@@ -472,6 +525,7 @@ function renderActivity() {
   if (items.shells.length) sections.push('shells');
   for (const section of sections) {
     const group = activityText('section', '', 'activity-group');
+    group.dataset.activityGroup = section;
     const header = activityText('div', '', 'activity-group__header');
     const title = activityText('button', '', 'activity-group__title');title.type = 'button';
     title.dataset.activityFocus = `group:${section}`;
@@ -484,9 +538,8 @@ function renderActivity() {
       composerStatus(t('activity.output_hint'));
     }));
     group.append(header);
-    if (section === 'agents') renderAgentSummary(group, items.agents);
-    else if (section === 'sources') renderSourceSummary(group, items.sources);
-    else for (const item of orderedItems(section, items).slice(0, 3)) group.append(activityRow(item, section, true));
+    if (section === 'sources') renderSourceSummary(group, items.sources);
+    else if (section !== 'agents') for (const item of orderedItems(section, items).slice(0, 3)) group.append(activityRow(item, section, true));
     if (!items[section].length) group.append(activityText('p', t(`activity.empty_${section}`), 'activity-empty'));
     if ((section === 'sources' && items[section].length) || (['outputs','shells'].includes(section) && items[section].length > 3)) {
       const all = activityText('button', t('activity.view_all'), 'activity-view-all');all.type = 'button';all.onclick = () => openActivity(section);group.append(all);
@@ -494,9 +547,24 @@ function renderActivity() {
     }
     card.append(group);
   }
+  const mounted = $('#activity-card');
+  const groupKey = el => el.dataset.activityGroup || el.className;
+  const groups = new Map(Array.from(mounted.children, el => [groupKey(el), el]));
+  reconcileActivityList(mounted, Array.from(card.children, el => {
+    const old = groups.get(groupKey(el));
+    if (el.dataset.activityGroup === 'agents') {
+      renderAgentSummary(old || el, el.firstElementChild, items.agents);
+      return old || el;
+    }
+    if (!old) return el;
+    syncActivityChildren(old, el);
+    return old;
+  }));
   const header = $('#activity-panel .activity-panel__header');
   if (!activity.section || !browserPage.open) {restoreFocus();return;}
+  const content = $('#activity-panel-content');
   if (activity.section === 'git') {
+    content._reference = null;
     header.hidden = true;
     renderGitPanel($('#activity-panel-content'));restoreFocus();return;
   }
@@ -520,38 +588,54 @@ function renderActivity() {
     stop.disabled = !!agent.stop_pending;stop.title = label;stop.setAttribute('aria-label', label);
     stop.dataset.activityFocus = `stop-agent:${agent.id}`;stop.onclick = () => stopActivityAgent(agent);
   }
-  const content = $('#activity-panel-content');const scroll = content.scrollTop;
-  if (agent) {renderAgentDetail(content,agent);content.scrollTop = scroll;updateActivityTimers();restoreFocus();return;}
-  content.dataset.agentId = '';content.replaceChildren();
+  const scroll = content.scrollTop;
+  if (agent) {content._reference = null;renderAgentDetail(content,agent);content.scrollTop = scroll;updateActivityTimers();restoreFocus();return;}
+  content.dataset.agentId = '';
+  const next = document.createDocumentFragment();
   if (selected) {
-    if (section === 'shells') renderShellDetail(content, selected);
-    else if (section === 'outputs') renderArtifactDetail(content, selected);
-    else renderReferenceDetail(content, selected);
+    if (section === 'shells') {
+      renderShellDetail(next, selected);syncActivityChildren(content, next);
+      if (SHELL_ACTIVE.includes(selected.status)) {
+        const terminal = content.querySelector('.activity-terminal');terminal.scrollTop = terminal.scrollHeight;
+      }
+    } else {
+      const signature = [activity.conversationId, section, selected.id, selected.title, selected.path, selected.content, selected.url, selected.image, selected.note, selected.summary, selected.pending, selected.kind, artifactSummary(selected)];
+      if (!content.firstChild || !signature.every((value,i) => content._reference?.[i] === value)) {
+        content.replaceChildren();
+        if (section === 'outputs') renderArtifactDetail(content, selected);
+        else renderReferenceDetail(content, selected);
+      }
+      content._reference = signature;
+    }
   } else {
-    if (!items[section].length && section !== 'agents') content.append(activityText('p', t(`activity.empty_${section}`), 'activity-empty'));
+    if (!items[section].length && section !== 'agents') next.append(activityText('p', t(`activity.empty_${section}`), 'activity-empty'));
     if (section === 'outputs') {
-      if (items.outputs.length) content.append(artifactFilterBar(items.outputs));
+      if (items.outputs.length) next.append(artifactFilterBar(items.outputs));
       const artifacts = items.outputs.filter(item => activity.filter === 'all' || artifactType(item) === activity.filter);
-      for (const item of [...artifacts].reverse()) content.append(artifactRow(item));
+      for (const item of [...artifacts].reverse()) next.append(artifactRow(item));
     } else if (section === 'agents') {
+      const list = [], previous = activityRowMap(content);
       const active = items.agents.filter(a => ['running','waiting'].includes(a.status));
       const finished = items.agents.filter(a => !['running','waiting'].includes(a.status));
-      content.append(activityText('h3', `${t('activity.active')} · ${active.length}`, 'activity-list-heading'));
-      if (!active.length) content.append(activityText('p', t('activity.no_active_agents'), 'activity-empty activity-empty--list'));
-      for (const item of active) content.append(agentRow(item));
+      list.push(activityText('h3', `${t('activity.active')} · ${active.length}`, 'activity-list-heading'));
+      if (!active.length) list.push(activityText('p', t('activity.no_active_agents'), 'activity-empty activity-empty--list'));
+      for (const item of active) list.push(agentRow(item, false, previous));
       if (finished.length) {
-        content.append(activityText('h3', `${t('activity.finished')} · ${finished.length}`, 'activity-list-heading'));
-        for (const item of finished) content.append(agentRow(item));
+        list.push(activityText('h3', `${t('activity.finished')} · ${finished.length}`, 'activity-list-heading'));
+        for (const item of finished) list.push(agentRow(item, false, previous));
       }
+      reconcileActivityList(content, list);
     } else if (section === 'shells') {
       const groups = sortShells(items.shells);
       for (const [key, shells] of [['active', groups.active], ['finished', groups.finished]]) {
         if (!shells.length) continue;
-        content.append(activityText('h3', `${t(`activity.${key}`)} · ${shells.length}`, 'activity-list-heading'));
-        for (const shell of shells) content.append(shellRow(shell));
+        next.append(activityText('h3', `${t(`activity.${key}`)} · ${shells.length}`, 'activity-list-heading'));
+        for (const shell of shells) next.append(shellRow(shell));
       }
-    } else for (const item of items.sources) content.append(sourceRow(item));
+    } else for (const item of items.sources) next.append(sourceRow(item));
+    if (section !== 'agents') syncActivityChildren(content, next);
   }
+  if (!selected || section === 'shells') content._reference = null;
   content.scrollTop = scroll;updateActivityTimers();restoreFocus();
 }
 
@@ -613,13 +697,20 @@ function renderShellDetail(content, shell) {
   if (shell.stop_error) content.append(activityText('p', shell.stop_error, 'activity-shell-error'));
   const terminal = activityText('pre', shell.output || t('activity.no_shell_output'), 'activity-terminal');
   content.append(terminal);
-  if (SHELL_ACTIVE.includes(shell.status)) requestAnimationFrame(() => {terminal.scrollTop = terminal.scrollHeight;});
 }
 
-let activityRenderFrame = null;
-function scheduleActivityRender() {
-  if (activityRenderFrame) return;
-  activityRenderFrame = requestAnimationFrame(() => {activityRenderFrame = null;renderActivity();});
+let activityRenderFrame = null, needsFullActivityRender = false;
+function scheduleActivityRender(detailOnly = false) {
+  needsFullActivityRender ||= !detailOnly;
+  if (activityRenderFrame !== null) return;
+  activityRenderFrame = requestAnimationFrame(() => {
+    activityRenderFrame = null;
+    if (needsFullActivityRender) {needsFullActivityRender = false;renderActivity();return;}
+    const content = $('#activity-panel-content');
+    if (!panelShows('agents') || !activity.selected || content.dataset.agentId !== activity.selected) return;
+    const agent = activity.conversations.get(state.activeConversationId)?.agents.get(activity.selected);
+    if (agent) renderAgentDetail(content, agent);
+  });
 }
 
 async function stopActivityAgent(agent) {
@@ -727,6 +818,17 @@ async function stopActivityShell(shell) {
 
 async function setupActivity() {
   await setupGitEvents();
+  // A new top result can move the hovered row even when its DOM node survives.
+  // Finish the physical click before reordering; streaming data still accumulates.
+  const release = () => {
+    const refresh = activity.press?.refresh;activity.press = null;
+    if (refresh) scheduleActivityRender();
+  };
+  for (const list of [$('#activity-card'),$('#activity-panel-content')]) list.addEventListener('pointerdown', event => {
+    const button = event.target.closest('button');
+    if (event.isPrimary && event.button === 0 && button) activity.press = {button, conversation:state.activeConversationId, owner:browserPage.owner};
+  });
+  window.addEventListener('pointerup',release,true);window.addEventListener('pointercancel',release,true);window.addEventListener('blur',release);
   for (const [event, collection] of [['artifact-created','outputs'], ['user-source','sources']]) {
     await appWindow.listen(event, ({payload}) => {
       if (!payload?.conversation_id || typeof payload.id !== 'string' || typeof payload.title !== 'string') return;
@@ -734,7 +836,8 @@ async function setupActivity() {
       item.final_output = payload.final_output === true;
       if (Number.isFinite(payload.bytes)) item.bytes = payload.bytes;
       for (const key of ['summary','content','path','kind']) if (typeof payload[key] === 'string') item[key] = payload[key];
-      if (payload.url) item.url = safeActivityURL(payload.url);
+      if (typeof payload.url === 'string' && /^file:/i.test(payload.url)) item.path ||= payload.url;
+      else if (payload.url) item.url = safeActivityURL(payload.url);
       item.plain = payload.kind !== 'document';
       if (collection === 'outputs' && !nativeArtifact(item)) return;
       activityRecord(payload.conversation_id)[collection].set(item.id, item);
@@ -780,7 +883,15 @@ async function setupActivity() {
     agent.title ||= t('activity.agent');agent.started_at = previous?.started_at || (Number.isFinite(payload.started_at) ? payload.started_at : Date.now());
     agent.finished_at = ['completed','failed','cancelled'].includes(agent.status) ? (Number.isFinite(payload.finished_at) ? payload.finished_at : previous?.finished_at || Date.now()) : null;
     record.agents.set(agent.id, agent);
-    if (payload.conversation_id === state.activeConversationId) {if (['completed','failed','cancelled'].includes(agent.status)) renderActivity();else scheduleActivityRender();}
+    if (payload.conversation_id !== state.activeConversationId) return;
+    // Streamed text and tool history appear only in the open agent detail.
+    if (previous?.status === agent.status && previous.title === agent.title) {
+      if (panelShows('agents') && activity.selected === agent.id) {
+        scheduleActivityRender(previous.model === agent.model && previous.reasoning === agent.reasoning);
+      }
+      return;
+    }
+    if (['completed','failed','cancelled'].includes(agent.status)) renderActivity();else scheduleActivityRender();
   });
   setInterval(updateActivityTimers, 1000);
 }

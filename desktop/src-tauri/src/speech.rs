@@ -1,16 +1,15 @@
 use std::{fs::{self, File, OpenOptions}, io::{Read, Write}, path::PathBuf, sync::{Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use transcribe_rs::onnx::{cohere::{CohereModel, CohereParams}, Quantization};
+use transcribe_rs::whisper_cpp::{WhisperEngine, WhisperInferenceParams};
 
-const REVISION: &str = "2c870f89692c61348481884eb6e1222ec3ba25c9";
+// Whisper Large v3 (GGML, f16) from the whisper.cpp model repository, pinned by revision and hash.
+const REVISION: &str = "5359861c739e955e79d9a303bcbc70fb988958b1";
+const MODEL: &str = "ggml-large-v3.bin";
 const FILES: &[(&str, u64, &str)] = &[
-    ("cohere-decoder.int4.onnx", 371849, "f176a71e8b743d32bb8e4b8ec19bf70f367c5c3c93b08857826d8f5b60b6ad1e"),
-    ("cohere-decoder.int4.onnx.data", 143245312, "ed9461dd2233c44cd86f56c0a4d17c089de317bdbdcf18dc92e44a8a0cf525b3"),
-    ("cohere-encoder.int4.onnx", 6153388, "1bd619df7113a27d75b136ddc9f35d6b65131baeec15a7680ddda0c18c0b20a5"),
-    ("cohere-encoder.int4.onnx.data", 1844879360, "f5bffddbf657edff4b14e650926cdb39b62a8644feb9f6ee4e3287df38e7f900"),
-    ("tokens.txt", 207437, "013ede043ae2480e3a9205cc34550d9686100cc682bacc90f702facdfbb93035"),
+    (MODEL, 3095033483, "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"),
 ];
+const LEGACY_DIR: &str = "models/cohere-int4-2c870f89";
 
 #[derive(Clone, Serialize)]
 pub struct ModelStatus { pub ready: bool, pub busy: bool, pub loading: bool, pub loaded: bool, pub downloaded: u64, pub total: u64 }
@@ -21,7 +20,7 @@ pub struct Speech {
     cancel: AtomicBool,
     loading: AtomicBool,
     loaded: AtomicBool,
-    model: Mutex<Option<CohereModel>>,
+    model: Mutex<Option<WhisperEngine>>,
 }
 struct Operation<'a>(&'a AtomicBool);
 impl Drop for Operation<'_> { fn drop(&mut self) { self.0.store(false, Ordering::SeqCst); } }
@@ -32,7 +31,10 @@ impl Drop for Loading<'_> { fn drop(&mut self) { self.0.store(false, Ordering::S
 
 impl Speech {
     pub fn new(config_dir: &std::path::Path) -> Self {
-        Self { root: config_dir.join("models/cohere-int4-2c870f89"), busy: AtomicBool::new(false), cancel: AtomicBool::new(false), loading: AtomicBool::new(false), loaded: AtomicBool::new(false), model: Mutex::new(None) }
+        // Cohere Transcribe was replaced by Whisper: reclaim its ~2 GB in the background.
+        let legacy = config_dir.join(LEGACY_DIR);
+        if legacy.exists() { std::thread::spawn(move || { let _ = fs::remove_dir_all(legacy); }); }
+        Self { root: config_dir.join("models/whisper-large-v3-5359861c"), busy: AtomicBool::new(false), cancel: AtomicBool::new(false), loading: AtomicBool::new(false), loaded: AtomicBool::new(false), model: Mutex::new(None) }
     }
     fn operation(&self) -> Result<Operation<'_>, String> {
         self.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).map_err(|_| "speech_busy")?;
@@ -76,7 +78,7 @@ impl Speech {
             let mut offset = fs::metadata(&partial).map_or(0, |m| m.len());
             if offset > size { fs::remove_file(&partial).map_err(|e| e.to_string())?; offset = 0; }
             if offset < size {
-                let url = format!("https://huggingface.co/cstr/cohere-transcribe-onnx-int4/resolve/{REVISION}/{name}");
+                let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/{REVISION}/{name}");
                 let mut request = client.get(url);
                 if offset > 0 { request = request.header(reqwest::header::RANGE, format!("bytes={offset}-")); }
                 let mut response = request.send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?;
@@ -105,7 +107,7 @@ impl Speech {
             fs::rename(&partial, &target).map_err(|e| e.to_string())?;
             progress(self.status());
         }
-        fs::write(self.root.join("LICENSE.txt"), include_str!("../../ui/vendor/speech-APACHE-2.0.txt")).map_err(|e| e.to_string())?;
+        fs::write(self.root.join("LICENSE.txt"), include_str!("../../ui/vendor/whisper-MIT.txt")).map_err(|e| e.to_string())?;
         fs::write(self.root.join("verified"), REVISION).map_err(|e| e.to_string())?;
         drop(guard);
         let status = self.status(); progress(status.clone()); Ok(status)
@@ -127,12 +129,12 @@ impl Speech {
         drop(guard); Ok(self.status())
     }
 
-    fn load_model(&self, model: &mut Option<CohereModel>) -> Result<(), String> {
+    fn load_model(&self, model: &mut Option<WhisperEngine>) -> Result<(), String> {
         if model.is_none() {
             let _loading = Loading::new(&self.loading);
             for &(name, _, hash) in FILES { self.verify(&self.root.join(name), hash)?; }
             self.check_cancel()?;
-            *model = Some(CohereModel::load(&self.root, &Quantization::Int4).map_err(|e| format!("speech_engine: {e}"))?);
+            *model = Some(WhisperEngine::load(&self.root.join(MODEL)).map_err(|e| format!("speech_engine: {e}"))?);
             self.loaded.store(true, Ordering::SeqCst);
         }
         Ok(())
@@ -155,20 +157,10 @@ impl Speech {
         self.cancel.store(false, Ordering::SeqCst);
         let mut model = self.model.lock().map_err(|_| "speech_engine")?;
         self.load_model(&mut model)?;
-        let params = CohereParams { language: Some(language), max_new_tokens: Some(512), ..Default::default() };
-        let mut text = Vec::new();
-        let mut offset = 0;
-        while offset < samples.len() {
-            self.check_cancel()?;
-            let remaining = &samples[offset..];
-            let end = chunk_end(remaining);
-            let chunk = &remaining[..end];
-            if chunk.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / chunk.len() as f64 >= 0.000001 {
-                text.push(model.as_mut().unwrap().transcribe_with(chunk, &params).map_err(|e| format!("speech_engine: {e}"))?.text.trim().to_string());
-            }
-            offset += end;
-        }
-        Ok(text.join(" ").trim().to_string())
+        let params = WhisperInferenceParams { language: Some(language), ..Default::default() };
+        // whisper.cpp slides its own 30 s window over the whole clip (at most 120 s).
+        let text = model.as_mut().unwrap().transcribe_with(&samples, &params).map_err(|e| format!("speech_engine: {e}"))?.text;
+        Ok(text.trim().to_string())
     }
 
     /// Transcribes a WAV uploaded by a paired phone. The phone records 16 kHz,
@@ -186,15 +178,6 @@ impl Speech {
     }
 }
 
-// Bound encoder memory and token count; prefer a quiet boundary within 25–30 seconds.
-fn chunk_end(samples: &[f32]) -> usize {
-    if samples.len() <= 16000 * 30 { return samples.len(); }
-    (16000*25..16000*30).step_by(1600).min_by(|&a, &b| {
-        let energy = |i| samples[i..i+1600].iter().map(|v| f64::from(*v).powi(2)).sum::<f64>();
-        energy(a).total_cmp(&energy(b))
-    }).unwrap() + 800
-}
-
 fn validate_audio(samples: &[f32], language: &str) -> Result<(), String> {
     if !(1600..=16000*120).contains(&samples.len()) || samples.iter().any(|v| !v.is_finite() || v.abs() > 1.0) { return Err("speech_invalid_audio".into()); }
     if !["ar","de","el","en","es","fr","it","ja","ko","nl","pl","pt","vi","zh"].contains(&language) { return Err("speech_language".into()); }
@@ -209,8 +192,6 @@ mod tests {
         assert!(validate_audio(&vec![f32::NAN; 1600], "it").is_err());
         assert!(validate_audio(&vec![0.1; 1600], "invalid").is_err());
         assert!(validate_audio(&vec![0.1; 16000*120+1], "it").is_err());
-        let mut audio = vec![0.1; 16000*60]; audio[16000*27..16000*27+1600].fill(0.0);
-        assert_eq!(chunk_end(&audio), 16000*27+800);
     }
     #[test] fn remote_audio_requires_a_valid_wav() {
         let service = Speech::new(&std::env::temp_dir());
@@ -221,15 +202,15 @@ mod tests {
         let root = std::env::temp_dir().join(format!("aurachat-speech-test-{}", std::process::id()));
         let service = Speech::new(&root);
         fs::create_dir_all(&service.root).unwrap();
-        fs::write(service.root.join("tokens.txt.part"), "partial").unwrap();
+        fs::write(service.root.join(format!("{MODEL}.part")), "partial").unwrap();
         assert!(!service.status().ready); assert_eq!(service.status().downloaded, 7);
         assert!(!service.status().loading && !service.status().loaded);
         assert_eq!(service.prepare().unwrap_err(), "speech_model_missing");
-        assert!(service.verify(&service.root.join("tokens.txt.part"), "wrong").is_err());
+        assert!(service.verify(&service.root.join(format!("{MODEL}.part")), "wrong").is_err());
         let guard = service.operation().unwrap(); assert!(service.remove().is_err()); drop(guard);
         service.remove().unwrap(); fs::remove_dir(&service.root).unwrap(); fs::remove_dir(root.join("models")).unwrap(); fs::remove_dir(root).unwrap();
     }
-    #[test] #[ignore = "downloads 2 GB and runs real CPU inference; AURACHAT_TEST_WAV required"]
+    #[test] #[ignore = "downloads 3 GB and runs real Whisper inference; AURACHAT_TEST_WAV required"]
     fn real_download_and_transcription() {
         let config = std::env::var("APPDATA").unwrap();
         let service = Speech::new(&PathBuf::from(config).join("dev.aurachat.desktop"));
@@ -240,11 +221,13 @@ mod tests {
         let started = std::time::Instant::now();
         service.prepare().unwrap();
         eprintln!("Model preparation: {:?}", started.elapsed());
+        let language = std::env::var("AURACHAT_TEST_LANG").unwrap_or_else(|_| "en".into());
+        let expected = std::env::var("AURACHAT_TEST_EXPECT").unwrap_or_else(|_| "country".into());
         for attempt in 1..=2 {
             let started = std::time::Instant::now();
-            let text = service.transcribe(samples.clone(), "en".into()).unwrap();
+            let text = service.transcribe(samples.clone(), language.clone()).unwrap();
             eprintln!("Transcription {attempt} ({:?}): {text}", started.elapsed());
-            assert!(text.to_lowercase().contains("country"));
+            assert!(text.to_lowercase().contains(&expected));
             assert!(service.status().ready && !service.status().busy);
         }
     }
