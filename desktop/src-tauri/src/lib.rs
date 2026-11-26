@@ -5,6 +5,7 @@ mod firestore;
 mod llm;
 mod window_state;
 mod mcp;
+mod mcp_oauth;
 mod skills;
 mod speech;
 mod tts;
@@ -287,7 +288,7 @@ fn get_local_config(state: tauri::State<'_, AppState>) -> PublicConfig {
 }
 
 #[tauri::command]
-async fn login(state: tauri::State<'_, AppState>, email: String, password: String) -> Result<PublicConfig, String> {
+async fn login(app: tauri::AppHandle, state: tauri::State<'_, AppState>, email: String, password: String) -> Result<PublicConfig, String> {
     let _account=state.account_lock.lock().await;
     if !state.running_chats.lock().unwrap().is_empty() { return Err("account_busy".into()); }
     let mut candidate = state.config.lock().unwrap().clone();
@@ -296,6 +297,7 @@ async fn login(state: tauri::State<'_, AppState>, email: String, password: Strin
     candidate.refresh_token.clear();
     candidate.uid.clear();
     if !candidate.firestore_auth().configured() { return Err("login_required".into()); }
+    if let Some(owner) = state.firestore.uid() { browser::close_owner(&app, &owner)?; }
     state.firestore.login(&candidate.firestore_auth()).await?;
     let (uid, refresh) = state.firestore.session().ok_or("session_expired")?;
     candidate.uid = uid;
@@ -419,9 +421,10 @@ async fn provider_balance(state: tauri::State<'_, AppState>, provider_id: String
 }
 
 #[tauri::command]
-async fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn logout(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let _account=state.account_lock.lock().await;
     if !state.running_chats.lock().unwrap().is_empty() { return Err("account_busy".into()); }
+    if let Some(owner) = state.firestore.uid() { browser::close_owner(&app, &owner)?; }
     let mut cfg = state.config.lock().unwrap().clone();
     cfg.firebase_email.clear();
     cfg.firebase_password.clear();
@@ -692,9 +695,18 @@ async fn chat_inner(
     let final_content = std::sync::Mutex::new(String::new());
     let content_offset = std::sync::atomic::AtomicUsize::new(0);
     let segments = std::sync::Mutex::new(Vec::<ChatMessage>::new());
+    let meter = std::sync::Mutex::new(Usage::default());
     let progress = |action:&str,text:&str| {
         if action=="__final_response" {
             *final_content.lock().unwrap()=text.into();
+            return;
+        }
+        if action=="__usage" {
+            let mut usage=meter.lock().unwrap().clone();
+            user.price_usage(&base_url,&mut usage);
+            if let Ok(text)=serde_json::to_string(&usage) {
+                let _=app.emit("chat-progress",serde_json::json!({"conversation_id":conversation_id,"kind":"__usage","text":text}));
+            }
             return;
         }
         let mut events = turn_activity.lock().unwrap();
@@ -727,10 +739,9 @@ async fn chat_inner(
         let _ = app.emit("chat-progress", serde_json::json!({"conversation_id":conversation_id,"kind":action,"text":text}));
     };
     let execution=project.as_ref().and_then(|files|files.execution.clone()).unwrap_or_else(||permissions::Execution {
-        app:app.clone(),owner:uid.clone(),project:String::new(),conversation:conversation_id.clone(),turn_id:turn_id.clone(),
+        app:app.clone(),owner:uid.clone(),project:permissions::CHAT_KEY.into(),conversation:conversation_id.clone(),turn_id:turn_id.clone(),
         intent:history.last().map(|m|m.content.chars().take(16000).collect()).unwrap_or_default(),agent_id:None,cancellation:Some(stop.clone())
     });
-    let meter = std::sync::Mutex::new(Usage::default());
     // A chat created by the model may not create further chats on its first turn.
     let spawn_chats = !state.spawned_chats.lock().unwrap().contains(&conversation_id);
     let completion = llm::chat_completion_steered(&state.client, &base_url, &model, &api_key, &history, project, Some(agent_runs::Runtime{app:app.clone(),owner:uid.clone(),conversation:conversation_id.clone(),execution,spawn_chats}), Some(guidance.clone()), Some(&meter), &progress, |mut agent| {
@@ -1273,12 +1284,14 @@ async fn project_git_for_owner(state: tauri::State<'_,AppState>, project_id:Stri
 async fn project_permission_mode(state: tauri::State<'_, AppState>, project_id: String, mode: Option<permissions::Mode>) -> Result<permissions::Mode, String> {
     let auth = firebase_auth(&state)?;
     let uid = ensure_uid(&state, &auth).await?;
-    if !state.data.lock().unwrap().projects.iter().any(|p|p.id == project_id) { return Err("project_not_found".into()); }
+    let chats = project_id == permissions::CHAT_KEY;
+    if !chats && !state.data.lock().unwrap().projects.iter().any(|p|p.id == project_id) { return Err("project_not_found".into()); }
     let mut permissions = state.permissions.lock().unwrap();
     if let Some(mode) = mode {
         let tree = state.data.lock().unwrap();
         let running = state.running_chats.lock().unwrap();
-        if tree.projects.iter().find(|p|p.id == project_id).is_some_and(|p|p.conversations.iter().any(|c|running.contains(&c.id))) { return Err("permissions_in_use".into()); }
+        let busy = if chats { tree.conversations.iter().any(|c|running.contains(&c.id)) } else { tree.projects.iter().find(|p|p.id == project_id).is_some_and(|p|p.conversations.iter().any(|c|running.contains(&c.id))) };
+        if busy { return Err("permissions_in_use".into()); }
         permissions.set(&state.config_dir, &uid, &project_id, mode)?;
     }
     Ok(permissions.get(&uid, &project_id))
@@ -1457,6 +1470,7 @@ pub fn run() {
         .manage(std::sync::Arc::new(media::Media::default()))
         .manage(approvals::Approvals::default())
         .manage(browser::Browser::default())
+        .manage(mcp_oauth::OAuth::default())
         .manage(questions::Questions::default())
         .manage(agent_runs::AgentRuns::default())
         .manage(updates::Updates::default())
@@ -1531,6 +1545,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            mcp::mcp_integrations, mcp::mcp_connect, mcp::mcp_disconnect,
+            browser::browser_preferences,
             updates::check_app_update, updates::finish_update_check, updates::install_app_update,
             get_config,
             get_local_config,

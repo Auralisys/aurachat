@@ -34,10 +34,14 @@ const assert = require('node:assert/strict');
     }
    }
    if(cmd==='chat'){
-    const tree=structuredClone(window.__store);
-    const chat=[...tree.conversations,...tree.projects.flatMap(p=>p.conversations)].find(c=>c.id===args.conversation_id);
-    chat.messages=[{role:'user',content:args.content},{role:'assistant',content:'Risposta di prova.'}];chat.title=args.content;window.__store=tree;
-    return {data:tree,messages:chat.messages,usage:{prompt_tokens:1,completion_tokens:1}};
+    const reply=()=>{
+     const tree=structuredClone(window.__store);
+     const chat=[...tree.conversations,...tree.projects.flatMap(p=>p.conversations)].find(c=>c.id===args.conversation_id);
+     chat.messages=[{role:'user',content:args.content},{role:'assistant',content:'Risposta di prova.'}];chat.title=args.content;window.__store=tree;
+     return {data:tree,messages:chat.messages,usage:{prompt_tokens:1,completion_tokens:1}};
+    };
+    if(window.__holdChat){window.__holdChat=false;return new Promise(done=>window.__releaseChat=()=>done(reply()));}
+    return reply();
    }
   }}};
  },{locales});
@@ -99,6 +103,31 @@ const assert = require('node:assert/strict');
  await page.locator('#messages').getByText('Risposta di prova.',{exact:true}).waitFor();
  assert.equal(await page.evaluate(()=>window.__store.projects[1].conversations.length),1);
  assert.equal(await page.evaluate(()=>window.__store.conversations.length),0);
+ // A running chat locks itself and the project menu, not its sibling chats.
+ const sibling=await page.evaluate(()=>window.__store.projects[1].conversations[0].id);
+ await project.locator('summary').hover();await project.locator('summary').getByRole('button',{name:'Nuova chat',exact:true}).click();
+ await page.evaluate(()=>window.__holdChat=true);
+ await page.fill('#composer-input','Chat in corso');await page.click('#composer-send');
+ await page.waitForFunction(()=>!!window.__releaseChat);
+ const running=await page.evaluate(()=>state.activeConversationId);
+ const menuState=async target=>{
+  await target.click({button:'right'});
+  const disabled=await menu.getByRole('menuitem').evaluateAll(items=>items.map(item=>item.disabled));
+  await page.locator('#composer-input').click();return disabled;
+ };
+ assert.deepEqual(await menuState(project.locator(`[data-conversation-id="${sibling}"]`)),[false,false]);
+ assert.deepEqual(await menuState(project.locator(`[data-conversation-id="${running}"]`)),[true,true]);
+ assert.deepEqual(await menuState(project.locator('.tree-project__head')),[true,true,true]);
+ await project.locator(`[data-conversation-id="${sibling}"]`).click({button:'right'});
+ await menu.getByRole('menuitem',{name:'Rinomina',exact:true}).click();
+ await project.locator('.tree-input').fill('Chat rinominata');await page.keyboard.press('Enter');
+ await page.waitForFunction(id=>window.__store.projects[1].conversations.find(c=>c.id===id)?.title==='Chat rinominata',sibling);
+ await project.locator(`[data-conversation-id="${sibling}"]`).click({button:'right'});
+ await menu.getByRole('menuitem',{name:'Elimina',exact:true}).click();
+ await page.waitForFunction(id=>!window.__store.projects[1].conversations.some(c=>c.id===id),sibling);
+ assert.equal(await page.evaluate(()=>state.busy),true,'Deleting a sibling must not stop the running chat');
+ await page.evaluate(()=>window.__releaseChat());await page.waitForFunction(()=>!state.busy);
+ assert.deepEqual(await page.evaluate(()=>window.__store.projects[1].conversations.map(c=>c.id)),[running]);
  // Row chat menu, section menu and collapsed project survive subsequent renders.
  await original.locator('summary').click();assert.equal(await original.getAttribute('open'),null);
  await page.locator('#recent-chats .tree-conv').first().click({button:'right'});

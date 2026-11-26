@@ -204,3 +204,19 @@ laterale. Selezionati insieme un `.bin` esterno e un PNG: il primo mostrava il
 percorso assoluto, il secondo l’editor di annotazioni. Avviata e annullata la
 dettatura sul primo commento. Verificate entrambe le voci di handoff senza
 inviare messaggi in conversazioni esistenti.
+
+## MCP Mobbin, consumi, permessi e sidebar — 23-26 novembre 2026
+
+Desktop: OAuth per i server MCP HTTP (Mobbin predisposto in Impostazioni > MCP e
+browser) con login nella scheda interna o, con ↗, nel browser di sistema; token
+nello store locale protetto, profilo WebView2 persistente per account e salvataggio
+password nativo opt-in. Indicatore consumi sempre visibile (`0 token` a riposo) con
+aggiornamento dopo ogni richiesta al provider. Permessi Richiedi/Approva per me
+anche nelle chat senza progetto. Microfono nelle risposte personalizzate di Ask
+User. All'avvio resta aperto solo il progetto dell'ultima chat; durante un turno le
+chat sorelle dello stesso progetto si rinominano ed eliminano anche da Progetti.
+Dettagli in [[Desktop gateway - Tauri]].
+
+Da fare: login Mobbin reale, cookie/password WebView2 e macOS da verificare;
+Whisper (whisper.cpp con Vulkan per GPU AMD) non è implementato, la dettatura resta
+su Cohere Transcribe.

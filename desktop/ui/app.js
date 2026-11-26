@@ -251,17 +251,20 @@ async function saveChatData({throwOnError = false}, owner, desired, base) {
 function renderSidebar() {
   closeTreeMenu();
   hideProjectPreview();
-  if (foldedOwner !== state.config.firebase_email) {
+  const startup = foldedOwner !== state.config.firebase_email;
+  if (startup) {
     foldedChats.projects.clear();foldedChats.recents.clear();foldedOwner = state.config.firebase_email;
   }
   const tree = $('#sidebar-tree');
   const collapsed = new Set([...tree.querySelectorAll('details:not([open])')].map(el => el.dataset.projectId));
+  // On the first render only the project of the last used chat is open; later renders keep what the user opened or closed.
+  const activeProject = findConversation(state.activeConversationId)?.project?.id;
   tree.innerHTML = '';
   if (state.data.projects.length === 0) {
     const create = document.createElement('button');create.className = 'tree-empty-action';create.textContent = t('project.create');create.onclick = newProject;tree.appendChild(create);
   }
   for (const project of state.data.projects) {
-    const element = projectEl(project);element.open = !collapsed.has(project.id);tree.appendChild(element);
+    const element = projectEl(project);element.open = startup ? project.id === activeProject : !collapsed.has(project.id);tree.appendChild(element);
   }
   const recent = $('#recent-chats');
   const owners = new Map();
@@ -427,7 +430,8 @@ function showTreeMenu(row, trigger, heading, entries, point) {
     button.className = 'tree-menu__item' + (glyph === 'delete' ? ' tree-menu__item--danger' : '');
     button.setAttribute('role', 'menuitem');
     const conversationId = row.closest('.tree-conv')?.dataset.conversationId;
-    const projectId = row.closest('.tree-project')?.dataset.projectId;
+    // A running chat locks its own row and its project's menu, never its sibling chats.
+    const projectId = conversationId ? null : row.closest('.tree-project')?.dataset.projectId;
     button.disabled = disabled || state.preparing || queuedTurns.preparing.has(conversationId) || !!state.runs.get(conversationId)?.pending || !!state.data.projects.find(p => p.id === projectId)?.conversations.some(c => state.runs.get(c.id)?.pending || queuedTurns.preparing.has(c.id));
     const label = document.createElement('span');label.textContent = t(key);
     button.append(icon(glyph), label);
@@ -539,6 +543,11 @@ function projectEl(project) {
     chats.appendChild(empty);
   }
   el.appendChild(chats);return el;
+}
+
+function revealProject(id) {
+  const details = $('#sidebar-tree').querySelector(`.tree-project[data-project-id="${CSS.escape(id)}"]`);
+  if (details) details.open = true;
 }
 
 function linkedParent(conv) {
@@ -767,6 +776,7 @@ function newChat(projectId = null) {
   if (state.preparing) return;
   clearChat();
   state.pendingProjectId = state.data.projects.some(p => p.id === projectId) ? projectId : null;
+  if (state.pendingProjectId) revealProject(state.pendingProjectId);
   populateProjectMenu();renderSidebar();$('#composer-input').focus();
 }
 
@@ -865,6 +875,7 @@ async function openConversation(id, refresh = true, section = null) {
     foldedChats[scope].delete(group.parentElement.firstElementChild.dataset.conversationId);
     group = group.parentElement.closest('.chat-children');
   }
+  if (scope === 'projects' && found?.project) revealProject(found.project.id);
   const freshPreload = state.preloaded.get(id) != null && Date.now() - state.preloaded.get(id) < 60000;
   const needsLoad=found && !run?.pending && (run?.awaitingHistory || found.conversation.messages_loaded===false || (refresh && found.conversation.revision != null && !freshPreload));
   state.loadingConversation=!!needsLoad;
@@ -1375,7 +1386,7 @@ async function requestChat(payload) {
   const saved = findConversation(id)?.conversation;
   const seed = isActive ? state.messages : (saved?.messages || []);
   const run = {pending:true, since:Date.now(), messages:structuredClone(seed), usage:null, failedSend:null, stopping:false, initialMessageCount:seed.length, pendingGuidance:[], guidanceEvents:[],
-    baseRevision:saved?.revision, baseUpdatedAt:saved?.updated_at};
+    baseRevision:saved?.revision, baseUpdatedAt:saved?.updated_at, baseUsage:structuredClone(saved?.usage || null)};
   if (!isActive && !payload.retry) {
     if (Number.isInteger(payload.edit_index)) run.messages = run.messages.slice(0,payload.edit_index);
     run.messages.push({role:'user',content:payload.content,attachments:payload.attachments || [],created_at:Date.now(),...pasteMetadata(payload)});
@@ -1383,11 +1394,12 @@ async function requestChat(payload) {
   }
   state.runs.set(id, run);if (isActive) {state.messages = run.messages;state.failedSend = null;}state.unread.delete(id);
   if (isActive) chatScroll.follow();
-  closeChoiceMenus();startTimer();if (isActive) renderMessages();renderSidebar();
+  closeChoiceMenus();startTimer();if (isActive) {renderMessages();updateContextInfo();}renderSidebar();
   try {
     const result = remoteTarget(id) ? await requestRemoteChat(payload,run) : await invoke('chat',payload);
     await finishLiveTurn(run);
-    run.messages = markGuidanceHistory(run, result.messages);run.usage = result.usage;run.completedEpoch = ++state.resultEpoch;run.queueOutcome = result.cancelled ? 'cancelled' : 'completed';
+    // The saved chat total below already includes this turn: drop the live copy to avoid counting it twice.
+    run.messages = markGuidanceHistory(run, result.messages);run.usage = result.usage;run.liveUsage = null;run.completedEpoch = ++state.resultEpoch;run.queueOutcome = result.cancelled ? 'cancelled' : 'completed';
     const saved = conversationInData(result.data, id);
     run.saved = {...saved, messages:result.messages, messages_loaded:true};
     const target = findConversation(id)?.conversation;
@@ -1402,6 +1414,8 @@ async function requestChat(payload) {
     await finishLiveTurn(run);
     if (run.stream?.content || run.stream?.activity.length) run.messages.push({role:'assistant', content:run.stream.content, activity:run.stream.activity});
     run.messages.push({role:'error',content:localizeError(e)});
+    // Requests already billed before the failure stay visible as the last reply.
+    run.usage = run.liveUsage || null;run.liveUsage = null;
     run.queueOutcome = 'failed';
     if (!payload.retry) run.failedSend = {content:payload.content, attachments:payload.attachments || [],edit_index:payload.edit_index,...pasteMetadata(payload)};
     return false;
@@ -1848,35 +1862,38 @@ function populateProjectMenu() {
 
 let permissionEpoch = 0;
 const permissionModes = new Map();
+// Chats without a project share one saved mode (backend CHAT_KEY); full access stays a project feature.
+const CHAT_PERMISSION_KEY = '__chats__';
 async function refreshPermissions() {
   const epoch = ++permissionEpoch;
   const project = activeConversation()?.project || state.data.projects.find(p => p.id === state.pendingProjectId);
   const control = $('#permission-control'), trigger = $('#permission-select'), menu = $('#permission-menu');
-  control.hidden = !project;
-  if (!project) { menu.hidden = true; trigger.setAttribute('aria-expanded', 'false'); return; }
+  const scopeId = project?.id || CHAT_PERMISSION_KEY, suffix = project ? '' : '_chat';
+  control.hidden = false;
   trigger.disabled = true;
-  const cacheKey = `${state.config.firebase_email}:${project.id}`;
+  const cacheKey = `${state.config.firebase_email}:${scopeId}`;
   $('#permission-name').textContent = permissionModes.has(cacheKey) ? t(`permissions.${permissionModes.get(cacheKey)}`) : t('ui.loading');
   try {
-    const mode = await invoke('project_permission_mode', { project_id:project.id });
+    const mode = await invoke('project_permission_mode', { project_id:scopeId });
     if (epoch !== permissionEpoch) return;
     if (!['ask', 'auto', 'full'].includes(mode)) throw new Error(t('permissions.unavailable'));
     permissionModes.set(cacheKey,mode);$('#permission-name').textContent = t(`permissions.${mode}`);
     control.dataset.mode = mode;
     trigger.querySelector('svg').replaceWith(icon(mode === 'full' ? 'shield-alert' : 'shield'));
     menu.replaceChildren();
-    for (const value of ['ask', 'auto', 'full']) {
+    for (const value of project ? ['ask', 'auto', 'full'] : ['ask', 'auto']) {
       const option = choiceOption(t(`permissions.${value}`), value === mode, async () => {
         if (value === 'full' && mode !== 'full' && !await confirmFullAccess(project)) return;
         trigger.disabled = true;
-        try { await invoke('project_permission_mode', { project_id:project.id, mode:value }); }
+        try { await invoke('project_permission_mode', { project_id:scopeId, mode:value }); }
         catch(e) { if (epoch === permissionEpoch) composerStatus(localizeError(e)); }
         finally { if (epoch === permissionEpoch) { await refreshPermissions(); trigger.focus(); } }
       });
-      const description = document.createElement('small');description.textContent = t(`permissions.${value}_description`);
+      const description = document.createElement('small');description.textContent = t(`permissions.${value}_description${suffix}`);
       option.querySelector('span').append(description);menu.append(option);
     }
-    trigger.disabled = project.conversations.some(c => state.runs.get(c.id)?.pending) || state.preparing;
+    const chats = project ? project.conversations : state.data.conversations || [];
+    trigger.disabled = chats.some(c => state.runs.get(c.id)?.pending) || state.preparing;
   } catch(e) {
     if (epoch === permissionEpoch) { $('#permission-name').textContent = t('permissions.unavailable'); trigger.title = localizeError(e); }
   }
@@ -1951,12 +1968,31 @@ function usageElement(tag, className, text) {
 
 function usageCost(usage) { return usage.cost_usd != null ? formatUsd(usage.cost_usd) : '—'; }
 
+const USAGE_COUNTS = ['prompt_tokens', 'completion_tokens', 'total_tokens', 'requests', 'cache_hit_tokens', 'cache_miss_tokens', 'reasoning_tokens', 'unpriced_tokens'];
+const MODEL_USAGE_COUNTS = ['requests', 'prompt_tokens', 'completion_tokens', 'cache_hit_tokens', 'cache_miss_tokens', 'reasoning_tokens', 'unpriced_tokens'];
+const EMPTY_USAGE = Object.freeze({ ...Object.fromEntries(USAGE_COUNTS.map(key => [key, 0])), cost_usd:0, models:[] });
+
 function usageTotals(usage) {
   if (!usage?.total_tokens) return null;
-  const counts = ['prompt_tokens', 'completion_tokens', 'total_tokens', 'requests', 'cache_hit_tokens', 'cache_miss_tokens', 'reasoning_tokens', 'unpriced_tokens'];
   const totals = { ...usage, models: Array.isArray(usage.models) ? usage.models : [] };
-  for (const key of counts) totals[key] = Number(usage[key]) || 0;
+  for (const key of USAGE_COUNTS) totals[key] = Number(usage[key]) || 0;
   return totals;
+}
+
+function addCost(a, b) { return a == null && b == null ? null : (a || 0) + (b || 0); }
+
+// Same merge as `Usage::add` in Rust: saved chat totals plus the turn still running.
+function addUsage(base, extra) {
+  if (!base || !extra) return base || extra;
+  const sum = { ...base, cost_usd:addCost(base.cost_usd, extra.cost_usd), models:base.models.map(row => ({ ...row })) };
+  for (const key of USAGE_COUNTS) sum[key] = base[key] + extra[key];
+  for (const row of extra.models) {
+    const existing = sum.models.find(item => item.model === row.model && !!item.off_peak === !!row.off_peak);
+    if (!existing) { sum.models.push({ ...row }); continue; }
+    for (const key of MODEL_USAGE_COUNTS) existing[key] = (Number(existing[key]) || 0) + (Number(row[key]) || 0);
+    existing.cost_usd = addCost(existing.cost_usd, row.cost_usd);
+  }
+  return sum;
 }
 
 function usageRow(label, value, title, swatch) {
@@ -2029,24 +2065,35 @@ function usageSection(title, usage, detailed) {
   return section;
 }
 
+// Always visible in a chat: with no usage yet it stays as an idle "0 token" chip that still gives access to the balance.
 function updateContextInfo() {
   const details = $('#context-info'), conversation = activeConversation()?.conversation;
-  const chat = usageTotals(conversation?.usage);
-  const last = usageTotals(state.lastUsage);
+  const run = state.activeConversationId ? state.runs.get(state.activeConversationId) : null;
+  const pending = !!run?.pending;
+  const live = pending ? usageTotals(run.liveUsage) : null;
+  // A metadata refresh can already contain this turn before the native response settles.
+  const saved = pending && run.baseUsage !== undefined ? run.baseUsage : conversation?.usage;
+  const chat = addUsage(usageTotals(saved), live);
+  const last = pending ? null : usageTotals(state.lastUsage);
   const legacy = conversation?.context_tokens || 0;
-  details.hidden = !chat && !last && !legacy;
-  if (details.hidden) { details.open = false; return; }
   const headline = chat || last;
+  details.hidden = false;
+  details.classList.toggle('context-info--idle', !headline && !legacy);
+  details.classList.toggle('context-info--live', pending);
   const summary = $('#context-summary');
   const tokens = headline ? headline.total_tokens : legacy;
   summary.textContent = headline?.cost_usd != null ? `${formatTokens(tokens)} · ${formatUsd(headline.cost_usd)}` : `${formatTokens(tokens)} ${t('chat.tokens')}`;
-  const label = `${t('chat.usage')}: ${exactTokens(tokens)}${headline?.cost_usd != null ? ` · ${t('usage.estimated_cost')} ${formatUsd(headline.cost_usd)}` : ''}`;
+  const label = `${t('chat.usage')}: ${exactTokens(tokens)}${headline?.cost_usd != null ? ` · ${t('usage.estimated_cost')} ${formatUsd(headline.cost_usd)}` : ''}${pending ? ` · ${t('usage.current_reply')}` : ''}`;
   details.querySelector('summary').setAttribute('aria-label', label);
   details.querySelector('summary').title = label;
   const panel = $('#context-details'); panel.replaceChildren();
   if (chat) panel.append(usageSection(t('usage.this_chat'), chat, true));
-  if (last) panel.append(usageSection(t('usage.last_reply'), last, !chat));
-  if (!headline) {
+  if (pending) {
+    const current = usageSection(t('usage.current_reply'), live || EMPTY_USAGE, false);
+    current.append(usageElement('p', 'usage-note', t('usage.live_note')));
+    panel.append(current);
+  } else if (last) panel.append(usageSection(t('usage.last_reply'), last, !chat));
+  if (!headline && legacy) {
     const section = usageElement('section', 'usage-section');
     const list = usageElement('dl', 'usage-list');
     list.append(usageRow(t('usage.last_context'), formatTokens(legacy), exactTokens(legacy)));
@@ -2055,9 +2102,14 @@ function updateContextInfo() {
     appendPopoverBalance(panel, details.open);
     return;
   }
+  if (!headline && !pending) {
+    const idle = usageSection(t('usage.this_chat'), EMPTY_USAGE, false);
+    idle.append(usageElement('p', 'usage-note', t('usage.idle_note')));
+    panel.append(idle);
+  }
   const footer = usageElement('footer', 'usage-footer');
   const unpriced = Math.max(chat?.unpriced_tokens || 0, last?.unpriced_tokens || 0);
-  footer.append(usageElement('p', 'usage-note', t(unpriced ? 'usage.unpriced_note' : 'usage.estimate_note')));
+  if (headline) footer.append(usageElement('p', 'usage-note', t(unpriced ? 'usage.unpriced_note' : 'usage.estimate_note')));
   const prices = usageElement('button', 'usage-link', t('usage.edit_prices'));
   prices.type = 'button';
   prices.onclick = () => { details.open = false; openSettings(); selectSettingsTab('inference'); };

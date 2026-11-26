@@ -34,7 +34,7 @@ chiave sono descritti nel runbook; nessun segreto va inserito nel repository.
 - **Onboarding dell'inferenza a preset**: *DeepSeek* (basta la key, endpoint e
   modello precompilati) o *Avanzato* (base_url + modello + key custom).
 - **Impostazioni** con navigazione laterale e ricerca: Generali, Account, Provider di modelli e Voce. Account mostra identità e disconnessione, senza parametri Firebase. I provider hanno una API key dedicata e uno o più modelli con URL base indipendenti. La key non torna mai nella UI: il backend espone solo `api_key_set: true/false`. Ogni modello può avere un prezzo per 1M token; i modelli DeepSeek ufficiali usano il listino incluso.
-- **Utilizzo e costo stimato**: il pulsante nell'intestazione della chat mostra token (in `k`/`M`) e costo stimato in USD della conversazione, con dettaglio per cache, uscita, ragionamento e modello. In fondo al popover e nell'editor del provider c'è anche il saldo dell'account DeepSeek con il pulsante di ricarica (vedi «Utilizzo e costo stimato»).
+- **Utilizzo e costo stimato**: il pulsante nell'intestazione della chat mostra token (in `k`/`M`) e costo stimato in USD della conversazione, con dettaglio per cache, uscita, ragionamento e modello; è sempre visibile (`0 token` a riposo) e si aggiorna in diretta durante il turno, anche al primo messaggio. In fondo al popover e nell'editor del provider c'è anche il saldo dell'account DeepSeek con il pulsante di ricarica (vedi «Utilizzo e costo stimato»).
 - **Chat**: invia la cronologia della conversazione attiva a `<base_url>/v1/chat/completions`
   (formato OpenAI-compatible, streaming SSE) e mostra la risposta.
   Se il provider termina per limite di output (`length`) o filtro (`content_filter`),
@@ -336,20 +336,83 @@ Su Windows i launcher importati npx/npm vengono adattati a cmd.exe.
 
 Le sessioni browser/OAuth di altri client non vengono copiate. Un server stdio
 puo invece riusare il proprio login CLI gia presente sul PC (per esempio Firebase).
-I login mancanti vanno completati esternamente:
-questa versione non implementa un flusso OAuth MCP né il vecchio trasporto SSE.
+I login CLI mancanti restano esterni. Per Streamable HTTP è disponibile OAuth
+con `oauth: true`, senza header `Authorization` manuale. Il vecchio trasporto
+SSE non è supportato.
 I server MCP eseguono codice locale e/o operazioni esterne con i propri accessi,
 senza sandbox; le loro descrizioni e risposte restano dati non affidabili.
 Le sessioni sono limitate al turno (anche per i sub-agenti), con timeout, chiusura
 alla fine/Stop e ricontrollo di account, consensi e configurazione prima delle
 chiamate. Limiti: 16 server per configurazione, 64 KiB per config, 256 strumenti
-per server e 256 KiB per risultato. Un timeout non annulla eventuali operazioni
+per server e 256 KiB per risultato testuale dopo l'estrazione delle immagini.
+Il trasporto HTTP ammette messaggi fino a 20 MiB per le preview base64.
+Un timeout non annulla eventuali operazioni
 già ricevute dal servizio esterno.
 
 Non è una promessa di parità completa con ChatGPT: ricerca, browser e altri
 servizi diventano disponibili quando il relativo MCP è configurato e autenticato.
 Le verifiche native usano `tests\mcp-server.cjs`, un server stdio/HTTP locale
 senza account o traffico verso servizi reali.
+
+### Mobbin OAuth nel browser interno
+
+In **Impostazioni > MCP e browser**, **Collega** su Mobbin registra AuraChat,
+apre una scheda temporanea del browser interno e verifica il catalogo reale.
+Occorre un account Mobbin con piano Pro, Team o Enterprise; non una API key.
+La configurazione equivalente è:
+
+```json
+{
+  "mcpServers": {
+    "mobbin": { "url": "https://api.mobbin.com/mcp", "oauth": true }
+  }
+}
+```
+
+`rmcp` gestisce discovery, Dynamic Client Registration, PKCE S256, scope `openid`
+e `offline_access` quando pubblicato dal servizio. Il callback ascolta soltanto
+su `127.0.0.1` con porta casuale e controlla percorso, Host e state; il login scade
+dopo tre minuti dall'apertura della scheda. Token e verificatore PKCE non sono
+inviati al modello. La scheda non entra nella cronologia AuraChat, non permette
+catture e viene chiusa anche dal nativo al termine o su Stop. Il pulsante ↗
+riapre l'URL di autorizzazione iniziale (mai la pagina corrente) nel browser di
+sistema, per usare gli account già presenti in Chrome: il callback loopback
+completa l'accesso da qualsiasi browser, AuraChat torna in primo piano e la
+scheda interna resta come annullamento finché il login non termina.
+
+I token restano locali, separati per account, configurazione e server: DPAPI
+utente su Windows, Keychain su macOS; nessun ripiego in chiaro né sincronizzazione
+cloud. Il refresh automatico è serializzato anche tra connessioni concorrenti;
+un errore temporaneo conserva le credenziali, `invalid_grant` richiede un nuovo
+accesso. Un primo collegamento annullato non abilita il server.
+**Verifica strumenti** legge di nuovo il catalogo. **Disconnetti** disabilita
+il server, cancella i token locali e invalida le connessioni precedenti: non revoca
+il consenso sul sito e non cancella cookie/password. Per la revoca remota usare
+le impostazioni dell'account Mobbin; i suoi metadati non pubblicano un endpoint
+di revoca. I nomi dei tool dipendono dal catalogo restituito, non da una lista
+simulata nell'app.
+
+Il browser normale e le schede OAuth condividono un profilo persistente per
+account AuraChat, distinto dal browser di sistema e dal precedente profilo
+dell'app. I cookie persistenti sopravvivono al riavvio secondo le scadenze del sito;
+non si importano sessioni esistenti. Logout/cambio account chiudono le webview
+anche lato nativo. Su macOS la separazione usa i data store di WebKit (macOS 14+);
+su versioni precedenti l'apertura fallisce esplicitamente, senza profilo condiviso.
+
+**Proponi di salvare le password** è disattivato per default e disponibile su
+Windows: abilita il prompt nativo WebView2, con scelta per sito e protezione del
+sistema operativo. AuraChat e gli agenti non leggono i campi password; nessun
+autofill generico, importazione o sincronizzazione. Disattivare la preferenza
+non elimina password già salvate. Non è un gestore password completo con editor
+o cancellazione selettiva.
+
+Le fixture `tests\mcp-oauth-server.cjs` e `tests\mcp-oauth.cjs` coprono il protocollo
+OAuth e il percorso UI senza account reali. I test Rust coprono persistenza
+protetta, refresh concorrente, revoca, callback invalidi e preview HTTP oltre
+256 KiB, fino alla richiesta multimodale al provider simulato. Restano da
+verificare con un account reale il login Mobbin, la lettura semantica delle sue
+preview e il prompt password/cookie nel WebView2 installato; macOS non verificato.
+La gallery MCP Apps opzionale non è implementata: si riusano le schede esistenti.
 
 Per un servizio autenticato il modello deve verificare il suo MCP ufficiale,
 non dedurre l'assenza di API dal link della console o dall'help di una vecchia
@@ -643,6 +706,19 @@ sono comprimibili, con header e stati vuoti coerenti. Nuova chat apre una bozza:
 il salvataggio avviene dal primo messaggio. Test dedicato:
 `node tests/project-menus.cjs` (Playwright disponibile nel runtime di sviluppo).
 
+**Avvio con un solo progetto aperto.** Alla prima apertura dell'albero (per
+account) resta aperto solo il progetto della chat usata per ultima (la più
+recente, che è anche quella riaperta all'avvio); se quella chat è libera, tutti i
+progetti partono chiusi. Dopo l'avvio `renderSidebar()` conserva ciò che
+l'utente apre o chiude e un progetto nuovo si apre. Aprire una chat dalla
+cronologia o con Indietro/Avanti, o iniziare una nuova chat in un progetto, lo
+riapre se era chiuso. Test: `node tests/sidebar-startup.cjs`.
+
+Durante un turno il menu della chat in corso e quello del suo progetto restano
+bloccati (niente Elimina progetto), ma le altre chat dello stesso progetto si
+possono rinominare ed eliminare anche da Progetti, come già da Recenti. Test:
+`node tests/project-menus.cjs`.
+
 ## Chat, file e dettatura locale (17 ottobre 2026)
 
 La conversazione usa una colonna di lettura da 760 px, carattere di sistema,
@@ -835,6 +911,14 @@ progetto siano ferme. Le tre scelte sono effettive, ma **i comandi usano l'accou
 Windows senza sandbox OS**: cwd non limita file e rete e il reviewer non sostituisce
 l'isolamento. Le descrizioni UI rendono esplicito questo limite.
 
+**Chat senza progetto.** Il selettore è visibile anche fuori da un progetto, con
+due sole scelte: Richiedi approvazione e Approva per me. Accesso completo non è
+disponibile (nessuna root da cui partire): `permissions.rs` salva la modalità
+sotto la chiave riservata `__chats__` (`CHAT_KEY`), rifiuta `Full` con
+`full_access_requires_project` e un eventuale valore `Full` già salvato si legge
+come Approva per me. Le chat libere condividono quella modalità; il cambio
+attende che nessuna di esse sia in esecuzione. Test: `tests/permissions.cjs` e
+`cargo test permissions` (`run-native.ps1`).
 Gli strumenti write_project_file ed edit_project_file richiedono la revisione
 SHA-256 restituita dall'ultima lettura (oppure previous_content per compatibilità).
 Le sostituzioni puntuali devono corrispondere una sola volta. Il backend verifica
@@ -1231,8 +1315,10 @@ modello scelto; il turno mostra lo step «Lettura immagine» con la descrizione.
 Le descrizioni restano in memoria per contenuto (fino a 256, perse al riavvio),
 quindi ogni immagine costa una chiamata Flash per sessione. Se non si riesce a
 leggere un'immagine del messaggio corrente l'errore è
-`image_description_failed`; immagini precedenti o degli strumenti illeggibili
-diventano una nota. Con altri provider, un modello senza visione che ignora le
+`image_description_failed`; anche le preview MCP del turno corrente richiedono
+una lettura riuscita. Solo le immagini dei turni precedenti possono diventare
+una nota. Un provider che rifiuta immagini correnti produce `images_unsupported`,
+senza proseguire fingendo di averle lette. Con altri provider, un modello senza visione che ignora le
 immagini senza restituire errori non è riconoscibile.
 
 Output: i messaggi mostrano le immagini sopra il testo (miniature da 128 px;
@@ -1295,7 +1381,18 @@ annulla senza chiudere l'editor; chiudere l'editor, eliminare il commento o
 riaprirlo scarta l'audio e il risultato in arrivo non viene scritto da nessuna
 parte. «Salva» resta disabilitato finché la dettatura è attiva, così nessuna
 trascrizione si perde in silenzio.
-**Browser interno.** Il comando del pannello laterale apre le schede a destra
+
+**Dettatura nelle risposte personalizzate di Ask User.** Ogni passaggio ha un
+microfono accanto a «Risposta personalizzata» (`questions.js`) sulla stessa
+pipeline di campo (`startFieldVoice`); `fieldVoiceStrip` in `voice.js` fornisce
+la striscia X/onda/stop condivisa con le annotazioni. Il testo entra al cursore,
+nel limite di 16000 caratteri; se nel frattempo il passaggio non è più a schermo
+finisce nella bozza di quel passaggio. Con una dettatura attiva «Invia risposta»
+e «Avanti» restano disabilitati; Salta annulla quella del passaggio, Parliamone
+e chiusura quella della richiesta; Indietro e cambio chat scartano solo la
+registrazione, mentre la trascrizione in corso arriva comunque nel passaggio
+giusto. Esc durante la registrazione la annulla. Test:
+`desktop/tests/question-dictation.cjs`.**Browser interno.** Il comando del pannello laterale apre le schede a destra
 della chat; il riepilogo rimane indipendente. La larghezza è trascinabile o
 regolabile da tastiera, salvata in `localStorage`. Ogni link nelle risposte o
 nelle Fonti apre una nuova scheda; Ctrl/Cmd/Maiusc+clic e il pulsante dedicato
@@ -1396,6 +1493,18 @@ prezzo» con una nota). «Modifica prezzi» apre Impostazioni › Provider di
 modelli. Le chat salvate prima di questa funzione mostrano solo i token di
 contesto dell'ultima risposta; il costo parte dalle risposte successive.
 
+**Chat nuove e turno in corso.** Il pulsante è sempre presente nella vista chat,
+senza lasciare un vuoto nell'intestazione. Una chat ancora senza consumi mostra
+lo stato a riposo `0 token` (attenuato): il popover ha «Questa chat» a zero con
+la nota «Ancora nessun consumo in questa chat.», «Modifica prezzi» e il saldo
+DeepSeek. Mentre il modello risponde, il pulsante ha un punto pulsante (fermo con
+movimento ridotto) e si aggiorna dopo ogni richiesta fatturata, anche al primo
+giro: totale della chat più il consumo parziale del turno, e nel popover la
+sezione «Risposta in corso» al posto di «Ultima risposta». Il totale di partenza
+resta quello all'avvio del turno, anche se nel frattempo arrivano metadati aggiornati.
+A fine turno il parziale lascia il posto all'utilizzo salvato, senza contarlo due volte; se il
+turno fallisce o viene fermato, il parziale resta come ultima risposta.
+
 **Conteggio.** `llm.rs` registra l'oggetto `usage` di ogni richiesta al provider
 in `Usage` (righe `models` per modello e fascia `off_peak`): token in ingresso
 e uscita, cache (`prompt_cache_hit_tokens`/`prompt_cache_miss_tokens` di
@@ -1403,7 +1512,11 @@ DeepSeek oppure `prompt_tokens_details.cached_tokens`), ragionamento
 (`completion_tokens_details.reasoning_tokens`) e numero di richieste. Sono
 inclusi giri di strumenti, sub-agenti, lettura immagini tramite `deepseek-flash`,
 revisione automatica e turni fermati (il provider li fattura comunque); restano
-esclusi i titoli automatici. Alla fine del turno `lib.rs` applica i prezzi
+esclusi i titoli automatici. Dopo ogni richiesta registrata `Completion::record`
+segnala `__usage`; `lib.rs` prezza il contatore cumulativo del turno e lo emette
+come `chat-progress` con `kind: "__usage"` e l'oggetto `Usage` in JSON nel campo
+`text` (lo usa solo il pulsante Utilizzo; attività, Git e companion lo ignorano).
+Alla fine del turno `lib.rs` applica i prezzi
 correnti, congela `cost_usd` e somma il risultato in `Conversation.usage`,
 salvato nei metadati Firestore della chat; cambiare un prezzo non ricalcola le
 risposte passate. `chat` restituisce anche l'utilizzo del turno.
@@ -1463,8 +1576,11 @@ Verifica: `desktop/tests/usage-panel.cjs` (formati k/M e USD, riepilogo, righe,
 modelli senza prezzo, ultima risposta, chat precedenti, chiusura con Esc e clic
 esterno, collegamento ai prezzi, saldo: lettura alla prima apertura, cache,
 aggiornamento dopo una risposta, errore, credito esaurito, «Riprova», collegamento
-di ricarica e riquadro nell'editor del provider), `desktop/tests/settings-flow.cjs`
+di ricarica e riquadro nell'editor del provider, stato a riposo di una chat nuova
+con il saldo anche prima del primo dato di consumo, consumo in diretta senza
+doppio conteggio al refresh dei metadati, cambio chat, stop ed errori, somma delle
+righe per modello), `desktop/tests/settings-flow.cjs`
 (listino, prezzo incompleto o non valido, prezzo personalizzato salvato e
-riaperto) e test Rust su conteggio, sconto orario, prezzi, round trip Firestore,
+riaperto) e test Rust su conteggio (con un evento `__usage` per richiesta), sconto orario, prezzi, round trip Firestore,
 lettura del saldo (risposta, codici d'errore, key come bearer) e provider che ne
 espongono il saldo.

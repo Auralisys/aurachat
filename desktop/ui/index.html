@@ -232,6 +232,7 @@
             <button data-settings-tab="inference"><svg data-icon="cpu" aria-hidden="true"></svg><span data-i18n="ui.inference"></span></button>
             <button data-settings-tab="voice"><svg data-icon="microphone" aria-hidden="true"></svg><span data-i18n="ui.voice"></span></button>
             <button data-settings-tab="skills"><svg data-icon="file" aria-hidden="true"></svg><span data-i18n="ui.skills"></span></button>
+            <button data-settings-tab="mcp"><svg data-icon="globe" aria-hidden="true"></svg><span data-i18n="ui.mcp"></span></button>
           </div>
           <p id="settings-no-results" class="settings-hint" data-i18n="settings.no_results" role="status" hidden></p>
           <span class="settings-brand">AuraChat</span>
@@ -257,6 +258,16 @@
           <div id="providers-overview"><div class="settings-section-head"><div><h3 data-i18n="settings.configured_providers"></h3><p data-i18n="settings.providers_note"></p></div><button id="add-provider" class="btn settings-add"><svg data-icon="plus" aria-hidden="true"></svg><span data-i18n="settings.add_provider"></span></button></div><div id="provider-list"></div><p class="settings-hint" data-i18n="settings.compatibility"></p></div>
           <div id="provider-editor" hidden></div>
           <p id="provider-feedback" class="form__error" role="alert" hidden></p>
+        </section>
+        <section id="settings-mcp" hidden>
+          <div class="settings-section-head"><div><h3 data-i18n="mcp.title"></h3><p data-i18n="mcp.note"></p></div><button id="mcp-refresh" class="btn" data-i18n="skills.refresh"></button></div>
+          <div id="mcp-list" aria-live="polite"></div>
+          <p id="mcp-feedback" class="settings-hint" role="status"></p>
+          <p id="mcp-error" class="form__error" role="alert" hidden></p>
+          <h3 data-i18n="mcp.browser_title"></h3>
+          <p data-i18n="mcp.cookies_note"></p>
+          <label class="preference-row"><span data-i18n="mcp.passwords"></span><input id="browser-save-passwords" type="checkbox" aria-describedby="browser-passwords-note" disabled></label>
+          <p id="browser-passwords-note" class="settings-hint" data-i18n="mcp.passwords_note"></p>
         </section>
         <section id="settings-skills" hidden>
           <div class="settings-section-head"><div><h3 data-i18n="skills.settings_title"></h3><p data-i18n="skills.settings_note"></p></div><button id="skills-refresh" class="btn" data-i18n="skills.refresh"></button></div>
@@ -288,6 +299,7 @@
     <script src="chat-progress.js"></script>
     <script src="icons.js"></script>
     <script src="settings.js"></script>
+    <script src="mcp.js"></script>
     <script src="balance.js"></script>
     <script src="composer.js"></script>
     <script src="message-pastes.js"></script>

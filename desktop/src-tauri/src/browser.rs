@@ -24,6 +24,9 @@ pub struct PageState {
     pub url: String,
     pub title: String,
     pub loading: bool,
+    pub sensitive: bool,
+    #[serde(skip)]
+    owner: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -61,7 +64,7 @@ pub fn allowed(url: &Url) -> bool {
     }
     let Some(host) = url.host_str() else { return false };
     let host = host.trim_end_matches('.').to_ascii_lowercase();
-    !host.is_empty() && !host.ends_with(".localhost")
+    !host.is_empty() && !host.ends_with(".localhost") && url.username().is_empty() && url.password().is_none()
 }
 
 /// Turns the address bar text into a URL: full URLs, bare hosts, or a web search.
@@ -100,7 +103,91 @@ fn tab_label(tab_id: &str) -> Result<String, String> {
 }
 
 fn page(app: &AppHandle, tab_id: &str) -> Result<Webview, String> {
+    let owner = app.state::<crate::AppState>().firestore.uid().ok_or("login_required")?;
+    if !app.state::<Browser>().pages.lock().unwrap().get(tab_id).is_some_and(|page| page.owner == owner) {
+        return Err("browser_forbidden".into());
+    }
     app.get_webview(&tab_label(tab_id)?).ok_or_else(|| "browser_closed".into())
+}
+
+fn profile_id(owner: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(owner.as_bytes()))
+}
+
+fn preferences_path(app: &AppHandle, owner: &str) -> std::path::PathBuf {
+    app.state::<crate::AppState>().config_dir.join("browser").join(format!("{}.json", profile_id(owner)))
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct Preferences { save_passwords: bool }
+
+fn preferences(app: &AppHandle, owner: &str) -> Result<Preferences, String> {
+    match std::fs::read(preferences_path(app, owner)) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| "browser_preferences_failed".into()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Preferences::default()),
+        Err(_) => Err("browser_preferences_failed".into()),
+    }
+}
+
+#[cfg(windows)]
+async fn password_autosave(page: &Webview, enabled: bool) -> Result<(), String> {
+    use windows::core::Interface;
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings4;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    page.with_webview(move |platform| {
+        let result = (|| -> windows::core::Result<()> {
+            unsafe {
+                let settings: ICoreWebView2Settings4 = platform.controller().CoreWebView2()?.Settings()?.cast()?;
+                settings.SetIsPasswordAutosaveEnabled(enabled)?;
+                settings.SetIsGeneralAutofillEnabled(false)
+            }
+        })();
+        let _ = tx.send(result.map_err(|_| "browser_passwords_failed".to_string()));
+    }).map_err(|_| "browser_passwords_failed")?;
+    tokio::time::timeout(std::time::Duration::from_secs(10), rx).await
+        .map_err(|_| "browser_passwords_failed")?.map_err(|_| "browser_passwords_failed")?
+}
+
+#[cfg(not(windows))]
+async fn password_autosave(_: &Webview, enabled: bool) -> Result<(), String> {
+    if enabled { Err("browser_passwords_unsupported".into()) } else { Ok(()) }
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn browser_preferences(app: AppHandle, webview: Webview, save_passwords: Option<bool>) -> Result<serde_json::Value, String> {
+    only_main(&webview)?;
+    let state = app.state::<crate::AppState>();
+    let _account = state.account_lock.lock().await;
+    let owner = app.state::<crate::AppState>().firestore.uid().ok_or("login_required")?;
+    let mut prefs = preferences(&app, &owner)?;
+    if let Some(enabled) = save_passwords {
+        if !cfg!(windows) { return Err("browser_passwords_unsupported".into()); }
+        let ids: Vec<_> = app.state::<Browser>().pages.lock().unwrap().values()
+            .filter(|page| page.owner == owner).map(|page| page.tab_id.clone()).collect();
+        let path = preferences_path(&app, &owner);
+        let previous = match std::fs::read_to_string(&path) {
+            Ok(text) => Some(text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return Err("browser_preferences_failed".into()),
+        };
+        let changed = async {
+            for id in &ids { password_autosave(&page(&app, id)?, enabled).await?; }
+            crate::project_files::write_file(&path, &serde_json::to_string(&Preferences { save_passwords: enabled }).map_err(|_| "browser_preferences_failed")?, previous.as_deref())
+        }.await;
+        if let Err(error) = changed {
+            for id in &ids {
+                if let Some(page) = app.get_webview(&tab_label(id)?) {
+                    if password_autosave(&page, prefs.save_passwords).await.is_err() {
+                        if let Err(close_error) = close_tab(&app, id) { eprintln!("Browser preferences cleanup failed: {close_error}"); }
+                    }
+                }
+            }
+            return Err(error);
+        }
+        prefs.save_passwords = enabled;
+    }
+    Ok(serde_json::json!({"save_passwords":prefs.save_passwords,"passwords_supported":cfg!(windows)}))
 }
 
 fn publish(app: &AppHandle, tab_id: &str, update: impl FnOnce(&mut PageState)) {
@@ -114,6 +201,11 @@ fn publish(app: &AppHandle, tab_id: &str, update: impl FnOnce(&mut PageState)) {
     if let Err(error) = app.emit_to(MAIN, "browser-state", state) {
         eprintln!("Browser state event failed: {error}");
     }
+}
+
+fn display_url(mut url: Url, sensitive: bool) -> String {
+    if sensitive { url.set_query(None); url.set_fragment(None); }
+    url.to_string()
 }
 
 fn validate_bounds(bounds: &Bounds) -> Result<(), String> {
@@ -134,7 +226,18 @@ fn place(webview: &Webview, bounds: &Bounds) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn create(app: &AppHandle, tab_id: &str, url: Url, bounds: &Bounds) -> Result<Webview, String> {
+async fn create(app: &AppHandle, tab_id: &str, url: Url, bounds: &Bounds, owner: &str, sensitive: bool) -> Result<Webview, String> {
+    #[cfg(target_os = "macos")]
+    {
+        // Older WebKit silently falls back to the shared default store.
+        let version = std::process::Command::new("/usr/bin/sw_vers").arg("-productVersion")
+            .output().map_err(|_| "browser_profile_unsupported")?;
+        if !version.status.success() || !String::from_utf8_lossy(&version.stdout).trim()
+            .split('.').next().and_then(|major| major.parse::<u32>().ok()).is_some_and(|major| major >= 14) {
+            return Err("browser_profile_unsupported".into());
+        }
+    }
+    let save_passwords = preferences(app, owner)?.save_passwords;
     let window = app.get_window(MAIN).ok_or("browser_closed")?;
     let blocked = app.clone();
     let opener = app.clone();
@@ -144,7 +247,10 @@ fn create(app: &AppHandle, tab_id: &str, url: Url, bounds: &Bounds) -> Result<We
     let opener_id = tab_id.to_string();
     let loads_id = tab_id.to_string();
     let titles_id = tab_id.to_string();
-    let builder = WebviewBuilder::new(tab_label(tab_id)?, WebviewUrl::External(url))
+    let profile = app.path().app_local_data_dir().map_err(|_| "browser_preferences_failed")?.join("browser").join(profile_id(owner));
+    std::fs::create_dir_all(&profile).map_err(|_| "browser_preferences_failed")?;
+    let builder = WebviewBuilder::new(tab_label(tab_id)?, WebviewUrl::External(Url::parse("about:blank").map_err(|_| "browser_invalid_url")?))
+        .data_directory(profile)
         .on_navigation(move |url| {
             let ok = allowed(url) || url.as_str() == "about:blank";
             if !ok {
@@ -164,7 +270,7 @@ fn create(app: &AppHandle, tab_id: &str, url: Url, bounds: &Bounds) -> Result<We
             NewWindowResponse::Deny
         })
         .on_page_load(move |_, payload| {
-            let url = payload.url().to_string();
+            let url = display_url(payload.url().clone(), sensitive);
             let loading = matches!(payload.event(), PageLoadEvent::Started);
             publish(&loads, &loads_id, |page| {
                 if page.url != url {
@@ -174,35 +280,63 @@ fn create(app: &AppHandle, tab_id: &str, url: Url, bounds: &Bounds) -> Result<We
                 page.loading = loading;
             });
         })
-        .on_document_title_changed(move |_, title| publish(&titles, &titles_id, |page| page.title = title));
+        .on_document_title_changed(move |_, title| publish(&titles, &titles_id, |page| page.title = if sensitive { "OAuth".into() } else { title }));
+    #[cfg(target_os = "macos")]
+    let builder = {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(owner.as_bytes());
+        let mut id = [0u8; 16]; id.copy_from_slice(&digest[..16]);
+        builder.data_store_identifier(id)
+    };
     let page = window
         .add_child(builder, LogicalPosition::new(bounds.x, bounds.y), LogicalSize::new(bounds.width.max(1.0), bounds.height.max(1.0)))
         .map_err(|error| error.to_string())?;
-    page.hide().map_err(|error| error.to_string())?;
+    let ready = async {
+        page.hide().map_err(|error| error.to_string())?;
+        password_autosave(&page, save_passwords).await?;
+        page.navigate(url).map_err(|error| error.to_string())
+    }.await;
+    if let Err(error) = ready {
+        if let Err(close_error) = page.close() { eprintln!("Browser creation cleanup failed: {close_error}"); }
+        return Err(error);
+    }
     Ok(page)
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn browser_open(app: AppHandle, webview: Webview, tab_id: String, url: String, bounds: Bounds) -> Result<Opened, String> {
     only_main(&webview)?;
+    let state = app.state::<crate::AppState>();
+    let _account = state.account_lock.lock().await;
     let label = tab_label(&tab_id)?;
     let url = page_url(&url)?;
     validate_bounds(&bounds)?;
-    app.state::<Browser>().pages.lock().unwrap().entry(tab_id.clone()).or_insert_with(|| PageState { tab_id: tab_id.clone(), ..Default::default() });
+    let owner = app.state::<crate::AppState>().firestore.uid().ok_or("login_required")?;
+    let sensitive = app.state::<crate::mcp_oauth::OAuth>().sensitive_tab(&tab_id);
+    {
+        let browser = app.state::<Browser>();
+        let mut pages = browser.pages.lock().unwrap();
+        let entry = pages.entry(tab_id.clone()).or_insert_with(|| PageState { tab_id: tab_id.clone(), owner: owner.clone(), sensitive, ..Default::default() });
+        if entry.owner != owner { return Err("browser_forbidden".into()); }
+    }
     publish(&app, &tab_id, |page| {
-        page.url = url.to_string();
+        page.url = display_url(url.clone(), sensitive);
         page.title.clear();
         page.loading = true;
     });
     let result = match app.get_webview(&label) {
         Some(page) => place(&page, &bounds).and_then(|_| page.navigate(url.clone()).map_err(|error| error.to_string())),
-        None => create(&app, &tab_id, url.clone(), &bounds).map(|_| ()),
+        None => create(&app, &tab_id, url.clone(), &bounds, &owner, sensitive).await.map(|_| ()),
     };
     if let Err(error) = result {
         publish(&app, &tab_id, |page| page.loading = false);
         return Err(error);
     }
-    Ok(Opened { url: url.to_string(), capture: cfg!(windows) })
+    if sensitive && !app.state::<crate::mcp_oauth::OAuth>().sensitive_tab(&tab_id) {
+        close_tab(&app, &tab_id)?;
+        return Err("mcp_oauth_cancelled".into());
+    }
+    Ok(Opened { url: display_url(url, sensitive), capture: cfg!(windows) && !sensitive })
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -210,6 +344,7 @@ pub async fn browser_bounds(app: AppHandle, webview: Webview, tab_id: String, bo
     only_main(&webview)?;
     let Some(page) = app.get_webview(&tab_label(&tab_id)?) else { return Ok(()) };
     if visible {
+        self::page(&app, &tab_id)?;
         place(&page, &bounds)?;
         let ids: Vec<_> = app.state::<Browser>().pages.lock().unwrap().keys().cloned().collect();
         for id in ids.into_iter().filter(|id| id != &tab_id) {
@@ -241,11 +376,24 @@ pub async fn browser_action(app: AppHandle, webview: Webview, tab_id: String, ac
 #[tauri::command(rename_all = "snake_case")]
 pub async fn browser_close(app: AppHandle, webview: Webview, tab_id: String) -> Result<(), String> {
     only_main(&webview)?;
+    close_tab(&app, &tab_id)
+}
+
+pub fn close_tab(app: &AppHandle, tab_id: &str) -> Result<(), String> {
+    app.state::<crate::mcp_oauth::OAuth>().cancel_tab(&tab_id);
     if let Some(page) = app.get_webview(&tab_label(&tab_id)?) {
         page.hide().map_err(|error| error.to_string())?;
         page.close().map_err(|error| error.to_string())?;
     }
-    app.state::<Browser>().pages.lock().unwrap().remove(&tab_id);
+    app.state::<Browser>().pages.lock().unwrap().remove(tab_id);
+    Ok(())
+}
+
+pub fn close_owner(app: &AppHandle, owner: &str) -> Result<(), String> {
+    app.state::<crate::mcp_oauth::OAuth>().cancel_owner(owner);
+    let ids: Vec<_> = app.state::<Browser>().pages.lock().unwrap().values()
+        .filter(|page| page.owner == owner).map(|page| page.tab_id.clone()).collect();
+    for id in ids { close_tab(app, &id)?; }
     Ok(())
 }
 
@@ -255,6 +403,7 @@ pub async fn browser_capture(app: AppHandle, webview: Webview, tab_id: String) -
     only_main(&webview)?;
     let page = page(&app, &tab_id)?;
     let state = app.state::<Browser>().pages.lock().unwrap().get(&tab_id).cloned().ok_or("browser_closed")?;
+    if state.sensitive { return Err("browser_auth_capture_forbidden".into()); }
     let url = page.url().map_err(|error| error.to_string())?.to_string();
     let bytes = capture_png(&page).await?;
     if crate::llm::image_mime(&bytes) != Some("image/png") {
@@ -357,6 +506,17 @@ mod tests {
             assert!(validate_bounds(&Bounds { x: value, y: 0.0, width: 400.0, height: 600.0 }).is_err());
         }
         assert!(validate_bounds(&Bounds { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }).is_ok());
+    }
+
+    #[test]
+    fn oauth_addresses_hide_codes_and_profiles_do_not_share_accounts() {
+        let callback = Url::parse("http://127.0.0.1:4321/oauth/callback?code=secret&state=secret#token").unwrap();
+        assert_eq!(display_url(callback.clone(), true), "http://127.0.0.1:4321/oauth/callback");
+        assert_eq!(display_url(callback.clone(), false), callback.as_str());
+        assert_ne!(profile_id("fixture-one"), profile_id("fixture-two"));
+        assert!(!profile_id("fixture-one").contains("fixture-one"));
+        assert!(!Preferences::default().save_passwords);
+        assert!(page_url("https://user:password@example.com").is_err());
     }
 
     #[test]

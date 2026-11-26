@@ -24,13 +24,17 @@ const assert = require('node:assert/strict');
   await page.addInitScript(({ locales, usage }) => {
     window.__store = { projects: [], conversations: [
       { id: 'c', title: 'Costi', created_at: 1, updated_at: 2, context_tokens: 4000, usage, messages: [{ role: 'user', content: 'Ciao' }, { role: 'assistant', content: 'Ciao!' }] },
-      { id: 'old', title: 'Vecchia', created_at: 1, updated_at: 1, context_tokens: 1530, messages: [{ role: 'user', content: 'Ciao' }, { role: 'assistant', content: 'Ciao!' }] }] };
+      { id: 'old', title: 'Vecchia', created_at: 1, updated_at: 1, context_tokens: 1530, messages: [{ role: 'user', content: 'Ciao' }, { role: 'assistant', content: 'Ciao!' }] },
+      { id: 'fresh', title: 'Nuova', created_at: 1, updated_at: 1, messages: [] }] };
     window.__calls = [];
+    window.__events = {};
+    window.__chatGate = null;
+    window.__chatResult = null;
     window.__balance = { reply: null, gate: null, release: null, linkFails: false };
     const config = { firebase_email: 'demo@example.com', firebase_project_id: 'demo', firebase_api_key: 'demo', firebase_auth_set: true, api_key_set: true, models: ['deepseek-flash'], active_model: 'deepseek-flash',
       providers: [{ id: 'legacy-0', name: 'DeepSeek', kind: 'deepseek', api_key_set: true, models: [{ id: 'deepseek-flash', model: 'deepseek-flash', base_url: 'https://api.deepseek.com', pricing: null }] }],
       known_pricing: [{ host: 'api.deepseek.com', model: 'deepseek-flash', pricing: { input_cache_hit: 0.006, input_cache_miss: 0.3, output: 1.2 }, off_peak_factor: 0.5 }] };
-    window.__TAURI__ = { window: { getCurrentWindow: () => ({ minimize() {}, close() {}, async listen() { return () => {}; } }) }, core: { invoke: async (cmd, args) => {
+    window.__TAURI__ = { window: { getCurrentWindow: () => ({ minimize() {}, close() {}, async listen(name, handler) { (window.__events[name] ||= []).push(handler); return () => {}; } }) }, core: { invoke: async (cmd, args) => {
       window.__calls.push({ cmd, args });
       if (cmd === 'speech_model_status') return { ready: false, busy: false, downloaded: 0, total: 1 };
       if (cmd === 'get_locale') return JSON.stringify(locales);
@@ -44,12 +48,14 @@ const assert = require('node:assert/strict');
       }
       if (cmd === 'open_external_url' && window.__balance.linkFails) throw 'link_failed';
       if (cmd === 'chat') {
+        await window.__chatGate;
+        if (window.__chatResult?.error) throw window.__chatResult.error;
         const tree = structuredClone(window.__store), conv = tree.conversations.find(c => c.id === args.conversation_id);
         conv.messages.push({ role: 'user', content: args.content }, { role: 'assistant', content: 'Fatto.' });
-        const reply = { prompt_tokens: 1200, completion_tokens: 300, total_tokens: 1500, requests: 1, cache_hit_tokens: 1000, cache_miss_tokens: 200, reasoning_tokens: 0, unpriced_tokens: 0, cost_usd: 0.000426,
+        const reply = window.__chatResult?.usage || { prompt_tokens: 1200, completion_tokens: 300, total_tokens: 1500, requests: 1, cache_hit_tokens: 1000, cache_miss_tokens: 200, reasoning_tokens: 0, unpriced_tokens: 0, cost_usd: 0.000426,
           models: [{ model: 'deepseek-flash', off_peak: false, requests: 1, prompt_tokens: 1200, completion_tokens: 300, cache_hit_tokens: 1000, cache_miss_tokens: 200, reasoning_tokens: 0, unpriced_tokens: 0, cost_usd: 0.000426 }] };
-        conv.usage = reply; window.__store = tree;
-        return { data: structuredClone(tree), messages: structuredClone(conv.messages), usage: reply };
+        conv.usage = window.__chatResult?.total || reply; window.__store = tree;
+        return { data: structuredClone(tree), messages: structuredClone(conv.messages), usage: reply, cancelled: !!window.__chatResult?.cancelled };
       }
     } } };
   }, { locales, usage });
@@ -217,7 +223,114 @@ const assert = require('node:assert/strict');
   assert.equal(await editorBalance.locator('.usage-row dt').first().innerText(), 'Disponibile (CNY)');
   assert.equal(await balanceCalls(), requests);
   await page.click('#modal-close');
+
+  // A chat with no usage yet keeps an idle chip instead of a gap, and the balance stays one click away.
+  const chip = page.locator('#context-info');
+  await page.evaluate(() => resetBalances());
+  await hold();
+  await page.evaluate(() => openConversation('fresh', false));
+  assert.equal(await chip.isVisible(), true);
+  assert.equal(await summary.innerText(), '0 token');
+  assert.match(await chip.getAttribute('class'), /context-info--idle/);
+  await summary.click();
+  assert.deepEqual(await panel.locator('.usage-section__title').allInnerTexts(), ['Questa chat']);
+  assert.equal(await panel.locator('.usage-section .usage-note').innerText(), locales['usage.idle_note']);
+  assert.equal(await panel.locator('.usage-footer .usage-note').count(), 0);
+  assert.equal(await panel.locator('.usage-link').count(), 1);
+  await balanceState('loading');
+  assert.equal(await balance.locator('h2').innerText(), 'Saldo DeepSeek');
+  await release();
+  await balanceState('ready');
+  assert.equal(await balance.locator('h2').innerText(), 'Saldo DeepSeek');
+  await page.evaluate(() => Promise.all(document.getAnimations().map(animation => animation.finished)));
+  await page.screenshot({ path: resolve(shots, 'usage-idle.png') });
+  await page.keyboard.press('Escape');
+
+  // The first turn updates the chip after every billed request, then hands over to the saved total without counting twice.
+  const turn = (requests, total, cost_usd) => ({ prompt_tokens: total - 100, completion_tokens: 100, total_tokens: total, requests, cache_hit_tokens: 0, cache_miss_tokens: total - 100, reasoning_tokens: 0, unpriced_tokens: 0, cost_usd,
+    models: [{ model: 'deepseek-flash', off_peak: false, requests, prompt_tokens: total - 100, completion_tokens: 100, cache_hit_tokens: 0, cache_miss_tokens: total - 100, reasoning_tokens: 0, unpriced_tokens: 0, cost_usd }] });
+  const emitUsage = usage => page.evaluate(usage => window.__events['chat-progress'].forEach(listener => listener({ payload: { conversation_id: 'fresh', kind: '__usage', text: JSON.stringify(usage) } })), usage);
+  await page.evaluate(() => { window.__chatGate = new Promise(resolve => { window.__releaseChat = resolve; }); });
+  await page.fill('#composer-input', 'Primo giro');
+  await page.click('#composer-send');
+  await page.waitForFunction(() => document.querySelector('#context-info').classList.contains('context-info--live'));
+  assert.equal(await summary.innerText(), '0 token');
+  await summary.click();
+  assert.deepEqual(await panel.locator('.usage-section__title').allInnerTexts(), ['Risposta in corso']);
+  assert.equal(await panel.locator('.usage-section .usage-note').innerText(), locales['usage.live_note']);
+  assert.equal(await balance.getAttribute('data-state'), 'ready');
+  const liveBalanceCalls = await balanceCalls();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.screenshot({ path: resolve(shots, 'usage-first-request.png') });
+  await emitUsage(turn(1, 900, 0.0002));
+  assert.match(await summary.innerText(), /^900 · 0,00020\s\$$/);
+  assert.doesNotMatch(await chip.getAttribute('class'), /context-info--idle/);
+  assert.deepEqual(await panel.locator('.usage-section__title').allInnerTexts(), ['Questa chat', 'Risposta in corso']);
+  assert.equal(await panel.locator('.usage-section').nth(1).locator('.usage-note').innerText(), locales['usage.live_note']);
+  await emitUsage(turn(2, 1500, 0.000426));
+  assert.match(await summary.innerText(), /^1,5k · 0,00043\s\$$/);
+  assert.equal(await panel.locator('.usage-row').filter({ hasText: 'Richieste al modello' }).locator('dd').innerText(), '2');
+  assert.equal(await balanceCalls(), liveBalanceCalls, 'live usage reuses the known account balance');
+  // The live dot pulses forever, so only finite animations are awaited.
+  await page.evaluate(() => Promise.all(document.getAnimations().filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).map(animation => animation.finished)));
+  await page.screenshot({ path: resolve(shots, 'usage-live.png') });
+  await page.setViewportSize({ width: 768, height: 860 });
+  const compact = await panel.boundingBox();
+  assert.ok(compact.x >= 0 && compact.x + compact.width <= 768 && compact.y + compact.height <= 860);
+  await page.screenshot({ path: resolve(shots, 'usage-live-compact.png') });
+  await page.setViewportSize({ width: 1280, height: 860 });
+  await page.evaluate(usage => { window.__chatResult = { usage }; }, turn(2, 1500, 0.000426));
+  await page.evaluate(() => window.__releaseChat());
+  await page.waitForFunction(() => !document.querySelector('#context-info').classList.contains('context-info--live'));
+  assert.match(await summary.innerText(), /^1,5k · 0,00043\s\$$/);
+  assert.deepEqual(await panel.locator('.usage-section__title').allInnerTexts(), ['Questa chat', 'Ultima risposta']);
+
+  // A metadata refresh can include the saved turn before its native promise and text animation settle.
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => { window.__chatGate = new Promise(resolve => { window.__releaseChat = resolve; }); });
+  await page.fill('#composer-input', 'Secondo giro');
+  await page.click('#composer-send');
+  await page.waitForFunction(() => document.querySelector('#context-info').classList.contains('context-info--live'));
+  const next = turn(1, 900, 0.0002), total = turn(3, 2400, 0.000626);
+  await emitUsage(next);
+  assert.match(await summary.innerText(), /^2,4k · 0,00063\s\$$/);
+  await page.evaluate(total => {
+    window.__store.conversations.find(conversation => conversation.id === 'fresh').usage = total;
+    applyChatData(structuredClone(window.__store));
+    updateContextInfo();
+  }, total);
+  assert.match(await summary.innerText(), /^2,4k · 0,00063\s\$$/, 'a refreshed total must not count the live turn twice');
+  await page.evaluate(() => openConversation('c', false));
+  const otherSummary = await summary.innerText();
+  await emitUsage(next);
+  assert.equal(await summary.innerText(), otherSummary, 'a background turn must not replace another chat usage');
+  await page.evaluate(() => openConversation('fresh', false));
+  assert.match(await summary.innerText(), /^2,4k · 0,00063\s\$$/);
+  await page.evaluate(result => { window.__chatResult = result; window.__releaseChat(); }, { usage: next, total, cancelled: true });
+  await page.waitForFunction(() => !document.querySelector('#context-info').classList.contains('context-info--live'));
+  assert.match(await summary.innerText(), /^2,4k · 0,00063\s\$$/, 'stopping preserves the usage already billed');
+
+  // A failed request preserves partial usage and makes the known balance accessible.
+  await page.evaluate(() => { window.__chatGate = new Promise(resolve => { window.__releaseChat = resolve; }); });
+  await page.fill('#composer-input', 'Richiesta interrotta dal provider');
+  await page.click('#composer-send');
+  await page.waitForFunction(() => document.querySelector('#context-info').classList.contains('context-info--live'));
+  await emitUsage(next);
+  await page.evaluate(() => { window.__chatResult = { error: 'Errore di rete' }; window.__releaseChat(); });
+  await page.waitForFunction(() => !document.querySelector('#context-info').classList.contains('context-info--live'));
+  await summary.click();
+  assert.match(await panel.locator('.usage-section').nth(1).innerText(), /Ultima risposta\s*0,00020\s\$/);
+  await balanceState('ready');
+
+  // Live usage adds to the saved chat total and merges rows of the same model and price band.
+  const merged = await page.evaluate(([saved, live]) => addUsage(usageTotals(saved), usageTotals(live)), [usage, turn(1, 900, 0.0002)]);
+  assert.equal(merged.total_tokens, usage.total_tokens + 900);
+  assert.equal(merged.requests, usage.requests + 1);
+  assert.ok(Math.abs(merged.cost_usd - (usage.cost_usd + 0.0002)) < 1e-12);
+  assert.equal(merged.models.length, 3);
+  assert.equal(merged.models.find(item => item.model === 'deepseek-flash').requests, 3);
+  assert.equal(usage.models[0].requests, 2, 'the saved usage is not mutated');
   assert.deepEqual(errors, []);
   await browser.close();
-  console.log('PASS: usage panel k/M tokens, USD estimates, cache split, per-model rows, unpriced note, last reply, legacy chats, Escape/outside close, price shortcut and DeepSeek balance (lazy read, cache, refresh after a reply, error/depleted/retry states, top-up link, provider editor).');
+  console.log('PASS: usage panel k/M tokens, USD estimates, cache split, per-model rows, unpriced note, last reply, legacy chats, Escape/outside close, price shortcut, DeepSeek balance (lazy read, cache, refresh after a reply, error/depleted/retry states, top-up link, provider editor), idle chip with balance and live usage during the first turn.');
 })().catch(error => { console.error(error); process.exit(1); });

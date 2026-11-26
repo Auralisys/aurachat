@@ -752,7 +752,7 @@ async function setupActivity() {
   });
   // Explicit final publications are shown while the turn is still running.
   await appWindow.listen('chat-progress', ({payload}) => {
-    if (payload?.conversation_id !== state.activeConversationId || ['__delta','__reasoning'].includes(payload?.kind)) return;
+    if (payload?.conversation_id !== state.activeConversationId || ['__delta','__reasoning','__usage'].includes(payload?.kind)) return;
     scheduleActivityRender();
   });
   $('#activity-toggle').onclick = () => {

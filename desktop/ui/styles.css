@@ -378,6 +378,11 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 .settings-signout { display:flex; align-items:center; justify-content:space-between; gap:var(--space-6); margin-top:var(--space-8); padding-top:var(--space-6); border-top:1px solid var(--c-soft-border); }
 .settings-signout strong { font-size:var(--fs-small); font-weight:600; }
 .settings-signout p { font-size:var(--fs-label); margin-top:var(--space-1); }
+#mcp-list .settings-signout { flex-wrap:wrap; gap:var(--space-3); margin-top:var(--space-4); padding-top:var(--space-4); }
+#mcp-list .settings-signout > div { flex:1 1 200px; min-width:0; overflow-wrap:anywhere; }
+#settings-mcp > h3 { margin-top:var(--space-8); }
+#mcp-feedback { overflow-wrap:anywhere; }
+#browser-save-passwords { flex-shrink:0; width:20px; height:20px; accent-color:var(--c-accent); }
 @media(max-width:850px) { .settings-nav { width:210px; } .settings-content { padding:var(--space-6); } .provider-row-status { display:none; } .settings-section-head { flex-wrap:wrap; gap:var(--space-4); } }
 @media(max-width:600px) {
   .overlay { padding:var(--space-1); }
@@ -593,6 +598,9 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 .context-info summary::-webkit-details-marker { display:none; }
 .context-info summary:hover,.context-info[open] summary { background:var(--c-hover); color:var(--c-text); }
 .context-info summary .ui-icon { width:14px; height:14px; }
+.context-info--idle:not([open]) summary:not(:hover) #context-summary { opacity:.72; }
+.context-info--live summary::after { content:''; width:5px; height:5px; border-radius:50%; background:var(--c-glow); }
+@media(prefers-reduced-motion:no-preference) { .context-info--live summary::after { animation:work-pulse 1.4s ease-in-out infinite; } }
 #context-details { position:absolute; right:0; top:calc(100% + 6px); z-index:4; width:304px; max-width:calc(100vw - 32px); max-height:min(680px,calc(100vh - 120px)); overflow:auto; border:1px solid var(--c-soft-border); border-radius:var(--radius-xl); background:var(--c-panel); box-shadow:var(--shadow-overlay); color:var(--c-text); font-size:var(--fs-label); line-height:1.4; font-variant-numeric:tabular-nums; }
 @media(prefers-reduced-motion:no-preference) { .context-info[open] > #context-details { transform-origin:top right; animation:menu-arrive 140ms cubic-bezier(.16,1,.3,1); } }
 .usage-section { padding:14px 14px 12px; }
@@ -796,6 +804,11 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 .question-choice:has(input:checked) .question-choice__number { background:var(--c-accent); border-color:var(--c-accent); }
 .question-choice > span:last-child { padding-top:2px; min-width:0; }
 .question-custom { display:flex; flex-direction:column; gap:6px; margin-top:8px; font-size:12px; color:var(--c-text-muted); }
+.question-custom__head { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:26px; }
+.question-custom__mic { flex:none; width:26px; height:26px; }
+.question-custom__mic .ui-icon { width:15px; height:15px; }
+.question-custom__mic:hover:not(:disabled) { color:var(--c-text); }
+.question-custom .annotator__voice { margin-top:0; }
 .question-custom textarea { width:100%; min-height:40px; max-height:120px; resize:vertical; padding:10px; border:1px solid var(--c-border); border-radius:8px; background:var(--c-sidebar); color:var(--c-text); font:inherit; }
 .question-card button:disabled { opacity:.45; cursor:default; }
 .question-error { margin:8px 0; font-size:12px; color:var(--c-destructive); }
@@ -825,7 +838,7 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 @keyframes work-pulse { 50% { opacity:.55; } }
 @keyframes feedback-arrive { from { opacity:.45; transform:translateY(4px); } to { opacity:1; transform:none; } }
 @media (prefers-reduced-motion:no-preference) { .approval-card,.msg--stream .turn-history { animation:feedback-arrive var(--motion-state) var(--motion-ease); } }
-.is-backgrounded .is-working-text,.is-backgrounded .tree-conv__spinner,.is-backgrounded .turn-history[data-live-history] > summary > .ui-icon:first-child { animation-play-state:paused; }
+.is-backgrounded .is-working-text,.is-backgrounded .tree-conv__spinner,.is-backgrounded .turn-history[data-live-history] > summary > .ui-icon:first-child,.is-backgrounded .context-info--live summary::after { animation-play-state:paused; }
 @media (prefers-reduced-motion:reduce) {
   .is-working-text { animation:none; background:none; color:var(--c-text-muted); }
   .turn-history[data-live-history] > summary > .ui-icon:first-child,.approval-card { animation:none; }

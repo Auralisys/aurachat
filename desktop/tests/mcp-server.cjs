@@ -1,6 +1,25 @@
 // Offline stdio fixture: no external service calls, login or credentials.
 const readline = require('node:readline');
 let initialized = false;
+function largePreview() {
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type), data]);
+    let crc = 0xffffffff;
+    for (const byte of body) {
+      crc ^= byte;
+      for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+    const size = Buffer.alloc(4), checksum = Buffer.alloc(4);
+    size.writeUInt32BE(data.length);checksum.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
+    return Buffer.concat([size, body, checksum]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(512,0);header.writeUInt32BE(256,4);header[8]=8;header[9]=2;
+  const pixels = require('node:crypto').randomBytes((512*3+1)*256);
+  for (let row = 0; row < 256; row++) pixels[row*(512*3+1)] = 0;
+  return Buffer.concat([Buffer.from('89504e470d0a1a0a','hex'),chunk('IHDR',header),
+    chunk('IDAT',require('node:zlib').deflateSync(pixels)),chunk('IEND',Buffer.alloc(0))]).toString('base64');
+}
 function respond(request) {
   if (request.method === 'notifications/initialized') {initialized = true;return null;}
   if (request.id == null) return null;
@@ -17,6 +36,7 @@ function respond(request) {
     const content = [{type:'text',text:`Fixture record: ${id}`}];
     // 1x1 PNG, like a browser screenshot tool result.
     if (id === 'screenshot') content.push({type:'image',mimeType:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='});
+    if (id === 'large-screenshot') content.push({type:'image',mimeType:'image/png',data:largePreview()});
     result = {content,isError:id === 'error'};
   } else {
     return {jsonrpc:'2.0',id:request.id,error:{code:-32601,message:'Unsupported method'}};

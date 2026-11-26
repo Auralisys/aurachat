@@ -492,6 +492,11 @@ async function setupChatProgress() {
   await appWindow.listen('chat-progress', ({payload}) => {
     if (!payload || typeof payload.text !== 'string') return;
     const run = state.runs.get(payload.conversation_id);if (!run?.pending) return;
+    if (payload.kind === '__usage') {
+      try {run.liveUsage = JSON.parse(payload.text);} catch (error) {console.error('Invalid usage update', error);return;}
+      if (state.activeConversationId === payload.conversation_id) updateContextInfo();
+      return;
+    }
     const stream = run.stream ||= {content:'', shown:0, activity:[], frame:null};
     if (payload.kind === '__delta') {stream.content += payload.text;revealTurn(run);}
     else if (payload.kind === '__reasoning') {

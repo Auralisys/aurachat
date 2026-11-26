@@ -943,6 +943,38 @@ Verifica: `desktop/tests/image-annotations.cjs`, `desktop/tests/panel-tabs.cjs`,
 `browser::tests` e test LLM su
 validazione, testo per il modello e bridge.
 
+### Mobbin MCP e profili browser
+
+`mcp_oauth.rs` usa l'OAuth di `rmcp` (discovery, DCR, PKCE S256, refresh) per i
+server HTTP con `oauth: true`. Mobbin è predisposto in **Impostazioni > MCP e
+browser** (`mcp.js`), endpoint `https://api.mobbin.com/mcp`. Il collegamento
+verifica `tools/list` prima di abilitare una nuova integrazione. Il callback è
+loopback su porta casuale; state, Host e percorso sono verificati. La scheda
+OAuth riusa il pannello esistente, è temporanea, senza cronologia AuraChat o
+catture. ↗ riapre l'URL di autorizzazione iniziale nel browser di sistema (account
+Chrome); il loopback completa da lì e il nativo riporta AuraChat in primo piano.
+Fine login, annullamento, Stop e logout chiudono la scheda.
+
+Lo store è locale per account/configurazione/server: DPAPI utente su Windows,
+Keychain su macOS, senza fallback in chiaro. Il lock condiviso serializza login
+e refresh dei token rotanti; una generazione invalida i client disconnessi.
+`invalid_grant` elimina i token ma non gli errori transitori. Disconnessione
+locale e revoca del consenso remoto sono distinte; cookie e password rimangono.
+
+Le webview usano un profilo dati persistente per UID, separato dal browser di
+sistema; logout/cambio account chiudono le pagine anche nel backend. Windows
+espone il salvataggio password nativo WebView2 opt-in, con autofill generico
+disabilitato. Nessuna lettura dei campi o importazione/sync di password.
+Su macOS la separazione WebKit richiede macOS 14+ e blocca l'apertura su versioni
+precedenti anziché usare lo store condiviso; password native non supportate.
+
+Il limite trasporto MCP è 20 MiB per preview inline; restano 256 KiB di testo,
+4 immagini per risultato, 3 MB/4096 px per immagine. Il modello riceve immagini
+attribuite al tool call; errori di visione sulle preview correnti interrompono
+il turno anziché ometterle. Le fixture OAuth/UI e i test Rust verificano
+protocollo, storage Windows, refresh e richiesta multimodale. Login Mobbin reale,
+cookie/password WebView2 e macOS restano da verificare. Gallery MCP Apps esclusa.
+
 La dettatura locale funziona anche nei commenti delle annotazioni sulle immagini. `voice.js` espone la stessa pipeline di cattura con due destinazioni: il compositore e un campo (`startFieldVoice`/`stopFieldVoice`/`cancelFieldVoice`), fissato all'avvio sull'editor aperto e sull'id del commento. La coda FIFO e il modello restano condivisi. Il testo entra al cursore del commento, nel limite di 1000 caratteri. Esc annulla la registrazione senza chiudere l'editor. Chiudere l'editor scarta audio e risultato in arrivo. «Salva» è disabilitato durante la dettatura. Nessuna modifica al Rust. Test in `tests/image-annotations.cjs`.
 
 Composer (`composer.js`): incolli con più di 20 righe logiche diventano nodi
@@ -978,6 +1010,18 @@ fermati; esclusi i titoli automatici) in righe `models` per modello e fascia
 correnti fissano `cost_usd`; il risultato si somma in `Conversation.usage`, salvato
 nei metadati Firestore della chat. Cambiare i prezzi non ricalcola il passato.
 
+Consumo in diretta (richiesta: vedere consumi e saldo anche al primo giro, senza
+buchi nell'intestazione): dopo ogni richiesta registrata `Completion::record`
+segnala `__usage`; `lib.rs` prezza il contatore cumulativo del turno ed emette
+`chat-progress` con `kind: "__usage"` e l'`Usage` in JSON. `chat-progress.js` lo
+salva in `run.liveUsage`; attività, Git e companion lo ignorano. Il pulsante resta
+sempre visibile: `0 token` attenuato a riposo (popover con «Questa chat» a zero,
+«Modifica prezzi» e saldo), punto pulsante e sezione «Risposta in corso» durante il
+turno, con totale = salvato all'avvio + parziale (`addUsage`). `run.baseUsage`
+conserva il totale di partenza anche se un refresh dei metadati include già il
+turno in corso. A fine turno il parziale viene sostituito dall'utilizzo restituito
+da `chat`, senza doppio conteggio.
+
 Prezzi (`config.rs`): USD per 1M token in tre voci (ingresso da cache, ingresso
 nuovo, uscita). Listino DeepSeek solo per `api.deepseek.com`: Flash e nomi legacy
 0,006 / 0,30 / 1,20, `deepseek-v4-pro` 0,044 / 1,32 / 3,96; sconto del 50% fuori
@@ -1006,8 +1050,9 @@ documenta alcuna API di pagamento: «Ricarica su DeepSeek» apre
 `https://platform.deepseek.com/top_up` nel browser con `open_external_url`, con
 l'indirizzo scritto sotto il pulsante se l'apertura fallisce.
 
-Verifica: `desktop/tests/usage-panel.cjs` (anche saldo, stati e ricarica),
-`desktop/tests/settings-flow.cjs` e test Rust su conteggio, sconto, prezzi, round trip
+Verifica: `desktop/tests/usage-panel.cjs` (anche saldo, stati, ricarica, stato a
+riposo e consumo in diretta al primo giro), `desktop/tests/settings-flow.cjs` e test
+Rust su conteggio (eventi `__usage` per richiesta), sconto, prezzi, round trip
 Firestore e lettura del saldo.
 
 ## Pannello laterale come centro operativo
@@ -1129,3 +1174,36 @@ skill se disponibile, chiama `create_chat`). Test: `desktop/tests/chat-links.cjs
 Sotto ogni messaggio utente «Modifica» permette di ripartire da quel punto:
 solo «Invia modifica» invia `edit_index` e sostituisce il seguito; annullare
 l'editor non modifica la cronologia.
+
+## Permessi senza progetto, dettatura in Ask User e avvio della sidebar — 26 novembre 2026
+
+Richieste: approvazione automatica anche nelle chat fuori da un progetto; microfono
+nelle risposte personalizzate di Ask User; all'avvio tenere aperto solo il progetto
+dell'ultima chat usata.
+
+- **Permessi nelle chat libere.** Il selettore resta visibile con Richiedi
+  approvazione e Approva per me; Accesso completo richiede un progetto. Chiave
+  riservata `permissions::CHAT_KEY` (`__chats__`): `set(Full)` fallisce con
+  `full_access_requires_project`, `get` degrada un `Full` già salvato ad Auto.
+  Le chat libere usano quella modalità come `Execution.project`.
+- **Dettatura in Ask User.** Microfono accanto a «Risposta personalizzata»
+  (`questions.js`) sulla pipeline di campo di `voice.js`; la striscia X/onda/stop
+  è `fieldVoiceStrip`, condivisa con le annotazioni. Inserimento al cursore (max
+  16000 caratteri) o, se il passaggio non è a schermo, nella bozza di quel
+  passaggio. Invio e Avanti sono bloccati finché la richiesta ha una dettatura
+  attiva; Salta, Parliamone, chiusura, Indietro e cambio chat la annullano o la
+  scartano senza perdere trascrizioni destinate ad altri passaggi.
+- **Sidebar.** Alla prima apertura per account `renderSidebar()` apre solo il
+  progetto della chat attiva (la più recente); dopo, conserva le scelte
+  dell'utente. Navigare verso una chat di un progetto chiuso, o avviare lì una
+  nuova chat, lo riapre.
+- **Menu delle chat sorelle.** `showTreeMenu()` ricavava il `projectId` anche
+  dalle righe chat e disabilitava tutte le chat di un progetto con un turno in
+  corso (da Recenti invece funzionavano). Ora il controllo di progetto vale solo
+  per l'intestazione del progetto: la chat in corso e il menu del progetto restano
+  bloccati, le chat sorelle si rinominano ed eliminano. Il backend non aveva
+  vincoli (`save_tree` + snapshot del turno). Test: `tests/project-menus.cjs`.
+
+Test: `tests/permissions.cjs`, `question-dictation.cjs`, `sidebar-startup.cjs` e
+`cargo test permissions`. Il motore di trascrizione resta Cohere Transcribe su
+CPU; Whisper (whisper.cpp con Vulkan per la GPU AMD) non è implementato.

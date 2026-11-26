@@ -38,7 +38,8 @@ function renderSettingsAccount() {
 
 function selectSettingsTab(tab) {
   settingsTab = tab;
-  for (const name of ['general', 'account', 'inference', 'voice', 'skills']) $('#settings-' + name).hidden = tab !== name;
+  for (const name of ['general', 'account', 'inference', 'voice', 'skills', 'mcp']) $('#settings-' + name).hidden = tab !== name;
+  if (tab === 'mcp') refreshMcpSettings();
   if (tab === 'account') renderSettingsAccount();
   if (tab === 'voice') { refreshSpeechModel(); refreshTtsModel(); }
   if (tab === 'inference') renderProviders();
@@ -285,6 +286,7 @@ function discardProviderEditor() {
 
 function setupSettings() {
   setupSkillSettings();
+  setupMcpSettings();
   $('#settings-search').oninput = filterSettings;
   $('#add-provider').onclick = () => editProvider();
   $('#settings-signout').onclick = async () => {

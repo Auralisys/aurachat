@@ -6,6 +6,10 @@ use tauri::{Emitter, Manager};
 #[serde(rename_all = "snake_case")]
 pub enum Mode { #[default] Ask, Auto, Full }
 
+// Chats without a project share one saved mode under this key. Document IDs cannot be `__x__`, so it never
+// collides with a project, and full access stays reserved for projects.
+pub const CHAT_KEY: &str = "__chats__";
+
 // Reference grants belong to a chat in this app session, never to the saved project.
 #[derive(Default)]
 pub struct ReferenceAccess(BTreeMap<(String, String, String), Vec<PathBuf>>);
@@ -37,8 +41,14 @@ impl Permissions {
             Err(e) => Err(e.to_string()),
         }
     }
-    pub fn get(&self, uid: &str, project: &str) -> Mode { self.0.get(uid).and_then(|p|p.get(project)).copied().unwrap_or_default() }
+    pub fn get(&self, uid: &str, project: &str) -> Mode {
+        match self.0.get(uid).and_then(|p|p.get(project)).copied().unwrap_or_default() {
+            Mode::Full if project == CHAT_KEY => Mode::Auto,
+            mode => mode,
+        }
+    }
     pub fn set(&mut self, dir: &Path, uid: &str, project: &str, mode: Mode) -> Result<(), String> {
+        if project == CHAT_KEY && mode == Mode::Full { return Err("full_access_requires_project".into()); }
         let mut next = Self(self.0.clone());
         next.0.entry(uid.into()).or_default().insert(project.into(), mode);
         let temporary = dir.join("action-permissions.tmp");
@@ -141,6 +151,10 @@ fn routine_command(program: &str, args: &[String]) -> bool {
         permissions.set(&dir,"u","p",Mode::Auto).unwrap();let saved=Permissions::load(&dir).unwrap();
         assert_eq!(saved.get("u","p"),Mode::Auto);assert_eq!(saved.get("other","p"),Mode::Ask);assert_eq!(saved.get("u","other"),Mode::Ask);
         assert!(requires_approval(Mode::Ask,true));assert!(!requires_approval(Mode::Auto,true));assert!(requires_approval(Mode::Auto,false));assert!(!requires_approval(Mode::Full,false));
+        assert_eq!(permissions.get("u",CHAT_KEY),Mode::Ask);
+        assert!(permissions.set(&dir,"u",CHAT_KEY,Mode::Full).is_err());
+        permissions.set(&dir,"u",CHAT_KEY,Mode::Auto).unwrap();assert_eq!(Permissions::load(&dir).unwrap().get("u",CHAT_KEY),Mode::Auto);
+        std::fs::write(dir.join("action-permissions.json"),r#"{"u":{"__chats__":"full"}}"#).unwrap();assert_eq!(Permissions::load(&dir).unwrap().get("u",CHAT_KEY),Mode::Auto);
         assert!(routine_command("git", &["status".into(),"--short".into()]));
         for args in [vec!["push".into()],vec!["-c".into(),"core.fsmonitor=evil".into(),"status".into()],vec!["commit".into()]] {assert!(!routine_command("git",&args));}
         assert!(!routine_command("powershell", &["git status".into()]));

@@ -299,19 +299,7 @@ function insertAnnotatorDictation(dialog, commentId, text) {
 }
 
 function annotatorVoiceStrip(dialog, commentId) {
-  const strip = document.createElement('div');strip.className = 'annotator__voice';strip.hidden = true;
-  const button = (name, label, action) => {
-    const element = document.createElement('button');element.type = 'button';element.className = `icon-button annotator__voice-btn annotator__voice-${name}`;
-    element.setAttribute('aria-label', t(label));element.title = t(label);element.append(icon(name === 'stop' ? 'stop' : 'close'));
-    element.onclick = action;
-    return element;
-  };
-  const loader = document.createElement('span');loader.className = 'annotator__voice-loader';loader.setAttribute('aria-hidden', 'true');
-  loader.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
-  const status = document.createElement('span');status.className = 'annotator__voice-status';status.setAttribute('role', 'status');
-  const wave = document.createElement('canvas');wave.className = 'annotator__voice-wave';wave.height = 32;wave.setAttribute('aria-hidden', 'true');
-  strip.append(button('cancel', 'voice.cancel', () => cancelAnnotatorDictation(dialog, commentId)), loader, status, wave, button('stop', 'voice.stop', () => stopFieldVoice()));
-  return strip;
+  return fieldVoiceStrip(() => cancelAnnotatorDictation(dialog, commentId));
 }
 
 function paintAnnotatorWave(dialog) {

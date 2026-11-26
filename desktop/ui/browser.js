@@ -142,12 +142,13 @@ function renderBrowser() {
   ['#browser-back', '#browser-forward', '#browser-reload', '#browser-external'].forEach(id => {$(id).disabled = !browser || !tab.page;});
   const capture = $('#browser-capture');
   capture.hidden = !!(tab?.page && !tab.capture);
-  capture.disabled = !browser || !tab.page || tab.busy;
+  capture.disabled = !browser || !tab.page || tab.busy || tab.oauth;
   panel.setAttribute('aria-busy', String(!!(browser && tab.loading)));
   $('#browser-progress').hidden = !browser || !tab.loading;
   $('#browser-empty').hidden = !browser || tab.page || tab.opening;
   if (!$('#browser-empty').hidden) renderNewTab();
   const address = $('#browser-address');
+  address.readOnly = !!tab?.oauth;
   const value = tab?.address ?? tab?.url ?? '';
   if (address.value !== value) address.value = value;
   address.title = tab?.title || tab?.url || '';
@@ -178,6 +179,7 @@ function saveBrowserHistory(list) {
 }
 
 function recordBrowserVisit(tab) {
+  if (tab.oauth) return;
   if (!/^https?:/i.test(tab.url || '')) return;
   const list = browserHistory(), index = list.findIndex(entry => entry.url === tab.url);
   const entry = index >= 0 ? list.splice(index, 1)[0] : {url:tab.url, title:'', visits:0};
@@ -328,8 +330,8 @@ function selectPanelTab(tab, {focus = false} = {}) {
   $(`#panel-tab-${tab.id}`).parentElement.scrollIntoView({block:'nearest', inline:'nearest'});
 }
 
-function newPanelTab(section = null) {
-  const tab = {id:crypto.randomUUID(), section, page:false, capture:false, url:'', address:'', title:'', loading:false, busy:false, opening:false, closing:false, stateVersion:0, shown:null, status:'', selected:null, filter:'all', scroll:0};
+function newPanelTab(section = null, id = crypto.randomUUID(), oauth = false) {
+  const tab = {id, oauth, section, page:false, capture:false, url:'', address:'', title:'', loading:false, busy:false, opening:false, closing:false, stateVersion:0, shown:null, status:'', selected:null, filter:'all', scroll:0};
   browserPage.tabs.push(tab);
   selectPanelTab(tab);
   if (!section) {$('#browser-address').focus();$('#browser-address').select();}
@@ -406,7 +408,13 @@ async function openBrowser(url, {focus = false, newTab = false} = {}) {
       tab.page = true;tab.capture = !!opened.capture;tab.shown = null;
       if (tab.stateVersion === version) tab.url = opened.url;
       if (tab.address === url) tab.address = tab.url;
-    } catch (error) {tab.loading = false;browserError(error, tab);}
+    } catch (error) {
+      tab.loading = false;browserError(error, tab);
+      if (tab.oauth) {
+        try {await invoke('browser_close', {tab_id:tab.id});}
+        catch (cancelError) {browserError(cancelError, tab);}
+      }
+    }
     finally {tab.opening = false;}
   });
   if (panelHasTab(tab)) renderBrowser();
@@ -421,9 +429,13 @@ async function browserAction(action) {
 
 async function openExternalBrowserPage() {
   const tab = activePanelTab();
-  if (!tab?.url) return;
-  try {await invoke('open_external_url', {url:tab.url});}
-  catch (error) {browserError(error, tab);}
+  // OAuth restarts from its authorization URL; the 127.0.0.1 callback completes it from any browser.
+  const url = tab?.oauth ? tab.authUrl : tab?.url;
+  if (!url) return;
+  try {
+    await invoke('open_external_url', {url});
+    if (tab.oauth) setBrowserStatus(t('mcp.external_note'), tab);
+  } catch (error) {browserError(error, tab);}
 }
 
 function browserCaptureName(page) {
@@ -539,6 +551,7 @@ async function setupBrowser() {
   $('#browser-address').oninput = event => {const tab = activePanelTab();if (tab && !tab.section) tab.address = event.target.value;};
   $('#browser-bar').addEventListener('submit', event => {
     event.preventDefault();
+    if (activePanelTab()?.oauth) return;
     const value = $('#browser-address').value.trim();
     if (value) {$('#browser-address').blur();openBrowser(value);}
   });
@@ -576,7 +589,29 @@ async function setupBrowser() {
     if (tab) {tab.loading = false;setBrowserStatus(t('errors.browser_blocked_url'), tab);renderBrowser();}
   });
   await appWindow.listen('browser-new-tab', ({payload}) => {
-    if (browserPage.open && browserPage.active === payload?.tab_id && typeof payload.url === 'string') openBrowser(payload.url, {newTab:true});
+    if (browserPage.open && browserPage.active === payload?.tab_id && typeof payload.url === 'string') openBrowser(payload.url, {newTab:!activePanelTab()?.oauth});
+  });
+  await appWindow.listen('mcp-oauth-open', async ({payload}) => {
+    if (!payload || payload.email !== state.config.firebase_email || !state.config.firebase_auth_set) return;
+    if (!$('#settings-overlay').hidden) closeSettings();
+    if (!$('#settings-overlay').hidden) {
+      await invoke('browser_close', {tab_id:payload.tab_id});
+      return;
+    }
+    const previous = browserPage.active;
+    const tab = newPanelTab(null, payload.tab_id, true);
+    tab.returnTo = previous;tab.authUrl = payload.url;
+    tab.title = `${payload.server} · ${t('mcp.sign_in')}`;
+    await openBrowser(payload.url);
+    setBrowserStatus(t('mcp.browser_note'), tab);
+  });
+  await appWindow.listen('mcp-oauth-close', async ({payload}) => {
+    const tab = browserPage.tabs.find(tab => tab.id === payload?.tab_id && tab.oauth);
+    if (!tab) return;
+    const restore = browserPage.tabs.find(item => item.id === tab.returnTo);
+    const wasActive = activePanelTab() === tab;
+    await closePanelTab(tab);
+    if (wasActive && restore) selectPanelTab(restore);
   });
   renderBrowser();
 }

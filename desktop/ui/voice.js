@@ -136,7 +136,7 @@ function voiceUi(message = '') {
   updateComposerControls();
   if (active && !voice.frame) drawVoiceWave();
   if (!active) { cancelAnimationFrame(voice.frame); voice.frame = null; }
-  syncAnnotatorVoice();
+  syncAnnotatorVoice();syncQuestionVoice();
 }
 
 function releaseRecording(recording) {
@@ -407,6 +407,24 @@ function cancelFieldVoice(matches = () => true) {
   }
   voiceUi();
   return released;
+}
+
+// The cancel / loader / status / waveform / stop strip shown under a field while it is dictated.
+// The classes are the annotator's (annotations.css); callers drive it from their own sync function.
+function fieldVoiceStrip(onCancel) {
+  const strip = document.createElement('div');strip.className = 'annotator__voice';strip.hidden = true;
+  const button = (name, label, action) => {
+    const element = document.createElement('button');element.type = 'button';element.className = `icon-button annotator__voice-btn annotator__voice-${name}`;
+    element.setAttribute('aria-label', t(label));element.title = t(label);element.append(icon(name === 'stop' ? 'stop' : 'close'));
+    element.onclick = action;
+    return element;
+  };
+  const loader = document.createElement('span');loader.className = 'annotator__voice-loader';loader.setAttribute('aria-hidden', 'true');
+  loader.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
+  const status = document.createElement('span');status.className = 'annotator__voice-status';status.setAttribute('role', 'status');
+  const wave = document.createElement('canvas');wave.className = 'annotator__voice-wave';wave.height = 32;wave.setAttribute('aria-hidden', 'true');
+  strip.append(button('cancel', 'voice.cancel', onCancel), loader, status, wave, button('stop', 'voice.stop', () => stopFieldVoice()));
+  return strip;
 }
 
 function restoreVoiceDraft(job) {
