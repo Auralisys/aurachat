@@ -11,12 +11,12 @@ const ARTIFACT_TYPES = [
   ['log', /\.log$/i],
 ];
 const ARTIFACT_META = {
-  image: {label:'activity.kind_image', glyph:'image'},
-  document: {label:'activity.kind_document', glyph:'file'},
-  data: {label:'activity.kind_data', glyph:'fileData'},
-  code: {label:'activity.kind_code', glyph:'fileCode'},
-  log: {label:'activity.kind_log', glyph:'terminal'},
-  file: {label:'activity.kind_file', glyph:'file'},
+  image: {label:'activity.kind_image'},
+  document: {label:'activity.kind_document'},
+  data: {label:'activity.kind_data'},
+  code: {label:'activity.kind_code'},
+  log: {label:'activity.kind_log'},
+  file: {label:'activity.kind_file'},
 };
 const SHELL_STATUS_LABELS = {
   waiting:'activity.shell_waiting', reviewing:'activity.shell_reviewing', running:'activity.running',
@@ -158,7 +158,7 @@ function artifactLead(item) {
   }
   const glyph = activityText('span', '', 'activity-glyph');
   glyph.dataset.kind = artifactType(item);glyph.setAttribute('aria-hidden', 'true');
-  glyph.append(icon(artifactMeta(item).glyph));
+  glyph.append(fileIcon(item));
   return glyph;
 }
 
@@ -298,7 +298,7 @@ function sourceRow(item, compact = false) {
     row.classList.add('activity-row--link');row.title = item.url;
     row.onclick = event => openLink(item.url, event);
   }
-  row.append(icon(web ? 'globe' : item.kind === 'image' ? 'image' : 'file'));
+  row.append(web ? icon('globe') : fileIcon(item));
   const text = activityText('span', '', 'activity-row__text');
   text.append(activityText('span', item.title, 'activity-row__title'));
   if (!compact) text.append(activityText('span', web ? `${item.summary || ''} · ${new URL(item.url).hostname}` : item.summary || '', 'activity-row__summary'));

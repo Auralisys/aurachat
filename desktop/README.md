@@ -176,7 +176,8 @@ si alternano a tutta larghezza. Quando alla chat restano al massimo 760 px,
 il riepilogo si dispone sopra i messaggi con altezza limitata e scroll proprio,
 mai in overlay, anche con il pannello a schede aperto.
 **Progetti e Recenti** si trovano sullo sfondo della finestra, fuori dal pannello
-più scuro condiviso da conversazione e riepilogo attività. In fondo alla sidebar
+più scuro della conversazione. Al suo interno, il riepilogo attività ha uno sfondo
+più chiaro con angoli arrotondati. In fondo alla sidebar
 il nome dell'account apre il suo menu; l'ingranaggio accanto apre le impostazioni.
 Non c'è una barra Home separata. A sidebar chiusa, File e le scorciatoie `Ctrl+N`
 e `Ctrl+,` danno accesso a Nuova chat e Impostazioni.
@@ -756,6 +757,13 @@ allegano **per percorso**: fino a 16 per messaggio, senza copiarli nella chat. I
 riquadro mostra un chip «solo percorso» e al modello arriva il percorso assoluto,
 che legge con i suoi strumenti solo se serve. Il telefono non può inviarli.
 
+Il placeholder del compositore è «Scrivi un messaggio…» a riposo e «Guida la
+conversazione…» durante il turno della chat corrente, anche remoto. Il grigio
+dedicato `--c-placeholder` resta più spento del testo secondario, con contrasto
+4,54:1 sul campo. L'indicazione è fuori dal flusso del contenteditable: il caret
+rimane all'inizio quando il campo è vuoto, anche dopo aver cancellato il testo o
+annullato la dettatura. Invio, coda e azione «Invia subito» non cambiano.
+
 Impostazioni → Voce gestisce Whisper Large v3 (ggml f16, ~3,1 GB): download da una
 revisione immutabile, controllo SHA-256, interruzione/ripresa e rimozione locale.
 Il modello gira con whisper.cpp su GPU tramite Vulkan (CPU se non c'è una GPU
@@ -783,26 +791,43 @@ Il test reale `tts::tests::real_download_and_synthesis` accetta
 `AURACHAT_TTS_TEST_CONFIG_DIR` per riusare i pesi gia installati in sola lettura
 e confrontare la durata con il vecchio ritmo, senza riscaricarli.
 Il registratore AudioWorklet cattura mono, ricampiona a 16 kHz e conserva l'audio
-solo in memoria. Limite due minuti, inferenza in blocchi fino a 30 secondi.
+solo in memoria. Limite due minuti. La dettatura desktop è **sempre live** in tutti
+i campi con microfono: compositore, risposte Ask User e commenti sulle immagini,
+senza opzione per disattivarla e senza correzione LLM. `preview_audio` aggiorna il
+testo dopo i primi 1,5 s di audio e poi con almeno 750 ms di nuovo audio dopo ogni
+risposta; la latenza effettiva dipende dall'inferenza. Le finestre arrivano al massimo
+a 30 s: dai 12 s si conservano i segmenti completi di Whisper, lasciando almeno
+l'ultimo secondo da rivedere. Stop rilegge l'intero clip per finalizzarlo.
+Si anima solo il testo nuovo, con fade e lieve sfocatura in sequenza da sinistra a
+destra (240 ms, ritardo massimo 180 ms), senza spostare il testo esistente.
+I textarea usano uno specchio visivo temporaneo non interattivo e nascosto alle
+tecnologie assistive; la preferenza di sistema per movimento ridotto elimina
+l'effetto, non la trascrizione live.
 La lingua segue italiano/inglese dell'interfaccia. Registrazione con forma
- d'onda: X scarta solo l'audio; Stop trascrive senza inviare; Invio trascrive e
-invia insieme al testo già scritto e agli allegati. La destinazione viene fissata
+d'onda: X scarta audio e testo provvisorio ancora posseduto dalla dettatura;
+Stop finalizza senza inviare; Invio finalizza e invia
+insieme al testo già scritto e agli allegati. Modificare a mano le parole dettate
+le conserva e fa continuare la dettatura dall'audio non ancora mostrato.
+La destinazione viene fissata
 all'avvio, prima della preparazione del modello: cambiare chat non sposta il
-risultato. Stop aggiunge il testo alla bozza della chat originale; Invio conserva
+risultato. Le anteprime e Stop aggiornano la bozza della chat originale; Invio conserva
 testo/allegati e invia nella chat originale anche se nel frattempo ne apri un'altra.
 Puoi registrare in un'altra chat mentre la prima viene trascritta: le inferenze
-sono FIFO, una alla volta, con massimo 8 trascrizioni in attesa, audio in memoria
+finali sono FIFO, una alla volta, con massimo 8 trascrizioni in attesa, audio in memoria
 e lingua/destinazione proprie. La chat interessata mostra il loader o
-“Trascrizione in coda”; le altre restano utilizzabili.
+“Trascrizione in coda”; le altre restano utilizzabili. Una sola anteprima può essere
+in corso, non si accodano anteprime obsolete e i lavori finali hanno precedenza.
 Annullare una trascrizione non annulla quelle delle altre chat; logout e chiusura
 nel tray invalidano tutte le operazioni. Un errore nell'Invio ripristina la bozza
-e gli allegati senza inviare altrove; il blocco CPU già in corso può terminare.
+e gli allegati senza inviare altrove. Un errore lascia il testo live disponibile e
+mostra l'avviso; una risposta nativa già in corso può terminare ma viene ignorata
+dopo l'annullamento.
 
 Su Windows, all'avvio effettivo della cattura vengono messe in pausa soltanto le
 sessioni multimediali già in riproduzione che espongono i controlli di sistema
 (per esempio Spotify). Non viene inviato un tasto play/pausa globale: un lettore
 già fermo non viene mai avviato. Alla fine della registrazione la musica riparte
-prima dell'inferenza, quindi durante la trascrizione, anche dopo annullamento,
+prima dell'inferenza finale, anche dopo annullamento,
 cambio chat, chiusura nel tray o logout. Riprendono soltanto le sessioni sospese
 da questa registrazione, ancora presenti, in pausa e sullo stesso brano; un
 lettore chiuso, fermato, già riavviato o passato ad altro brano non viene forzato.
@@ -1392,14 +1417,14 @@ controllo remoto invia annotazioni solo a gateway aggiornati
 
 **Dettatura nei commenti.** Ogni commento ha un microfono accanto al cestino
 (`image-annotations.js`): usa la stessa dettatura locale del compositore
-(Whisper Large v3, `prepare_speech_model`/`transcribe_audio`, pausa e ripresa
+(Whisper Large v3, `prepare_speech_model`/`preview_audio`/`transcribe_audio`, pausa e ripresa
 dei media di sistema, limite di 2 minuti, stessi messaggi e stato «Caricamento del
 modello…»). `voice.js` espone la pipeline di cattura (`captureVoice`) con due
 destinazioni: il compositore e un *campo* (`startFieldVoice`/`stopFieldVoice`/
 `cancelFieldVoice`), che occupa lo slot `voice.field` e non tocca `voice.recording`
 né `voice.pending`. Il campo è fissato all'avvio (sessione dell'editor + id del
 commento) e la coda `voice.jobs` resta FIFO e condivisa. Durante la registrazione
-compaiono X (scarta), onda e stop; alla fine il testo entra al cursore del commento,
+compaiono X (scarta), onda e stop; il testo appare live al cursore del commento,
 separato da spazi e nel limite di 1000 caratteri (se tagliato, avviso nel piede).
 Un solo commento detta alla volta e non in parallelo al microfono del compositore
 (mic disabilitato con tooltip). Esc durante la registrazione o la trascrizione la
@@ -1411,15 +1436,33 @@ trascrizione si perde in silenzio.
 **Dettatura nelle risposte personalizzate di Ask User.** Ogni passaggio ha un
 microfono accanto a «Risposta personalizzata» (`questions.js`) sulla stessa
 pipeline di campo (`startFieldVoice`); `fieldVoiceStrip` in `voice.js` fornisce
-la striscia X/onda/stop condivisa con le annotazioni. Il testo entra al cursore,
+la striscia X/onda/stop condivisa con le annotazioni. Il testo appare live al cursore,
 nel limite di 16000 caratteri; se nel frattempo il passaggio non è più a schermo
 finisce nella bozza di quel passaggio. Con una dettatura attiva «Invia risposta»
 e «Avanti» restano disabilitati; Salta annulla quella del passaggio, Parliamone
 e chiusura quella della richiesta; Indietro e cambio chat scartano solo la
 registrazione, mentre la trascrizione in corso arriva comunque nel passaggio
 giusto. Esc durante la registrazione la annulla. Test:
-`desktop/tests/question-dictation.cjs`.**Browser interno.** Il comando del pannello laterale apre le schede a destra
-della chat; il riepilogo rimane indipendente. La larghezza è trascinabile o
+`desktop/tests/question-dictation.cjs`.
+
+**Mobile invariato.** L'app Flutter, anche nella versione già installata, continua
+a registrare una WAV mono a 16 kHz e a inviarla al PC quando si termina o si invia
+la dettatura. Il relay conserva `action: transcribe`, `audio_parts`, `language`
+e il risultato finale `{"text": "..."}`: nessun nuovo protocollo, modello sul
+telefono o aggiornamento mobile richiesto per il live desktop. Il PC passa la WAV
+a `transcribe_wav`, senza applicare il limite di 30 s delle anteprime desktop.
+Restano il limite di registrazione mobile di 60 s e quello nativo batch di 120 s;
+il PC deve essere connesso e avere il modello vocale pronto.
+
+**Browser interno.** Il comando del pannello laterale apre le schede a destra
+della chat; il riepilogo rimane indipendente. La barra orizzontale delle schede è
+sottile (5 px), con il solo cursore nel colore delle scrollbar dell'app, senza
+frecce né binario visibile. Le icone per tipo file sono centralizzate in
+`icons.js` (`fileTypeIcon`/`fileIcon`): schede, allegati caricati o collegati,
+menzioni `@` nel compositore e nei messaggi, suggerimenti, Output, Fonti e lista
+Git usano lo stesso simbolo e colore. Markdown mantiene il libro blu, JSON le
+parentesi ambra, XML il codice verde e CSV/TSV la tabella verde; miniature delle
+immagini e icone delle azioni restano distinte. La larghezza è trascinabile o
 regolabile da tastiera, salvata in `localStorage`. Ogni link nelle risposte o
 nelle Fonti apre una nuova scheda; Ctrl/Cmd/Maiusc+clic e il pulsante dedicato
 usano il browser di sistema. Frecce, Home/End cambiano scheda dalla barra;

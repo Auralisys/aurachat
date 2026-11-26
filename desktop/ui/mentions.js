@@ -15,7 +15,7 @@ function isLinkedAttachment(file) {
 function attachmentChip(file) {
   const chip = document.createElement('span');chip.className = 'attachment-chip';
   const name = document.createElement('span');name.textContent = file.name;
-  chip.append(icon('file'), name);
+  chip.append(fileIcon(file), name);
   return chip;
 }
 
@@ -24,7 +24,7 @@ function linkedAttachmentChip(file) {
   const open = document.createElement('button');open.type = 'button';open.className = 'attachment-chip__open';
   open.title = file.path;open.setAttribute('aria-label', `${t('mentions.open')}: ${file.path}`);
   const name = document.createElement('span');name.textContent = file.name;
-  open.append(icon('link'), name);
+  open.append(fileIcon(file), name);
   open.onclick = () => openMentionedPath(file.path);
   chip.append(open);
   return chip;
@@ -144,6 +144,7 @@ function setupFileMentions() {
       row.className = 'skill-option mention-option';row.id = `mention-option-${index}`;row.setAttribute('role', 'option');
       row.title = file.path;
       const name = document.createElement('span');name.className = 'skill-option__name';name.textContent = file.name;
+      name.prepend(fileIcon(file));
       const where = document.createElement('span');where.className = 'skill-option__source';where.textContent = file.relative;
       row.append(name, where);
       row.addEventListener('pointerdown', event => event.preventDefault());

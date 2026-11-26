@@ -28,6 +28,10 @@ const PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADh
       if(cmd==='speech_model_status')return window.__noModel?{ready:false,busy:false,loading:false,loaded:false,downloaded:0,total:1000}:{ready:true,busy:false,loading:false,loaded:true,downloaded:1,total:1};
       if(cmd==='pause_dictation_media'){window.__paused=(window.__paused||0)+1;return;}
       if(cmd==='resume_dictation_media'){window.__resumed=(window.__resumed||0)+1;return;}
+      if(cmd==='preview_audio'){
+        if(window.__delayPreview)return new Promise(resolve=>window.__finishPreview=()=>{window.__finishPreview=null;resolve({text:window.__liveText||'',committed:'',advance:0});});
+        return {text:window.__liveText||'',committed:'',advance:0};
+      }
       if(cmd==='transcribe_audio'){
         if(window.__transcribeError){window.__transcribeError=false;throw 'speech_engine: test failure';}
         if(window.__delayTranscript)return new Promise(resolve=>window.__finishTranscript=()=>{window.__finishTranscript=null;resolve('test dettatura');});
@@ -176,6 +180,23 @@ const PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADh
 
   // Modello in caricamento o assente: stessi stati e messaggi del compositore.
   await tiles.first().locator('.image-tile__annotate').click();await annotator.waitFor();
+  await page.evaluate(()=>window.__liveText='test dettatura');
+  await recordField(0);
+  await page.waitForFunction(()=>document.querySelector('.annotator__item textarea').value.includes('test dettatura'));
+  assert.equal(await page.evaluate(()=>!!voice.field?.recording),true);
+  assert.equal(await annotator.locator('.annotator__save').isDisabled(),true);
+  await page.screenshot({path:resolve(shots,'annotator-live.png')});
+  await item(0).locator('.annotator__voice-stop').click();await page.waitForFunction(()=>!voice.jobs.length);
+  assert.equal((await texts())[0],'Ingrandisci il titolo test dettatura');
+  await mediaBack();
+  await item(0).locator('textarea').fill('Ingrandisci il titolo');
+  await page.evaluate(()=>window.__delayPreview=true);
+  await recordField(0);await page.waitForFunction(()=>window.__finishPreview);
+  await annotator.locator('.annotator__cancel').click();
+  await tiles.first().locator('.image-tile__annotate').click();await annotator.waitFor();
+  await page.evaluate(()=>{window.__delayPreview=false;window.__finishPreview();window.__liveText='';});
+  await page.waitForFunction(()=>!voice.previewWorker);await mediaBack();
+  assert.equal((await texts())[0],'Ingrandisci il titolo','Late preview cannot reach a reopened annotation');
   await page.evaluate(()=>{voice.loading=true;voiceUi();});
   assert.equal(await item(0).locator('.annotator__mic').isDisabled(),true);
   assert.equal(await item(0).locator('.annotator__mic').getAttribute('title'),locales['voice.loading_model']);

@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
   for(const name of ['open','bounds','action','close','capture']) {
     assert.match(native,new RegExp(`#\\[tauri::command\\(rename_all = "snake_case"\\)\\]\\s*pub async fn browser_${name}\\(`),'Native command argument casing must match the JS tab_id contract');
   }
-  const browser = await chromium.launch({channel:'msedge', headless:true});
+  const browser = await chromium.launch({channel:'msedge', headless:true, ignoreDefaultArgs:['--hide-scrollbars']});
   try {
     const page = await browser.newPage({viewport:{width:1440,height:900}});
     const errors=[];page.on('pageerror',error=>errors.push(error.message));
@@ -186,6 +186,15 @@ const assert = require('node:assert/strict');
     assert.equal(await page.locator('#browser-status').isHidden(),true);
     for(let i=0;i<5;i++)await page.click('#panel-add-tab');
     assert.equal(await page.locator('#panel-tabs').evaluate(el=>el.scrollWidth>el.clientWidth),true);
+    const scrollbar=await page.locator('#panel-tabs').evaluate(el=>{
+      const bar=getComputedStyle(el,'::-webkit-scrollbar'),thumb=getComputedStyle(el,'::-webkit-scrollbar-thumb');
+      const track=getComputedStyle(el,'::-webkit-scrollbar-track'),button=getComputedStyle(el,'::-webkit-scrollbar-button');
+      el.scrollLeft=0;el.scrollLeft=100;
+      return {height:bar.height,color:thumb.backgroundColor,track:track.backgroundColor,button:button.display,scrolled:el.scrollLeft,width:getComputedStyle(el).scrollbarWidth};
+    });
+    assert.equal(scrollbar.height,'5px');assert.equal(scrollbar.track,'rgba(0, 0, 0, 0)');assert.equal(scrollbar.button,'none');
+    assert.equal(scrollbar.color,'rgba(187, 147, 251, 0.28)');assert.equal(scrollbar.width,'auto');assert(scrollbar.scrolled>0);
+    await page.screenshot({path:resolve(shots,'plain-tab-scrollbar.png')});
     await page.locator('.panel-tab.is-active [role=tab]').focus();await page.keyboard.press('Home');
     assert.equal(await activeId(),first);
     await page.keyboard.press('End');

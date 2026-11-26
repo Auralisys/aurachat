@@ -112,7 +112,7 @@ function renderPanelTabs() {
     node.querySelector('.panel-tab__label').textContent = title;
     const glyphName = tab.terminal ? 'terminal' : tab.file ? tab.file.icon : tab.section === 'git' ? 'git' : {outputs:'file',sources:'sources',agents:'agents',shells:'terminal'}[tab.section] || 'globe';
     const glyph = node.querySelector('.panel-tab__icon');
-    if (glyph.dataset.icon !== glyphName) {glyph.dataset.icon = glyphName;glyph.replaceChildren(tab.file ? browserIcon(glyphName) : icon(glyphName));}
+    if (glyph.dataset.icon !== glyphName) {glyph.dataset.icon = glyphName;glyph.replaceChildren(tab.file ? fileIcon(tab.file.path) : icon(glyphName));}
     glyph.classList.toggle('is-loading', !!tab.loading);
     const close = node.querySelector('.panel-tab__close');
     close.setAttribute('aria-label', `${t('panel.close_tab')}: ${title}`);

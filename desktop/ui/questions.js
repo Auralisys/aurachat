@@ -40,33 +40,19 @@ function questionCardFor(id) {
 
 function questionVoiceTarget(item, index) {
   const live = () => questionRecord(item.conversation_id).get(item.id)?.status === 'pending';
-  return {
+  const field = () => {
+    const form = questionCardFor(item.id);
+    return form && Number(form.dataset.index) === index ? form.querySelector('textarea[name="custom"]') : null;
+  };
+  return fieldDictationTarget({
     requestId:item.id, index, valid:live,
     status(message) {
       const form = live() && questionCardFor(item.id), error = form && Number(form.dataset.index) === index && form.querySelector('.question-error');
-      if (error) {error.textContent = message;error.hidden = false;}
-    },
-    insert(text) { if (live()) insertQuestionDictation(item, index, text); }
-  };
-}
-
-// Inserts at the caret (after a selection) when the step is on screen, otherwise at the end of the draft;
-// spaced from the surrounding text and within the length limit.
-function insertQuestionDictation(item, index, text) {
-  const form = questionCardFor(item.id), answer = item.draft.answers[index];
-  const field = form && Number(form.dataset.index) === index ? form.querySelector('textarea[name="custom"]') : null;
-  const value = field ? field.value : answer.custom, at = field ? Math.min(field.selectionEnd ?? value.length, value.length) : value.length;
-  const lead = at && !/\s$/.test(value.slice(0, at)) ? ' ' : '', trail = at < value.length && !/^\s/.test(value.slice(at)) ? ' ' : '';
-  const full = `${lead}${text}${trail}`, insertion = full.slice(0, Math.max(0, QUESTION_CUSTOM_LIMIT - value.length));
-  if (insertion) {
-    if (field) {
-      field.setRangeText(insertion, at, at, 'end');
-      field.dispatchEvent(new Event('input', {bubbles:true}));
-    } else {
-      answer.action = 'answer';answer.custom = value.slice(0, at) + insertion + value.slice(at);
+      if (error) {error.textContent = message;error.hidden = !message;}
     }
-  }
-  if (insertion.length < full.length) questionVoiceTarget(item, index).status(t('questions.dictation_limit'));
+  }, field, () => item.draft.answers[index].custom,
+  text => {item.draft.answers[index].action = 'answer';item.draft.answers[index].custom = text;},
+  QUESTION_CUSTOM_LIMIT, 'questions.dictation_limit');
 }
 
 function paintQuestionWave() {

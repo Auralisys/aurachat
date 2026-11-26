@@ -230,7 +230,7 @@ function renderGitFiles(panel, side) {
       row.setAttribute('aria-busy', 'true');
     }
     action.dataset.activityFocus = `${side}:${file.path}`;
-    row.append(path);
+    row.append(fileIcon(file.path), path);
     if (pending) row.append(activityText('span', t('git.staging_pending'), 'git-file-pending'));
     row.append(stats.binary ? activityText('span', t('git.binary'), 'git-file-stats') : gitStats(stats));
     if (side === 'unstaged') {

@@ -53,6 +53,29 @@ const assert = require('node:assert/strict');
     const dialog = page.locator('dialog.paste-preview');
     const lines = count => Array.from({length:count},(_,i)=>`Riga ${i+1}: dettagli della riunione`).join('\n');
     await open('a');
+    const shots=resolve(__dirname,'../../.artifact/paste');mkdirSync(shots,{recursive:true});
+    const emptyCaret = () => page.evaluate(() => {
+      const el=composerEl(), marker=document.createElement('span');
+      marker.style.cssText='display:inline-block;width:0;height:1em';
+      getSelection().getRangeAt(0).cloneRange().insertNode(marker);
+      const left=marker.getBoundingClientRect().left, start=el.getBoundingClientRect().left+parseFloat(getComputedStyle(el).paddingLeft);
+      marker.remove();placeCaretAtEnd(el);
+      return {left,start};
+    });
+    await page.evaluate(()=>{setComposerText('');composerEl().focus();placeCaretAtEnd(composerEl());});
+    await page.screenshot({path:resolve(shots,'placeholder-idle-1440.png'),caret:'initial'});
+    let caret=await emptyCaret();
+    assert.ok(Math.abs(caret.left-caret.start)<1,`Empty caret must precede the placeholder: ${JSON.stringify(caret)}`);
+    const placeholder = await page.locator('#composer-input').evaluate(el => {
+      const hint=getComputedStyle(el,'::before').color, ink=getComputedStyle(el).color, background=getComputedStyle(el.closest('.composer__box')).backgroundColor;
+      const luminance=color=>{
+        const rgb=color.startsWith('#')?color.slice(1).match(/../g).map(v=>parseInt(v,16)):color.match(/[\d.]+/g).slice(0,3).map(Number);
+        return rgb.map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;}).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
+      };
+      return {hint:luminance(hint),ink:luminance(ink),muted:luminance(getComputedStyle(el).getPropertyValue('--c-text-muted').trim()),contrast:(luminance(hint)+.05)/(luminance(background)+.05)};
+    });
+    assert.ok(placeholder.hint<placeholder.ink && placeholder.hint<placeholder.muted,'Placeholder is visually quieter than text and secondary labels');
+    assert.ok(placeholder.contrast>=4.5,`Placeholder contrast: ${placeholder.contrast}`);
 
     // Both newline shortcuts reveal the new empty line, including in an overflowing editor.
     for (const key of ['Shift+Enter','Control+Enter']) {
@@ -97,6 +120,8 @@ const assert = require('node:assert/strict');
     assert.equal(await page.locator('#composer-input').evaluate(el=>getComputedStyle(el,'::before').content),'none','The placeholder hides while typing');
     await page.keyboard.press('Control+a');await page.keyboard.press('Delete');
     assert.equal(await page.locator('#composer-input').evaluate(el=>getComputedStyle(el,'::before').content!=='none'),true,'Deleting everything restores the placeholder');
+    caret=await emptyCaret();
+    assert.ok(Math.abs(caret.left-caret.start)<1,'A native leftover BR does not move the empty caret after the hint');
 
     await paste(lines(20));
     assert.equal(await token.count(),0,'The threshold is strictly over 20 logical lines');
@@ -161,7 +186,6 @@ const assert = require('node:assert/strict');
     await page.keyboard.press('Control+z');
     assert.equal(await token.innerText(),'89 righe','Removal can be undone');
 
-    const shots=resolve(__dirname,'../../.artifact/paste');mkdirSync(shots,{recursive:true});
     await page.evaluate(()=>placeCaretAtEnd(composerEl()));
     for (const width of [1440,768,390]) {
       await page.setViewportSize({width,height:900});
@@ -201,8 +225,25 @@ const assert = require('node:assert/strict');
     await page.waitForFunction(()=>window.__finish);
     assert.equal(await page.evaluate(()=>__calls.find(call=>call.cmd==='chat').args.content),sent.trim());
     assert.equal(await token.count(),0);
+    assert.equal(await page.locator('#composer-input').getAttribute('data-placeholder'),locales['chat.placeholder_steer']);
+    assert.equal(await page.locator('#composer-input').getAttribute('aria-placeholder'),locales['chat.placeholder_steer']);
+    await page.evaluate(()=>{composerEl().focus();placeCaretAtEnd(composerEl());});
+    for (const width of [1440,768,390]) {
+      await page.setViewportSize({width,height:900});
+      caret=await emptyCaret();
+      assert.ok(Math.abs(caret.left-caret.start)<1,`Steering placeholder keeps the caret at the start at ${width}px`);
+      await page.screenshot({path:resolve(shots,`placeholder-steering-${width}.png`),caret:'initial'});
+    }
+    await page.setViewportSize({width:1440,height:900});
+    await open('b');
+    assert.equal(await page.locator('#composer-input').getAttribute('data-placeholder'),locales['chat.placeholder'],'A different idle chat is not shown as steering');
+    await open('a');
+    assert.equal(await page.locator('#composer-input').getAttribute('data-placeholder'),locales['chat.placeholder_steer']);
+    await page.evaluate(()=>applyTranslations());
+    assert.equal(await page.locator('#composer-input').getAttribute('data-placeholder'),locales['chat.placeholder_steer'],'Translation refresh keeps the active context');
     await page.evaluate(()=>window.__finish());
     await page.waitForFunction(()=>!state.busy);
+    assert.equal(await page.locator('#composer-input').getAttribute('data-placeholder'),locales['chat.placeholder']);
     const sentChip = page.locator('#messages .msg--user .message-paste');
     assert.equal(await sentChip.count(),2,'Sent and persisted bubbles keep separate paste chips');
     assert.equal(await page.locator('#messages .msg--user').last().innerText().then(value=>value.includes('Riga 89:')),false,'Full pasted text is not in the bubble');

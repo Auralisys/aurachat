@@ -2,7 +2,12 @@
 .browser-panel { --browser-width:clamp(360px, 46%, 960px); position:relative; flex:0 0 var(--browser-width); min-width:0; display:flex; flex-direction:column; border-left:1px solid var(--c-border); background:var(--c-sidebar); }
 .workspace:has(#view-chat[hidden]) .browser-panel { display:none; }
 .panel-tabbar { display:flex; align-items:center; gap:4px; min-height:56px; flex:none; padding:8px; }
-.panel-tabs { display:flex; align-items:center; gap:4px; max-width:calc(100% - 112px); min-width:0; overflow-x:auto; scrollbar-width:thin; overscroll-behavior-x:contain; }
+.panel-tabs { display:flex; align-items:center; gap:4px; max-width:calc(100% - 112px); min-width:0; overflow-x:auto; scrollbar-width:auto; overscroll-behavior-x:contain; }
+.panel-tabs::-webkit-scrollbar { height:5px; }
+.panel-tabs::-webkit-scrollbar-track,.panel-tabs::-webkit-scrollbar-corner { background:transparent; }
+.panel-tabs::-webkit-scrollbar-thumb { background:var(--scrollbar-thumb); border:0; border-radius:var(--radius-full); }
+.panel-tabs::-webkit-scrollbar-thumb:hover { background:var(--scrollbar-thumb-hover); }
+.panel-tabs::-webkit-scrollbar-button { display:none; width:0; height:0; }
 .panel-tab { display:flex; align-items:center; flex:0 0 168px; min-width:0; height:34px; border:1px solid transparent; border-radius:var(--radius-md); color:var(--c-text-muted); }
 .panel-tab.is-active { background:var(--c-hover); border-color:var(--c-soft-border); color:var(--c-text); }
 .panel-tab:not(.is-active):hover { background:color-mix(in oklab, var(--c-hover) 60%, transparent); color:var(--c-text); }
@@ -10,10 +15,8 @@
 .panel-tab__label { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .panel-tab__icon { display:flex; flex:none; align-items:center; }
 .panel-tab__icon .ui-icon { width:15px; height:15px; }
-.panel-tab__icon[data-icon="BookOpen"],.panel-tab__icon[data-icon="Image"] { color:#a0c9ec; }
-.panel-tab__icon[data-icon="Braces"] { color:#e7bd90; }
-.panel-tab__icon[data-icon="CodeXml"],.panel-tab__icon[data-icon="Table2"] { color:#9ed7ad; }
 .panel-tab__icon.is-loading { color:var(--c-glow); }
+.panel-tab__icon.is-loading .file-icon { color:inherit; }
 .panel-tab__close { flex:none; width:24px; height:28px; margin-right:2px; }
 .panel-tab__close .ui-icon { width:12px; height:12px; }
 .panel-tabbar > .icon-button,.panel-window-actions { flex:none; }

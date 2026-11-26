@@ -62,6 +62,7 @@ const assert = require('node:assert/strict');
     assert.equal(await page.evaluate(() => __calls.filter(call => call.cmd === 'chat').length), 0);
     await fulfill(0, [file('README.md'), file('src/readme-notes.md')]);
     await options.last().waitFor();assert.equal(await options.count(), 2);
+    assert.equal(await options.first().locator('.file-icon').getAttribute('data-file-icon'),'BookOpen');
     assert.match(await options.first().textContent(), /README\.md/);
     await input.press('ArrowDown');assert.equal(await input.getAttribute('aria-activedescendant'), 'mention-option-1');
     await input.press('ArrowUp');
@@ -81,6 +82,7 @@ const assert = require('node:assert/strict');
     assert.equal(await text(), 'guarda C:\\work\\proj\\src\\readme-notes.md ');
     assert.equal(await chips.first().textContent(), 'readme-notes.md');
     assert.equal(await chips.first().getAttribute('title'), 'C:\\work\\proj\\src\\readme-notes.md');
+    assert.equal(await chips.first().locator('.file-icon').getAttribute('data-file-icon'),'BookOpen');
     assert.deepEqual(await page.evaluate(() => composerParts().filter(part => part.pasted)), [{text:'C:\\work\\proj\\src\\readme-notes.md', pasted:true, kind:'file'}]);
     await input.pressSequentially('e dimmi');assert.equal(await text(), 'guarda C:\\work\\proj\\src\\readme-notes.md e dimmi');
 
@@ -116,6 +118,23 @@ const assert = require('node:assert/strict');
     assert.equal(await page.locator('#linked-note').isHidden(), true);
     assert.equal(await page.locator('#attachment-note').isVisible(), true);
     assert.equal(await page.locator('#composer-attachments .attachment-chip--linked').count(), 0);
+    assert.equal(await page.locator('#composer-attachments .file-icon').getAttribute('data-file-icon'),'BookOpen');
+    // Uploaded, linked, mentioned, sent and listed files share the tab's exact glyph and color.
+    const shared = await page.evaluate(() => {
+      const types=['notes.MD','data.json','layout.xml','table.csv','screen.png','index.html','app.ts','config.yaml','.gitignore','trace.log','unknown.bin'];
+      return types.map(name=>{
+        const file={name,path:`C:\\work\\proj\\${name}`,content:''};
+        const message=document.createElement('div');
+        renderMessagePastes(message,{content:file.path,pastes:[{start:0,end:file.path.length,kind:'file'}]});
+        const nodes=[attachmentChip(file),linkedAttachmentChip(file),mentionToken(file.path),message,sourceRow({title:name,path:file.path,id:name}),artifactLead(file)];
+        const host=document.createElement('div');host.append(...nodes);document.body.append(host);
+        const icons=nodes.map(node=>{const icon=node.querySelector('.file-icon');return {glyph:icon.dataset.fileIcon,shape:icon.innerHTML,color:getComputedStyle(icon).color};});
+        host.remove();return {name,icons};
+      });
+    });
+    for(const {name,icons} of shared) assert(icons.every(icon=>JSON.stringify(icon)===JSON.stringify(icons[0])),`Consistent ${name} icons across surfaces`);
+    assert.equal(shared[0].icons[0].glyph,'BookOpen');assert.equal(shared[0].icons[0].color,'rgb(160, 201, 236)');
+    assert.equal(shared.at(-1).icons[0].glyph,'File');
 
     assert.deepEqual(errors, []);
     console.log('mentions OK');

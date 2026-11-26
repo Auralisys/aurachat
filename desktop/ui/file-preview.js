@@ -3,17 +3,6 @@ function displayFilePath(path) {
   return path.replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\/, '');
 }
 
-function fileTabIcon(path) {
-  const name=pathName(path).toLowerCase();
-  if (/^\.git(?:attributes|ignore|modules)$/.test(name)) return 'GitBranch';
-  if (/\.html?$/.test(name)) return 'Globe';
-  if (/\.(md|markdown)$/.test(name)) return 'BookOpen';
-  if (/\.jsonl?$/.test(name)) return 'Braces';
-  if (/\.xml$/.test(name)) return 'CodeXml';
-  if (/\.(csv|tsv)$/.test(name)) return 'Table2';
-  return {image:'Image',document:'FileText',code:'FileCode',data:'Settings2',log:'FileTerminal',file:'File'}[artifactType({path})];
-}
-
 function projectFileLocation(input) {
   let path = displayFilePath(input);
   if (/^file:/i.test(path)) {
@@ -47,7 +36,7 @@ async function openProjectFile(input, projectId = mentionProjectId()) {
   const roots=(project?.source_folders || []).map(displayFilePath).sort((a,b)=>b.length-a.length);
   const root=roots.find(folder=>location.path.startsWith(folder.replace(/[\\/]$/,'')+separator));
   const file = {...location, projectId, projectName:project?.name, relative:root ? location.path.slice(root.length).replace(/^[\\/]+/,'') : location.path,
-    html:/\.html?$/i.test(location.path), view:activityText('div','','file-preview'), icon:fileTabIcon(location.path)};
+    html:/\.html?$/i.test(location.path), view:activityText('div','','file-preview'), icon:fileTypeIcon(location.path)};
   $('#file-previews').append(file.view);
   const tab = newPanelTab(null,crypto.randomUUID(),false,file);
   await loadProjectFile(tab);

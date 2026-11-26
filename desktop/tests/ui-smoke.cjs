@@ -53,9 +53,9 @@ const assert = require('node:assert/strict');
  assert.equal(await page.locator('.workspace #messages, .workspace #activity-dock').count(),2);
  assert.ok(await page.evaluate(()=>{
   const rgb = el=>getComputedStyle(el).backgroundColor.match(/\d+/g).slice(0,3).map(Number);
-  const project=rgb(document.querySelector('#sidebar')), chat=rgb(document.querySelector('.workspace'));
-  return chat.every((v,i)=>v<project[i]) && getComputedStyle(document.querySelector('#activity-card')).backgroundColor==='rgba(0, 0, 0, 0)';
- }),'Messages and activity share a surface darker than the projects sidebar');
+  const project=rgb(document.querySelector('#sidebar')), chat=rgb(document.querySelector('.workspace')), card=rgb(document.querySelector('#activity-card'));
+  return chat.every((v,i)=>v<project[i] && v<card[i]);
+ }),'The projects sidebar and the activity card both stay lighter than the conversation');
  await page.click('#btn-new-chat');
  assert.equal(await page.locator('#conversation-title').textContent(),'Nuova chat');
  await page.click('#nav-back');

@@ -263,11 +263,13 @@ function updateAnnotatorSave() {
 function annotatorVoiceTarget(dialog, commentId) {
   const session = dialog._session;
   const live = () => annotator === dialog && dialog.open && dialog._session === session && dialog._comments.some(comment => comment.id === commentId);
-  return {
+  return fieldDictationTarget({
     dialog, commentId, valid: live,
-    status(message) { if (live()) {dialog._voiceMessage = message;updateAnnotatorSave();} },
-    insert(text) { if (live()) insertAnnotatorDictation(dialog, commentId, text); }
-  };
+    status(message) { if (live()) {dialog._voiceMessage = message;updateAnnotatorSave();} }
+  }, () => dialog.querySelector(`[data-comment="${commentId}"] textarea`),
+  () => dialog._comments.find(comment => comment.id === commentId).text,
+  text => {dialog._comments.find(comment => comment.id === commentId).text = text;},
+  ANNOTATION_LIMIT.text, 'annotations.text_limit');
 }
 
 function annotatorVoiceMatcher(dialog, commentId) {
@@ -281,21 +283,6 @@ function cancelAnnotatorDictation(dialog, commentId) {
 function startAnnotatorDictation(dialog, commentId) {
   dialog._voiceMessage = '';updateAnnotatorSave();
   return startFieldVoice(annotatorVoiceTarget(dialog, commentId));
-}
-
-// Inserts at the caret (after a selection), spaced from the surrounding text and within the length limit.
-function insertAnnotatorDictation(dialog, commentId, text) {
-  const comment = dialog._comments.find(comment => comment.id === commentId);
-  const field = dialog.querySelector(`[data-comment="${commentId}"] textarea`);
-  if (!comment || !field) return;
-  const value = field.value, at = Math.min(field.selectionEnd ?? value.length, value.length);
-  const lead = at && !/\s$/.test(value.slice(0, at)) ? ' ' : '', trail = at < value.length && !/^\s/.test(value.slice(at)) ? ' ' : '';
-  const room = ANNOTATION_LIMIT.text - value.length, insertion = `${lead}${text}${trail}`;
-  if (room > 0) {
-    field.setRangeText(insertion.slice(0, room), at, at, 'end');
-    field.dispatchEvent(new Event('input', {bubbles:true}));
-  }
-  if (insertion.length > room) {dialog._voiceMessage = t('annotations.text_limit');updateAnnotatorSave();}
 }
 
 function annotatorVoiceStrip(dialog, commentId) {

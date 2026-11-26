@@ -182,8 +182,10 @@ Whisper Large v3 (ggml f16, `ggml-large-v3.bin`), scaricabile in Impostazioni �
 Voce (~3,1 GB), con verifica SHA-256 e download riprendibile. Inferenza locale con
 whisper.cpp (transcribe-rs, feature `whisper-vulkan`) sulla GPU tramite Vulkan;
 audio solo in memoria,
-mono a 16 kHz, massimo due minuti. Stop trascrive nella bozza; Invio trascrive e
-invia insieme a testo e allegati; X scarta la registrazione. La forma d'onda
+mono a 16 kHz, massimo due minuti. Il testo compare mentre si parla in tutti i
+campi desktop con microfono, senza interruttore. Stop finalizza nella bozza;
+Invio finalizza e invia insieme a testo e allegati; X scarta audio e testo
+provvisorio, conservando le modifiche manuali. La forma d'onda
 avanza di una barretta ogni 100 ms, indipendentemente dalla frequenza del
 microfono (circa 12,5 volte più lenta della versione iniziale a 16 kHz).
 Dettagli UI in [[UI desktop - Refactor flat]]. Test browser con AudioWorklet
@@ -192,14 +194,63 @@ Il microfono fisico e il dialogo permessi del WebView restano da provare manualm
 
 **Da Cohere a Whisper.** Whisper sostituisce del tutto Cohere Transcribe INT4
 (CPU, ~2 GB): all'avvio `Speech::new` elimina in background
-`models/cohere-int4-2c870f89`. Il clip intero (≤120 s) va a `WhisperEngine`
-con la lingua scelta, senza più spezzarlo. Test reale
+`models/cohere-int4-2c870f89`. Alla finalizzazione il clip intero (≤120 s) va a
+`WhisperEngine` con la lingua scelta. Durante la cattura si usano finestre mobili
+per le anteprime live. Test reale
 (`speech::tests::real_download_and_transcription`, `AURACHAT_TEST_WAV`,
 `AURACHAT_TEST_LANG`, `AURACHAT_TEST_EXPECT`) su RX 9070 XT: caricamento ~4,9 s,
 frase inglese 2,4 s al primo giro e 0,73 s al secondo, frase italiana 0,8 s,
 entrambe esatte. Build: Vulkan SDK in `VULKAN_SDK`, ambiente `vcvars64` e
 `CARGO_TARGET_DIR` corto (es. `C:\act`): con il target nel repo MSBuild fallisce
 nel sottoprogetto `vulkan-shaders-gen` (FTK1011, «No CMAKE_C_COMPILER»).
+
+### Dettatura sempre live — 26 novembre 2026
+
+`voice.js` usa `preview_audio` per compositore, Ask User e annotazioni. La prima
+richiesta parte dopo 1,5 s; tra una risposta e la successiva richiesta servono
+almeno 750 ms di nuovo audio. Finestre limitate a 30 s, avanzamento sui timestamp
+dei segmenti completi dai 12 s, con l'ultimo secondo ancora rivedibile. Nessun LLM,
+nuovo download, servizio esterno o opzione live/batch.
+
+Una sola inferenza alla volta: le anteprime non si accodano, le finalizzazioni FIFO
+hanno precedenza. Stop interrompe subito la cattura e attende l'eventuale anteprima
+già in corso; X, logout e chiusura ignorano i risultati obsoleti. Bozza, account,
+chat, passaggio o commento restano fissati all'avvio. Il testo già presente, gli
+allegati e i token file/incolla non vengono ricreati. Le modifiche fuori dal tratto
+dettato spostano il suo intervallo; modificare le parole dettate le rende manuali e
+fa proseguire dall'audio non ancora mostrato. Errori espliciti, nessun invio
+automatico dopo un errore, testo provvisorio recuperabile.
+
+Solo i caratteri nuovi hanno fade/sfocatura in sequenza da sinistra a destra;
+il prefisso invariato non lampeggia. I textarea restano nativi e modificabili:
+uno specchio temporaneo, `aria-hidden` e senza eventi, riproduce l'effetto senza
+muovere cursore o selezione. Con movimento ridotto il testo appare senza effetto.
+
+Copertura: `voice-flow.cjs`, `question-dictation.cjs`, `image-annotations.cjs` e
+`speech::tests::preview_keeps_unfinished_tail_and_bounds_windows`.
+`speech::tests::real_live_transcription` usa il modello già installato e una WAV
+locale (`AURACHAT_TEST_WAV`, `AURACHAT_TEST_LANG`, `AURACHAT_TEST_EXPECT`), senza
+download. Fixture sintetica italiana di 38 s su RX 9070 XT: anteprime ogni 2 s
+di audio, inferenze 264–2765 ms nelle due prove, avanzamento su quattro finestre
+e testo finale completo. Le ipotesi parziali possono essere corrette dal modello;
+i tempi non sono una garanzia di latenza né una misura del microfono fisico.
+Il companion mobile, comprese le versioni già installate che supportano la
+dettatura, mantiene l'esperienza batch: registra WAV PCM 16 bit, mono, 16 kHz
+(massimo 60 s), carica parti da 500000 byte nel relay e invia `action: transcribe`,
+`audio_parts`, `language`. Il gateway ricompone la WAV, chiama `transcribe_wav` e
+restituisce `{"text": "..."}`; il telefono inserisce il testo e lo invia solo se
+era stato richiesto. Nessun modello o live sul telefono, nessun cambio di
+protocollo o aggiornamento mobile necessario. Il limite live di 30 s non si
+applica al batch, che sul PC resta di 120 s. Restano i controlli di PC connesso,
+modello pronto e modello occupato. Il test reale sopra verifica anche che la WAV
+mobile intera dia lo stesso testo finale dopo le anteprime live; la prova usa
+una fixture locale, non il telefono fisico né Firestore di produzione.
+
+Verifiche finali: percorso WAV mobile di 38 s con risultato identico al batch
+desktop dopo le anteprime; 16 test Flutter sui controlli del compositore e sugli
+allegati. Il codice mobile e `companion.rs` restano invariati. I test desktop
+coprono anche icone condivise, scrollbar, placeholder contestuale e caret dopo
+annullamento. Installazione PROD rinviata a una successiva richiesta dell'utente.
 
 ### Lettura ad alta voce con Kokoro — 12 novembre 2026
 

@@ -86,7 +86,7 @@ function applyTranslations() {
   document.querySelectorAll('[data-i18n]').forEach((el) => (el.textContent = t(el.dataset.i18n)));
   document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
     const value = t(el.dataset.i18nPlaceholder);
-    if (el.isContentEditable) el.setAttribute('data-placeholder', value);
+    if (el.isContentEditable) {el.setAttribute('data-placeholder', value);el.setAttribute('aria-placeholder', value);}
     else el.setAttribute('placeholder', value);
   });
   document.querySelectorAll('[data-i18n-aria-label]').forEach((el) => el.setAttribute('aria-label', t(el.dataset.i18nAriaLabel)));
@@ -1472,6 +1472,11 @@ function updateComposerControls() {
   const recording = !!voice.recording;
   const notReady = state.preparing || state.loadingConversation || state.changingModel || activeConversation()?.conversation.messages_loaded === false;
   const busy = state.busy, run = state.runs.get(state.activeConversationId);
+  const input = composerEl(), placeholderKey = busy ? 'chat.placeholder_steer' : 'chat.placeholder';
+  const placeholder = t(placeholderKey);
+  input.dataset.i18nPlaceholder = placeholderKey;
+  input.dataset.placeholder = placeholder;
+  input.setAttribute('aria-placeholder', placeholder);
   const preparingImages = !!imageJobs.get(state.activeConversationId);
   // Composer vuoto durante un turno: solo Stop. Con un messaggio scritto: Stop e Invia (accodato).
   // Durante la registrazione vocale lo stop del modello non ha senso: resta solo Invia (trascrivi e invia).

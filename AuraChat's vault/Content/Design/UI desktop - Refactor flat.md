@@ -22,18 +22,33 @@ sidebar unica con account nel footer.
 - **Barra superiore:** indietro, avanti, compressione della sidebar e
   menu File, Modifica, Vista e Guida; restano i controlli finestra Windows.
   Indietro e avanti navigano le viste chat visitate nella sessione.
-- **Pannello principale arrotondato:** la conversazione e il riepilogo attività
-  condividono la superficie più scura; Progetti e Recenti restano sullo sfondo
-  più chiaro della finestra. Comprimere la sidebar libera tutta la sua larghezza.
+- **Pannello principale arrotondato:** la conversazione resta sulla superficie
+  più scura. Al suo interno, Output, Fonti e Subagenti condividono una card più
+  chiara (`--c-panel`); Progetti e Recenti restano sullo sfondo della finestra.
+  Comprimere la sidebar libera tutta la sua larghezza.
 - **Sidebar progetti:** marchio AuraChat, Nuova chat, Progetti e Recenti.
   Il pulsante Nuovo progetto compare soltanto sulla riga Progetti.
   Progetti e cartelle hanno icone SVG coerenti, senza il precedente quadrato
   vuoto; restano creazione, rinomina e organizzazione delle conversazioni.
 - **Area chat:** nome della conversazione in alto a sinistra, token/contesto
   nell'header, messaggi utente a destra e risposte senza card aggiuntive.
+- **Placeholder del compositore:** «Scrivi un messaggio…» a riposo, «Guida la
+  conversazione…» durante un turno della chat corrente, locale o remoto.
+  Grigio dedicato `--c-placeholder` (`#9c97a1`, contrasto 4,54:1 sul campo),
+  distinto dal testo scritto. Lo pseudo-elemento è posizionato fuori dal flusso:
+  il caret vuoto resta all'inizio anche dopo cancellazione o dettatura annullata.
+  Aggiornato anche `aria-placeholder`; invio e gestione della coda non cambiano.
 - **Schede file:** globo per le pagine HTML locali, parentesi graffe per JSON,
   tag per XML, libro per Markdown. Il documento Markdown alterna lettura (occhio)
   e sorgente modificabile (`<>`); il salvataggio è esplicito.
+- **Icone file condivise:** `fileTypeIcon`/`fileIcon` in `desktop/ui/icons.js`
+  stabiliscono lo stesso simbolo e colore in schede, allegati caricati e collegati,
+  menzioni e suggerimenti `@`, messaggi inviati, Output, Fonti e lista Git.
+  Markdown usa il libro blu, JSON le parentesi ambra, XML il codice verde,
+  CSV/TSV la tabella verde. Miniature immagini e icone delle azioni restano distinte.
+- **Scorrimento schede:** barra orizzontale nativa personalizzata, alta 5 px,
+  con solo il cursore nel colore delle scrollbar dell'app; nessuna freccia o
+  binario visibile. Restano scorrimento da tastiera e visibilità del tab selezionato.
 - **Terminale manuale:** + → Terminale apre PowerShell (ConPTY) nella cartella
   del progetto; la sessione resta viva cambiando scheda. Chiudere una shell
   attiva chiede conferma («Chiudi terminale?», Annulla predefinito) con

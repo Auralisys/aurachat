@@ -14,6 +14,9 @@ const LEGACY_DIR: &str = "models/cohere-int4-2c870f89";
 #[derive(Clone, Serialize)]
 pub struct ModelStatus { pub ready: bool, pub busy: bool, pub loading: bool, pub loaded: bool, pub downloaded: u64, pub total: u64 }
 
+#[derive(Debug, Serialize)]
+pub struct Preview { pub text: String, pub committed: String, pub advance: usize }
+
 pub struct Speech {
     root: PathBuf,
     busy: AtomicBool,
@@ -150,17 +153,47 @@ impl Speech {
     }
 
     pub fn transcribe(&self, samples: Vec<f32>, language: String) -> Result<String, String> {
-        let _guard = self.operation()?;
+        Ok(self.infer(&samples, &language)?.text.trim().to_string())
+    }
+
+    pub fn preview(&self, samples: Vec<f32>, language: String) -> Result<Preview, String> {
         validate_audio(&samples, &language)?;
+        if samples.len() > 16000 * 30 { return Err("speech_invalid_audio".into()); }
+        let result = self.infer(&samples, &language)?;
+        Ok(Self::preview_result(result, samples.len()))
+    }
+
+    fn infer(&self, samples: &[f32], language: &str) -> Result<transcribe_rs::TranscriptionResult, String> {
+        let _guard = self.operation()?;
+        validate_audio(samples, language)?;
         if !self.status().ready { return Err("speech_model_missing".into()); }
         if samples.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / (samples.len() as f64) < 0.000001 { return Err("speech_silence".into()); }
         self.cancel.store(false, Ordering::SeqCst);
         let mut model = self.model.lock().map_err(|_| "speech_engine")?;
         self.load_model(&mut model)?;
-        let params = WhisperInferenceParams { language: Some(language), ..Default::default() };
+        let params = WhisperInferenceParams { language: Some(language.into()), ..Default::default() };
         // whisper.cpp slides its own 30 s window over the whole clip (at most 120 s).
-        let text = model.as_mut().unwrap().transcribe_with(&samples, &params).map_err(|e| format!("speech_engine: {e}"))?.text;
-        Ok(text.trim().to_string())
+        model.as_mut().unwrap().transcribe_with(samples, &params).map_err(|e| format!("speech_engine: {e}"))
+    }
+
+    fn preview_result(result: transcribe_rs::TranscriptionResult, samples: usize) -> Preview {
+        let mut preview = Preview { text: result.text.trim().into(), committed: String::new(), advance: 0 };
+        if samples < 16000 * 12 { return preview; }
+        // Keep the unfinished tail; move only across Whisper's complete segment boundaries.
+        for segment in result.segments.unwrap_or_default() {
+            let end = (segment.end * 16000.0) as usize;
+            if end <= preview.advance || end > samples.saturating_sub(16000) { break; }
+            preview.committed.push_str(&segment.text);
+            preview.advance = end;
+        }
+        // Continuous speech may fill a whole window without a usable timestamp.
+        // Stop re-decodes the complete clip, including this provisional boundary.
+        if preview.advance == 0 && samples == 16000 * 30 {
+            preview.committed = preview.text.clone();
+            preview.advance = samples;
+        }
+        preview.committed = preview.committed.trim().into();
+        preview
     }
 
     /// Transcribes a WAV uploaded by a paired phone. The phone records 16 kHz,
@@ -187,6 +220,25 @@ fn validate_audio(samples: &[f32], language: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn preview_keeps_unfinished_tail_and_bounds_windows() {
+        let result = || transcribe_rs::TranscriptionResult {
+            text: "Prima frase. Seconda frase.".into(),
+            segments: Some(vec![
+                transcribe_rs::TranscriptionSegment { start: 0.0, end: 6.0, text: "Prima frase.".into() },
+                transcribe_rs::TranscriptionSegment { start: 6.0, end: 12.0, text: " Seconda frase.".into() },
+            ]),
+        };
+        assert_eq!(Speech::preview_result(result(), 16000 * 10).advance, 0);
+        let preview = Speech::preview_result(result(), 16000 * 12);
+        assert_eq!(preview.text, "Prima frase. Seconda frase.");
+        assert_eq!(preview.committed, "Prima frase.");
+        assert_eq!(preview.advance, 16000 * 6);
+        let full = Speech::preview_result(transcribe_rs::TranscriptionResult {text:"Continuous speech".into(), segments:None}, 16000 * 30);
+        assert_eq!(full.advance, 16000 * 30);
+        assert_eq!(full.committed, full.text);
+        let service = Speech::new(&std::env::temp_dir());
+        assert_eq!(service.preview(vec![0.1; 16000 * 30 + 1], "it".into()).unwrap_err(), "speech_invalid_audio");
+    }
     #[test] fn audio_boundary_validation() {
         assert!(validate_audio(&vec![0.1; 1600], "it").is_ok());
         assert!(validate_audio(&vec![f32::NAN; 1600], "it").is_err());
@@ -230,5 +282,42 @@ mod tests {
             assert!(text.to_lowercase().contains(&expected));
             assert!(service.status().ready && !service.status().busy);
         }
+    }
+    #[test] #[ignore = "uses installed Whisper and a local WAV; never downloads or changes app data"]
+    fn real_live_transcription() {
+        let config = PathBuf::from(std::env::var("APPDATA").unwrap()).join("dev.aurachat.desktop");
+        let service = Speech::new(&config);
+        assert!(service.status().ready);
+        service.prepare().unwrap();
+        let samples = transcribe_rs::audio::read_wav_samples(&PathBuf::from(std::env::var("AURACHAT_TEST_WAV").unwrap())).unwrap();
+        let language = std::env::var("AURACHAT_TEST_LANG").unwrap_or_else(|_| "en".into());
+        let expected = std::env::var("AURACHAT_TEST_EXPECT").unwrap_or_else(|_| "country".into());
+        let mut from = 0;
+        let mut committed = String::new();
+        let mut saw_text = false;
+        let mut saw_advance = false;
+        for end in (16000 * 2..samples.len()).step_by(16000 * 2) {
+            let end = end.min(from + 16000 * 30);
+            let started = std::time::Instant::now();
+            let preview = service.preview(samples[from..end].to_vec(), language.clone()).unwrap();
+            let text = format!("{committed} {}", preview.text).trim().to_string();
+            println!("LIVE {}", serde_json::json!({"seconds":end as f64/16000.0,"elapsed_ms":started.elapsed().as_millis(),"text":text,"advance":preview.advance}));
+            saw_text |= !text.is_empty();
+            if preview.advance > 0 {
+                saw_advance = true;
+                committed = format!("{committed} {}", preview.committed).trim().to_string();
+                from += preview.advance;
+            }
+        }
+        assert!(saw_text);
+        if samples.len() > 16000 * 30 { assert!(saw_advance); }
+        let text = service.transcribe(samples, language.clone()).unwrap();
+        println!("FINAL {text}");
+        assert!(text.to_lowercase().contains(&expected));
+        let wav = fs::read(std::env::var("AURACHAT_TEST_WAV").unwrap()).unwrap();
+        let mobile_text = service.transcribe_wav(wav, &language).unwrap();
+        println!("MOBILE_FINAL {mobile_text}");
+        assert_eq!(mobile_text, text, "Legacy mobile WAV must keep the complete batch result after live previews");
+        assert!(!service.status().busy);
     }
 }

@@ -65,7 +65,7 @@ function renderMessagePastes(target, message) {
     if (part.kind === 'file') {
       chip.classList.add('mention-token');chip.title = part.text;
       chip.setAttribute('aria-label', `${t('mentions.open')}: ${part.text}`);
-      chip.append(icon('file'), document.createTextNode(pathName(part.text)));
+      chip.append(fileIcon(part.text), document.createTextNode(pathName(part.text)));
       chip.onclick = () => openMentionedPath(part.text);
       target.append(chip);continue;
     }

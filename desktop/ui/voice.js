@@ -1,7 +1,231 @@
 // `field` is a dictation aimed at a text field outside the composer (e.g. an image comment): at most one
 // at a time, sharing the microphone, the model and the FIFO of `jobs` with the composer. Its jobs carry
 // `field` (the target) instead of a conversation, so composer code must ignore them.
-const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: null, capture: null, mediaOperation: null, transcribing: false, jobs: [], worker: null, downloading: false, loading: false, loaded: false, ttsDownloading: false, nativeOperation: null, conversationId: null, field: null };
+const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: null, capture: null, mediaOperation: null, transcribing: false, jobs: [], worker: null, previewWorker: null, downloading: false, loading: false, loaded: false, ttsDownloading: false, nativeOperation: null, conversationId: null, field: null };
+
+const speechInference = () => ['transcribe_audio', 'preview_audio'].includes(voice.nativeOperation?.command);
+const joinDictation = (before, after) => [before, after].filter(Boolean).join(' ');
+
+function dictationReveal(text) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return document.createTextNode(text);
+  const fragment = document.createDocumentFragment(), words = text.match(/\S+\s*|\s+/gu) || [];
+  words.forEach((word, index) => {
+    const span = document.createElement('span');span.className = 'voice-reveal-word';span.textContent = word;
+    span.style.setProperty('--voice-delay', `${Math.min(index * 28, 180)}ms`);
+    fragment.append(span);
+  });
+  return fragment;
+}
+
+// Textareas cannot style a substring. Briefly mirror the value while leaving the
+// real field, caret, selection and input handling in place; never animate old text.
+function revealDictationField(field, start, length) {
+  field._voiceRevealCleanup?.();
+  if (!length || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const style = getComputedStyle(field), box = field.getBoundingClientRect(), parent = field.parentElement.getBoundingClientRect();
+  const mirror = document.createElement('div');mirror.className = 'voice-field-reveal';mirror.setAttribute('aria-hidden', 'true');
+  for (const name of ['fontFamily','fontSize','fontWeight','fontStyle','lineHeight','letterSpacing','textAlign','textIndent','textTransform','paddingTop','paddingRight','paddingBottom','paddingLeft','wordBreak','overflowWrap','tabSize','direction']) mirror.style[name] = style[name];
+  Object.assign(mirror.style, {
+    left:`${box.left - parent.left - field.parentElement.clientLeft + field.parentElement.scrollLeft + field.clientLeft}px`,
+    top:`${box.top - parent.top - field.parentElement.clientTop + field.parentElement.scrollTop + field.clientTop}px`,
+    width:`${field.clientWidth}px`, height:`${field.clientHeight}px`, color:style.color
+  });
+  mirror.append(document.createTextNode(field.value.slice(0, start)), dictationReveal(field.value.slice(start, start + length)), document.createTextNode(field.value.slice(start + length)));
+  field.parentElement.append(mirror);mirror.scrollTop = field.scrollTop;mirror.scrollLeft = field.scrollLeft;
+  field.style.setProperty('--voice-caret', style.caretColor);
+  field.classList.add('voice-field-revealing');
+  const cleanup = () => {
+    clearTimeout(timer);observer.disconnect();mirror.remove();field.classList.remove('voice-field-revealing');field.style.removeProperty('--voice-caret');
+    field.removeEventListener('input', cleanup);field.removeEventListener('scroll', cleanup);field._voiceRevealCleanup = null;
+  };
+  // Ignore the observer's initial notification.
+  let observed = false;
+  const timer = setTimeout(cleanup, 450), observer = new ResizeObserver(() => {if (observed) cleanup();observed = true;});
+  observer.observe(field);
+  field._voiceRevealCleanup = cleanup;
+  field.addEventListener('input', cleanup);field.addEventListener('scroll', cleanup);
+}
+
+function voiceSelection(offset, start, end, length) {
+  return offset < start ? offset : offset <= end ? start + length : offset + length - (end - start);
+}
+
+// Shared textarea adapter. Re-resolve the element: cards and annotation rows can be re-rendered.
+function fieldDictationTarget(target, field, read, write, limit, limitMessage) {
+  return Object.assign(target, {
+    read: () => field()?.value ?? read(),
+    at: () => field()?.selectionEnd ?? read().length,
+    limit, limitMessage,
+    replace(start, end, text) {
+      const element = field();
+      if (element) {
+        element._voiceRevealCleanup?.();
+        const a = element.selectionStart, b = element.selectionEnd, scroll = element.scrollTop;
+        element.setRangeText(text, start, end, 'preserve');
+        element.setSelectionRange(voiceSelection(a, start, end, text.length), voiceSelection(b, start, end, text.length));
+        element.dispatchEvent(new Event('input', {bubbles:true}));
+        element.scrollTop = scroll;
+        revealDictationField(element, start, text.length);
+      } else {
+        const value = read();
+        write(value.slice(0, start) + text + value.slice(end));
+      }
+    }
+  });
+}
+
+function composerDictationTarget(id, owner) {
+  return {
+    valid: () => owner === state.config.firebase_email && !!findConversation(id),
+    status: composerStatus,
+    read: () => id === state.activeConversationId ? composerText() : state.drafts.get(id)?.text || '',
+    replace(start, end, text) {
+      if (id === state.activeConversationId) {
+        const selection = window.getSelection(), current = selection?.rangeCount ? selection.getRangeAt(0) : null;
+        let offsets;
+        if (current && composerEl().contains(current.commonAncestorContainer)) {
+          const prefix = current.cloneRange();prefix.selectNodeContents(composerEl());prefix.setEnd(current.startContainer, current.startOffset);
+          const a = composerText(prefix.cloneContents());
+          offsets = [a.length, a.length + composerText(current.cloneContents()).length];
+        }
+        const range = composerRange(start, end);
+        range.deleteContents();range.insertNode(dictationReveal(text));
+        if (offsets) {
+          const mapped = offsets.map(offset => voiceSelection(offset, start, end, text.length));
+          selection.removeAllRanges();selection.addRange(composerRange(...mapped));
+        }
+        autoGrow();saveChatDraft();
+      } else {
+        const draft = state.drafts.get(id) || {text:'', attachments:[], editing:null};
+        // Preserve collapsed pastes/file mentions outside the dictated range.
+        if (draft.parts) {
+          const slice = (from, to) => {
+            let at = 0;
+            return draft.parts.flatMap(part => {
+              const first = Math.max(0, from - at), last = Math.min(part.text.length, to - at);at += part.text.length;
+              return last > first ? [{...part, text:part.text.slice(first, last)}] : [];
+            });
+          };
+          draft.parts = [...slice(0, start), {text}, ...slice(end, draft.text.length)];
+        }
+        draft.text = draft.text.slice(0, start) + text + draft.text.slice(end);
+        state.drafts.set(id, draft);
+      }
+    }
+  };
+}
+
+// Own only the inserted range, not the user's draft. An edit inside it gives that
+// text back to the user; recognition then continues with the as-yet-unshown audio.
+function dictationInsertion(target) {
+  let previous = target.read(), start = target.at?.() ?? previous.length, inserted = '';
+  const edit = {
+    sync() {
+      const value = target.read();
+      if (value === previous) return true;
+      if (!inserted) { previous = value;start = target.at?.() ?? value.length;return true; }
+      const shift = value.length - previous.length;
+      if (start + shift >= 0 && value.slice(start + shift) === previous.slice(start)) {
+        start += shift;previous = value;return true;
+      }
+      if (value.slice(0, start + inserted.length) === previous.slice(0, start + inserted.length)) {
+        previous = value;return true;
+      }
+      let first = 0, suffix = 0;
+      while (first < Math.min(previous.length, value.length) && previous[first] === value[first]) first++;
+      while (suffix < Math.min(previous.length, value.length) - first && previous[previous.length - 1 - suffix] === value[value.length - 1 - suffix]) suffix++;
+      const end = previous.length - suffix, delta = value.length - previous.length;
+      let owned = true;
+      if (end <= start) start += delta;
+      else if (first < start + inserted.length) {
+        start = Math.min(value.length, Math.max(first, start + inserted.length + delta));
+        inserted = '';owned = false;
+      }
+      previous = value;
+      return owned;
+    },
+    update(text) {
+      if (!target.valid()) return;
+      const value = target.read(), end = start + inserted.length;
+      const before = value.slice(0, start), after = value.slice(end);
+      const full = text ? `${before && !/\s$/.test(before) ? ' ' : ''}${text}${after && !/^\s/.test(after) ? ' ' : ''}` : '';
+      const replacement = full.slice(0, Math.max(0, (target.limit ?? Infinity) - value.length + inserted.length));
+      if (replacement !== inserted) {
+        let prefix = 0, suffix = 0;
+        while (prefix < Math.min(inserted.length, replacement.length) && inserted[prefix] === replacement[prefix]) prefix++;
+        while (suffix < Math.min(inserted.length, replacement.length) - prefix && inserted[inserted.length - 1 - suffix] === replacement[replacement.length - 1 - suffix]) suffix++;
+        target.replace(start + prefix, end - suffix, replacement.slice(prefix, replacement.length - suffix));
+      }
+      inserted = replacement;previous = target.read();
+      if (replacement.length < full.length) target.status(t(target.limitMessage));
+    },
+    cancel() { if (target.valid() && edit.sync()) edit.update(''); }
+  };
+  return edit;
+}
+
+function syncLiveInsertion(recording) {
+  if (recording.insertion.sync()) return;
+  recording.base = recording.shownThrough;
+  recording.from = recording.base;recording.committed = '';recording.previewText = '';
+  recording.revision++;
+}
+
+function recordingSamples(recording, start = 0, end = recording.count) {
+  let offset = 0;
+  const chunks = [];
+  for (const chunk of recording.chunks) {
+    if (offset >= end) break;
+    const first = Math.max(0, start - offset), last = Math.min(chunk.length, end - offset);
+    if (last > first) chunks.push(chunk.subarray(first, last));
+    offset += chunk.length;
+  }
+  return speechSamples(chunks, recording.context.sampleRate);
+}
+
+function previewRecording(recording) {
+  if (recording.stopped || voice.capture !== recording || !recording.target.valid() || recording.owner !== state.config.firebase_email
+    || recording.count < recording.nextPreview || recording.lastSpeech <= recording.previewSpeech
+    || voice.previewWorker || voice.worker || voice.jobs.length || voice.nativeOperation) return;
+  syncLiveInsertion(recording);
+  const rate = recording.context.sampleRate, from = recording.from;
+  const end = Math.min(recording.count, from + rate * 30), revision = recording.revision;
+  if (end - from < rate * 1.5) return;
+  const samples = recordingSamples(recording, from, end);
+  const spoken = recording.lastSpeech;
+  const current = () => !recording.stopped && voice.capture === recording && recording.target.valid()
+    && recording.owner === state.config.firebase_email && recording.revision === revision;
+  voice.previewWorker = (async () => {
+    try {
+      const result = await speechRequest('preview_audio', {samples, language:recording.language});
+      if (!current()) return;
+      syncLiveInsertion(recording);
+      if (!current()) return;
+      recording.previewText = joinDictation(recording.committed, result.text.trim());
+      recording.insertion.update(recording.previewText);
+      recording.shownThrough = end;
+      recording.previewSpeech = Math.min(spoken, end);
+      recording.committed = joinDictation(recording.committed, result.committed);
+      recording.from += Math.round(result.advance * rate / 16000);
+      if (recording.previewFailed) recording.target.status('');
+      recording.previewFailed = false;
+    } catch (error) {
+      if (!current()) return;
+      if (String(error).includes('speech_silence')) {
+        recording.previewSpeech = Math.min(spoken, end);
+        if (end - from >= rate * 12) recording.from = end;
+      } else if (!String(error).includes('speech_busy')) {
+        console.error('Live dictation failed', error);
+        if (!recording.previewFailed) recording.target.status(voiceError(error));
+        recording.previewFailed = true;
+      }
+    } finally {
+      recording.nextPreview = recording.count + rate * 0.75;
+      voice.previewWorker = null;
+      drainTranscriptions();
+    }
+  })();
+}
 
 function voiceBusy(id) {
   return ((voice.pending || voice.recording) && voice.conversationId === id)
@@ -108,7 +332,7 @@ function voiceUi(message = '') {
   const mic = $('#composer-mic');
   const job = voice.jobs.find(job => !job.field && !job.cancelled && job.conversationId === state.activeConversationId);
   const transcribing = !!job && !voice.recording && !voice.pending;
-  const finishing = !!((voice.mediaOperation && !voice.mediaOperation.forField) || (voice.nativeOperation && voice.nativeOperation.command !== 'transcribe_audio')) && !voice.pending && !voice.field && !transcribing && !voice.recording;
+  const finishing = !!((voice.mediaOperation && !voice.mediaOperation.forField) || (voice.nativeOperation && !speechInference())) && !voice.pending && !voice.field && !transcribing && !voice.recording;
   const active = !!voice.recording || voice.pending || transcribing || finishing;
   const loading = voice.loading;
   mic.hidden = active;
@@ -140,6 +364,7 @@ function voiceUi(message = '') {
 }
 
 function releaseRecording(recording) {
+  recording.stopped = true;
   clearTimeout(recording.timer);
   recording.stream?.getTracks().forEach(track => track.stop());
   recording.node?.disconnect(); recording.source?.disconnect();
@@ -166,10 +391,14 @@ function cancelVoice(all = false) {
   if (all || !voice.field || voice.recording || voice.pending) voice.epoch++;
   if (all || (!voice.recording && !voice.pending)) {
     for (const job of voice.jobs) {
-      if (all || (!job.field && job.conversationId === state.activeConversationId)) job.cancelled = true;
+      if (all || (!job.field && job.conversationId === state.activeConversationId)) {
+        job.cancelled = true;
+        if (!job.sendAfter) job.recording.insertion.cancel();
+      }
     }
   }
   const own = voice.recording || (voice.capture?.field ? null : voice.capture);
+  own?.insertion.cancel();
   const released = own ? releaseRecording(own) : voice.mediaOperation;
   voice.recording = null; voice.pending = false; voice.conversationId = null;
   if ($('#voice-recording')) voiceUi();
@@ -218,20 +447,24 @@ async function captureVoice(epoch, extra, ui) {
   const owner = state.config.firebase_email;
   const status = await invoke('speech_model_status');
   if (epoch !== voice.epoch) return;
-  if (status?.busy && !voice.transcribing) { ui.report(t('voice.speech_busy')); return; }
+  if (status?.busy && !voice.transcribing && !voice.previewWorker) { ui.report(t('voice.speech_busy')); return; }
   if (!status?.ready) { ui.missing(status); return; }
   ui.progress(t('voice.loading_model'));
-  if (!voice.transcribing) await speechRequest('prepare_speech_model');
+  if (!voice.transcribing && !voice.previewWorker) await speechRequest('prepare_speech_model');
   voice.loaded = true;
   if (epoch !== voice.epoch) return;
   ui.progress(t('voice.preparing'));
   voice.waveform = [];
-  const recording = { chunks: [], count: 0, waveEnergy: 0, waveSamples: 0, epoch, owner, language:lang, report:ui.report, ...extra };
+  const target = extra.field || composerDictationTarget(extra.conversationId, owner);
+  const recording = { chunks: [], count: 0, waveEnergy: 0, waveSamples: 0, epoch, owner, language:lang, report:ui.report,
+    target, insertion:dictationInsertion(target), base:0, from:0, shownThrough:0, revision:0, committed:'', previewText:'',
+    nextPreview:0, previewSpeech:0, lastSpeech:0, ...extra };
   voice.capture = recording;
   try {
     recording.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false });
     if (epoch !== voice.epoch) { releaseRecording(recording); return; }
     recording.context = new AudioContext({ sampleRate: 16000 });
+    recording.nextPreview = recording.context.sampleRate * 1.5;
     await recording.context.audioWorklet.addModule('audio-recorder.js');
     if (epoch !== voice.epoch) { releaseRecording(recording); return; }
     recording.source = recording.context.createMediaStreamSource(recording.stream);
@@ -247,11 +480,13 @@ async function captureVoice(epoch, extra, ui) {
         recording.waveEnergy += sample * sample;
         if (++recording.waveSamples >= waveWindow) {
           const rms = Math.sqrt(recording.waveEnergy / recording.waveSamples);
+          if (rms >= 0.001) recording.lastSpeech = recording.count;
           voice.waveform.push(Math.min(1, rms * 12));
           recording.waveEnergy = 0; recording.waveSamples = 0;
         }
       }
       voice.waveform = voice.waveform.slice(-200);
+      previewRecording(recording);
     };
     recording.mediaId = crypto.randomUUID();
     recording.mediaPause = invoke('pause_dictation_media', {id:recording.mediaId}).then(() => true, error => {
@@ -262,6 +497,7 @@ async function captureVoice(epoch, extra, ui) {
     recording.source.connect(recording.node); recording.node.connect(recording.context.destination);
     await recording.context.resume();
     if (epoch !== voice.epoch) { releaseRecording(recording); return; }
+    ui.report('');
     ui.live(recording);
   } catch (error) {
     releaseRecording(recording);
@@ -271,6 +507,7 @@ async function captureVoice(epoch, extra, ui) {
 
 // Stops feeding `recording` and turns what was captured into the samples of `job`.
 async function finishRecording(recording, job) {
+  recording.stopped = true;
   try {
     await new Promise(resolve => {
       const timeout = setTimeout(resolve, 300);
@@ -278,7 +515,7 @@ async function finishRecording(recording, job) {
       recording.node.port.postMessage('flush');
     });
     await releaseRecording(recording);
-    job.samples = speechSamples(recording.chunks, recording.context.sampleRate);
+    job.samples = recordingSamples(recording, recording.base);
     recording.chunks = [];
   } catch (error) {
     await releaseRecording(recording);
@@ -289,7 +526,7 @@ async function finishRecording(recording, job) {
 }
 
 async function startVoice() {
-  if (voice.pending || voice.field || voice.loading || (voice.nativeOperation && voice.nativeOperation.command !== 'transcribe_audio') || voice.mediaOperation || state.preparing || state.loadingConversation || queuedTurns.preparing.has(state.activeConversationId)) return;
+  if (voice.pending || voice.field || voice.loading || (voice.nativeOperation && !speechInference()) || voice.mediaOperation || state.preparing || state.loadingConversation || queuedTurns.preparing.has(state.activeConversationId)) return;
   if (voice.recording) return stopVoice();
   if (voice.jobs.length >= 8) {composerStatus(t('voice.queue_full'));return;}
   const epoch = ++voice.epoch;
@@ -325,9 +562,11 @@ async function stopVoice(sendAfter = false) {
   const recording = voice.recording;
   if (!recording) return;
   const conversationId = recording.conversationId;
+  syncLiveInsertion(recording);
+  if (sendAfter) recording.insertion.cancel();
   if (conversationId === state.activeConversationId) saveChatDraft();
   const draft = structuredClone(state.drafts.get(conversationId) || {text:'',attachments:[],editing:null});
-  const job = {conversationId, owner:recording.owner, language:recording.language, cancelled:false, samples:null, sendAfter, draft};
+  const job = {conversationId, recording, owner:recording.owner, language:recording.language, cancelled:false, samples:null, sendAfter, draft, transcript:recording.previewText};
   voice.jobs.push(job);voice.transcribing = true;
   if (sendAfter) {
     state.drafts.delete(conversationId);
@@ -347,7 +586,7 @@ async function stopVoice(sendAfter = false) {
 // 'busy' (another field or a cancelled operation is finishing) or 'loading' (model warm-up).
 function fieldVoiceBlocker() {
   if (voice.pending || voice.recording) return 'composer';
-  if (voice.field || voice.mediaOperation || (voice.nativeOperation && voice.nativeOperation.command !== 'transcribe_audio')) return 'busy';
+  if (voice.field || voice.mediaOperation || (voice.nativeOperation && !speechInference())) return 'busy';
   return voice.loading ? 'loading' : null;
 }
 
@@ -358,7 +597,7 @@ function fieldVoicePhase(matches) {
   return job ? (job === voice.jobs[0] ? 'transcribing' : 'queued') : null;
 }
 
-// `target`: {valid(), status(message), insert(text)}. The destination is pinned here: the result is
+// `target`: {valid(), status(message), read(), replace(start,end,text)}. The destination is pinned here: the result is
 // inserted only while `valid()` still holds, never into whatever is current when it arrives.
 async function startFieldVoice(target) {
   if (fieldVoiceBlocker()) return;
@@ -387,7 +626,8 @@ async function startFieldVoice(target) {
 async function stopFieldVoice() {
   const recording = voice.field?.recording;
   if (!recording) return;
-  const job = {field:recording.field, owner:recording.owner, language:recording.language, cancelled:false, samples:null};
+  syncLiveInsertion(recording);
+  const job = {field:recording.field, recording, owner:recording.owner, language:recording.language, cancelled:false, samples:null};
   voice.jobs.push(job);voice.transcribing = true;
   voice.field = null;voiceUi();
   try { await finishRecording(recording, job); }
@@ -396,13 +636,13 @@ async function stopFieldVoice() {
 
 // Discards the recording and the queued or running audio of every field target accepted by `matches`.
 function cancelFieldVoice(matches = () => true) {
-  for (const job of voice.jobs) if (job.field && matches(job.field)) job.cancelled = true;
+  for (const job of voice.jobs) if (job.field && matches(job.field)) {job.cancelled = true;job.recording.insertion.cancel();}
   const field = voice.field;
   let released = voice.mediaOperation;
   if (field && matches(field.target)) {
     voice.epoch++;
     const recording = field.recording || (voice.capture?.field === field.target ? voice.capture : null);
-    if (recording) released = releaseRecording(recording);
+    if (recording) {recording.insertion.cancel();released = releaseRecording(recording);}
     voice.field = null;
   }
   voiceUi();
@@ -442,15 +682,36 @@ function restoreVoiceDraft(job) {
 
 // A field job never reaches the engine once cancelled, and its text is dropped unless the target is
 // still valid when the transcript arrives.
+async function finalTranscript(job) {
+  const recording = job.recording;
+  const sync = () => {
+    if (job.sendAfter || !recording.target.valid()) return false;
+    const base = recording.base;
+    syncLiveInsertion(recording);
+    if (base === recording.base) return false;
+    job.samples = job.samples.slice(Math.round((recording.base - base) * 16000 / recording.context.sampleRate));
+    return true;
+  };
+  sync();
+  // A manual edit owns the already-shown words. Decode only the remaining audio.
+  while (true) {
+    if (recording.base && job.samples.length < 1600) return null;
+    const text = await speechRequest('transcribe_audio', {samples:job.samples,language:job.language});
+    if (job.cancelled || !recording.target.valid()) return null;
+    if (sync()) continue;
+    if (!text?.trim()) throw 'speech_silence';
+    return text.trim();
+  }
+}
+
 async function drainFieldJob(job) {
   const target = job.field, stale = () => job.cancelled || job.owner !== state.config.firebase_email || !target.valid();
   try {
     if (stale()) return;
     if (job.error) throw job.error;
-    const text = await speechRequest('transcribe_audio', {samples:job.samples,language:job.language});
+    const text = await finalTranscript(job);
     if (stale()) return;
-    if (!text?.trim()) throw 'speech_silence';
-    target.insert(text.trim());
+    if (text !== null) job.recording.insertion.update(text);
   } catch (error) {
     console.error('Dictation failed',error);
     if (!stale()) target.status(voiceError(error));
@@ -462,7 +723,7 @@ async function drainFieldJob(job) {
 }
 
 function drainTranscriptions() {
-  if (voice.worker) return;
+  if (voice.worker || voice.previewWorker) return;
   voice.worker = (async () => {
     while (voice.jobs[0]?.ready) {
       const job = voice.jobs[0], id = job.conversationId;
@@ -472,26 +733,23 @@ function drainTranscriptions() {
           restoreVoiceDraft(job);continue;
         }
         if (job.error) throw job.error;
-        const text = await speechRequest('transcribe_audio', {samples:job.samples,language:job.language});
+        const text = await finalTranscript(job);
         if (job.cancelled || job.owner !== state.config.firebase_email || !findConversation(id)) {
           restoreVoiceDraft(job);continue;
         }
-        if (!text?.trim()) throw 'speech_silence';
-        job.transcript = text.trim();
+        job.transcript = text || '';
         if (job.sendAfter) {
-          const message = {content:[job.draft.text,text.trim()].filter(Boolean).join(' '),attachments:job.draft.attachments,edit_index:job.draft.editing};
+          const message = {content:joinDictation(job.draft.text, job.transcript),attachments:job.draft.attachments,edit_index:job.draft.editing};
           await discoverRemoteTarget(id);
           if (job.cancelled || job.owner !== state.config.firebase_email || !findConversation(id)) {
             restoreVoiceDraft(job);continue;
           }
           const queue = state.queues.get(id) || [];
           queue.push(message);state.queues.set(id,queue);refreshQueue(id);
-        } else if (id === state.activeConversationId) {
-          appendComposerText(text.trim());autoGrow();composerStatus();
         } else {
-          appendConversationDraft(id,text.trim());
-          const title = findConversation(id)?.conversation.title;
-          composerStatus(`${t('voice.added_to')} «${title}»`);
+          if (text !== null) job.recording.insertion.update(text);
+          if (id === state.activeConversationId) composerStatus();
+          else composerStatus(`${t('voice.added_to')} «${findConversation(id)?.conversation.title}»`);
         }
       } catch (error) {
         console.error('Dictation failed',error);

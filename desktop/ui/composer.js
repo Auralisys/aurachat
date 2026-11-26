@@ -268,7 +268,7 @@ function mentionToken(path) {
   token.dataset.pasteId = crypto.randomUUID();token.dataset.pasteText = JSON.stringify(path);token.dataset.mention = 'file';
   token.setAttribute('role', 'button');
   token.setAttribute('aria-label', `${t('mentions.open')}: ${path}`);token.title = path;
-  token.append(icon('file'), document.createTextNode(pathName(path)));
+  token.append(fileIcon(path), document.createTextNode(pathName(path)));
   return token;
 }
 

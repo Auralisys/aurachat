@@ -172,6 +172,11 @@ async fn transcribe_audio(state: tauri::State<'_, AppState>, samples: Vec<f32>, 
     tauri::async_runtime::spawn_blocking(move || speech.transcribe(samples, language)).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
+async fn preview_audio(state: tauri::State<'_, AppState>, samples: Vec<f32>, language: String) -> Result<speech::Preview, String> {
+    let speech = state.speech.clone();
+    tauri::async_runtime::spawn_blocking(move || speech.preview(samples, language)).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
 fn tts_model_status(state: tauri::State<'_, AppState>) -> tts::ModelStatus { state.tts.status() }
 #[tauri::command]
 async fn download_tts_model(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<tts::ModelStatus, String> {
@@ -1613,7 +1618,7 @@ pub fn run() {
             open_external_url
             ,browser::browser_open, browser::browser_bounds, browser::browser_action, browser::browser_close, browser::browser_capture
             ,list_shells, stop_shell
-            ,speech_model_status, download_speech_model, cancel_speech_download, remove_speech_model, prepare_speech_model, transcribe_audio
+            ,speech_model_status, download_speech_model, cancel_speech_download, remove_speech_model, prepare_speech_model, transcribe_audio, preview_audio
             ,tts_model_status, download_tts_model, cancel_tts_download, remove_tts_model, prepare_tts_model, synthesize_tts
             ,pause_dictation_media, resume_dictation_media
         ])

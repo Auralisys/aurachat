@@ -27,6 +27,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve,extname}=requir
         if(cmd==='speech_model_status')return {ready:true,busy:false,loading:false,loaded:true,downloaded:1,total:1};
         if(cmd==='pause_dictation_media'){window.__paused=(window.__paused||0)+1;return;}
         if(cmd==='resume_dictation_media'){window.__resumed=(window.__resumed||0)+1;return;}
+        if(cmd==='preview_audio')return {text:window.__liveText||'',committed:'',advance:0};
         if(cmd==='transcribe_audio'){
           if(window.__transcribeError){window.__transcribeError=false;throw 'speech_engine: test failure';}
           if(window.__delayTranscript)return new Promise(resolve=>window.__finishTranscript=()=>{window.__finishTranscript=null;resolve(window.__transcript||'test dettatura');});
@@ -93,6 +94,38 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve,extname}=requir
     assert.deepEqual(await field.evaluate(el=>[document.activeElement===el,el.selectionStart,el.selectionEnd]),[true,17,17]);
     assert.equal((await page.locator('#composer-input').textContent()).trim(),'','la trascrizione non finisce nel compositore');
     await mediaBack();
+
+    // The same textbox receives partial text before Stop; the existing words never fade again.
+    await field.fill('prima dopo');await field.evaluate(el=>el.setSelectionRange(5,5));
+    await page.evaluate(()=>window.__liveText='test');
+    await record();await page.waitForFunction(()=>document.querySelector('#question-requests textarea').value==='prima test dopo');
+    assert.equal(await page.evaluate(()=>!!voice.field?.recording),true);
+    assert.equal(await submit.isDisabled(),true);
+    const mirror=card.locator('.voice-field-reveal');
+    await mirror.waitFor();
+    assert.equal(await mirror.getAttribute('aria-hidden'),'true');
+    assert.equal(await mirror.locator('.voice-reveal-word').allTextContents().then(words=>words.join('')).then(text=>text.trim()),'test');
+    await page.screenshot({path:resolve(shots,'question-live.png')});
+    await page.waitForFunction(()=>!document.querySelector('.voice-field-revealing'));
+    assert.notEqual(await field.evaluate(el=>getComputedStyle(el).color),'rgba(0, 0, 0, 0)','Native text is restored after the reveal');
+    await page.screenshot({path:resolve(shots,'question-live-complete.png')});
+    await page.evaluate(()=>window.__liveText='test dettatura');
+    await page.waitForFunction(()=>document.querySelector('#question-requests textarea').value==='prima test dettatura dopo');
+    await strip.locator('.annotator__voice-stop').click();await idle();
+    assert.equal(await field.inputValue(),'prima test dettatura dopo');
+    assert.equal((await draft('q1')).custom,'prima test dettatura dopo');
+    await mediaBack();
+    await record();await page.waitForFunction(()=>document.querySelector('#question-requests textarea').value.includes('test dettatura test dettatura'));
+    await strip.locator('.annotator__voice-cancel').click();await idle();await mediaBack();
+    assert.equal(await field.inputValue(),'prima test dettatura dopo');
+    // Reduced motion changes presentation only: live text still arrives, without mirror/animation.
+    await page.emulateMedia({reducedMotion:'reduce'});
+    await record();await page.waitForFunction(()=>document.querySelector('#question-requests textarea').value.includes('test dettatura test dettatura'));
+    assert.equal(await mirror.count(),0);
+    await strip.locator('.annotator__voice-cancel').click();await idle();await mediaBack();
+    await page.emulateMedia({reducedMotion:'no-preference'});
+    await page.evaluate(()=>window.__liveText='');
+    await field.fill('ab test dettatura cd');
 
     // Annullare, anche con Esc, scarta l'audio prima che arrivi al motore.
     const sent=await transcriptions();

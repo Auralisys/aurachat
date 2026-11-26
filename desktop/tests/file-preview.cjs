@@ -6,7 +6,7 @@ const {resolve} = require('node:path');
 const {pathToFileURL} = require('node:url');
 
 (async()=>{
-  const browser=await chromium.launch({channel:'msedge',headless:true});
+  const browser=await chromium.launch({channel:'msedge',headless:true,ignoreDefaultArgs:['--hide-scrollbars']});
   try {
     const page=await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'reduce'});
     const errors=[], requests=[];
@@ -88,6 +88,13 @@ const {pathToFileURL} = require('node:url');
     await page.locator('#activity-card [data-activity-focus="group:outputs"]').click();
     await pressed(list.getByRole('button',{name:/overview\.md/}),()=>emit('artifact-created',{id:'overview.md',title:'overview.md',bytes:256,kind:'file',path:'C:\\Fixture\\Archivio video\\overview.md',final_output:true}));
     await view.getByRole('heading',{name:'Diario di montaggio'}).waitFor();
+    const markdownIcon=page.locator('.panel-tab.is-active .file-icon');
+    assert.equal(await markdownIcon.getAttribute('data-file-icon'),'BookOpen');
+    await tab('Output').click();
+    const outputIcon=list.getByRole('button',{name:/overview\.md/}).locator('.file-icon');
+    assert.equal(await outputIcon.getAttribute('data-file-icon'),'BookOpen');
+    assert.equal(await outputIcon.evaluate(el=>getComputedStyle(el).color),'rgb(160, 201, 236)');
+    await shot('shared-file-icons');
     await openFromList('riprese.xml');await tab('overview.md').click();await page.click('#panel-expand');
     const glyphs=await page.locator('#panel-tabs .panel-tab__icon').evaluateAll(nodes=>nodes.map(el=>el.querySelector('svg').innerHTML));
     assert.equal(new Set(glyphs).size,glyphs.length,'HTML, JSON, XML, Markdown and the output list have distinct glyphs');
