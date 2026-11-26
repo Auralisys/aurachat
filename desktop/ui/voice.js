@@ -6,22 +6,30 @@ const voice = { waveform: [], frame: null, epoch: 0, pending: false, recording: 
 const speechInference = () => ['transcribe_audio', 'preview_audio'].includes(voice.nativeOperation?.command);
 const joinDictation = (before, after) => [before, after].filter(Boolean).join(' ');
 
-function dictationReveal(text) {
+// Longest reveal: the last staggered word plus its wipe and its ink (styles.css).
+const REVEAL_MS = 1400;
+
+// `elapsed` resumes words whose reveal already started (a rebuilt textarea mirror).
+function dictationReveal(text, elapsed = 0) {
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) return document.createTextNode(text);
-  const fragment = document.createDocumentFragment(), words = text.match(/\S+\s*|\s+/gu) || [];
-  words.forEach((word, index) => {
+  const fragment = document.createDocumentFragment();
+  let index = 0;
+  for (const word of text.match(/\S+|\s+/gu) || []) {
+    if (!word.trim()) {fragment.append(word);continue;}
     const span = document.createElement('span');span.className = 'voice-reveal-word';span.textContent = word;
-    span.style.setProperty('--voice-delay', `${Math.min(index * 28, 180)}ms`);
+    span.style.setProperty('--voice-delay', `${Math.min(index++ * 60, 360) - elapsed}ms`);
     fragment.append(span);
-  });
+  }
   return fragment;
 }
 
-// Textareas cannot style a substring. Briefly mirror the value while leaving the
-// real field, caret, selection and input handling in place; never animate old text.
-function revealDictationField(field, start, length) {
+// Textareas cannot style a substring. Mirror the value while leaving the real field,
+// caret, selection and input handling in place; only `reveals` ({start,length,at}) animate.
+function revealDictationField(field, reveals) {
   field._voiceRevealCleanup?.();
-  if (!length || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const now = performance.now();
+  reveals = reveals.filter(reveal => reveal.length && now - reveal.at < REVEAL_MS).sort((a, b) => a.start - b.start);
+  if (!reveals.length || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const style = getComputedStyle(field), box = field.getBoundingClientRect(), parent = field.parentElement.getBoundingClientRect();
   const mirror = document.createElement('div');mirror.className = 'voice-field-reveal';mirror.setAttribute('aria-hidden', 'true');
   for (const name of ['fontFamily','fontSize','fontWeight','fontStyle','lineHeight','letterSpacing','textAlign','textIndent','textTransform','paddingTop','paddingRight','paddingBottom','paddingLeft','wordBreak','overflowWrap','tabSize','direction']) mirror.style[name] = style[name];
@@ -30,17 +38,23 @@ function revealDictationField(field, start, length) {
     top:`${box.top - parent.top - field.parentElement.clientTop + field.parentElement.scrollTop + field.clientTop}px`,
     width:`${field.clientWidth}px`, height:`${field.clientHeight}px`, color:style.color
   });
-  mirror.append(document.createTextNode(field.value.slice(0, start)), dictationReveal(field.value.slice(start, start + length)), document.createTextNode(field.value.slice(start + length)));
+  let at = 0;
+  for (const reveal of reveals) {
+    mirror.append(document.createTextNode(field.value.slice(at, reveal.start)), dictationReveal(field.value.slice(reveal.start, reveal.start + reveal.length), now - reveal.at));
+    at = reveal.start + reveal.length;
+  }
+  mirror.append(document.createTextNode(field.value.slice(at)));
   field.parentElement.append(mirror);mirror.scrollTop = field.scrollTop;mirror.scrollLeft = field.scrollLeft;
   field.style.setProperty('--voice-caret', style.caretColor);
   field.classList.add('voice-field-revealing');
+  field._voiceReveals = reveals;
   const cleanup = () => {
     clearTimeout(timer);observer.disconnect();mirror.remove();field.classList.remove('voice-field-revealing');field.style.removeProperty('--voice-caret');
-    field.removeEventListener('input', cleanup);field.removeEventListener('scroll', cleanup);field._voiceRevealCleanup = null;
+    field.removeEventListener('input', cleanup);field.removeEventListener('scroll', cleanup);field._voiceRevealCleanup = null;field._voiceReveals = [];
   };
   // Ignore the observer's initial notification.
   let observed = false;
-  const timer = setTimeout(cleanup, 450), observer = new ResizeObserver(() => {if (observed) cleanup();observed = true;});
+  const timer = setTimeout(cleanup, REVEAL_MS - (now - Math.max(...reveals.map(reveal => reveal.at)))), observer = new ResizeObserver(() => {if (observed) cleanup();observed = true;});
   observer.observe(field);
   field._voiceRevealCleanup = cleanup;
   field.addEventListener('input', cleanup);field.addEventListener('scroll', cleanup);
@@ -56,16 +70,21 @@ function fieldDictationTarget(target, field, read, write, limit, limitMessage) {
     read: () => field()?.value ?? read(),
     at: () => field()?.selectionEnd ?? read().length,
     limit, limitMessage,
-    replace(start, end, text) {
+    replace(start, end, text, live) {
       const element = field();
       if (element) {
+        // Words still revealing outside the replaced range keep animating; the rest appear as they are.
+        const delta = text.length - (end - start);
+        const reveals = (element._voiceReveals || []).filter(reveal => reveal.start + reveal.length <= start || reveal.start >= end)
+          .map(reveal => reveal.start >= end ? {...reveal, start:reveal.start + delta} : reveal);
+        if (live) reveals.push({start, length:text.length, at:performance.now()});
         element._voiceRevealCleanup?.();
-        const a = element.selectionStart, b = element.selectionEnd, scroll = element.scrollTop;
+        const a = element.selectionStart, b = element.selectionEnd, direction = element.selectionDirection, scroll = element.scrollTop;
         element.setRangeText(text, start, end, 'preserve');
-        element.setSelectionRange(voiceSelection(a, start, end, text.length), voiceSelection(b, start, end, text.length));
+        element.setSelectionRange(voiceSelection(a, start, end, text.length), voiceSelection(b, start, end, text.length), direction);
         element.dispatchEvent(new Event('input', {bubbles:true}));
         element.scrollTop = scroll;
-        revealDictationField(element, start, text.length);
+        revealDictationField(element, reveals);
       } else {
         const value = read();
         write(value.slice(0, start) + text + value.slice(end));
@@ -74,26 +93,53 @@ function fieldDictationTarget(target, field, read, write, limit, limitMessage) {
   });
 }
 
+function editDictationComposer(change, mapOffset = offset => offset) {
+  const selection = window.getSelection(), current = selection?.rangeCount ? selection.getRangeAt(0) : null;
+  let offsets, backward;
+  if (current && composerEl().contains(current.commonAncestorContainer)) {
+    const prefix = current.cloneRange();prefix.selectNodeContents(composerEl());prefix.setEnd(current.startContainer, current.startOffset);
+    const start = composerText(prefix.cloneContents()).length;
+    offsets = [start, start + composerText(current.cloneContents()).length];
+    backward = selection.anchorNode === current.endContainer && selection.anchorOffset === current.endOffset;
+  }
+  change();
+  if (offsets) {
+    const r = composerRange(...offsets.map(mapOffset));
+    if (backward) selection.setBaseAndExtent(r.endContainer, r.endOffset, r.startContainer, r.startOffset);
+    else selection.setBaseAndExtent(r.startContainer, r.startOffset, r.endContainer, r.endOffset);
+  }
+}
+
+// Unwraps reveal spans once their animation is over, keeping the caret where it was.
+function settleDictationWords(words) {
+  const live = words.filter(word => word.isConnected);
+  if (live.length) editDictationComposer(() => live.forEach(word => word.replaceWith(...word.childNodes)));
+}
+
 function composerDictationTarget(id, owner) {
   return {
     valid: () => owner === state.config.firebase_email && !!findConversation(id),
     status: composerStatus,
     read: () => id === state.activeConversationId ? composerText() : state.drafts.get(id)?.text || '',
-    replace(start, end, text) {
+    replace(start, end, text, live) {
       if (id === state.activeConversationId) {
-        const selection = window.getSelection(), current = selection?.rangeCount ? selection.getRangeAt(0) : null;
-        let offsets;
-        if (current && composerEl().contains(current.commonAncestorContainer)) {
-          const prefix = current.cloneRange();prefix.selectNodeContents(composerEl());prefix.setEnd(current.startContainer, current.startOffset);
-          const a = composerText(prefix.cloneContents());
-          offsets = [a.length, a.length + composerText(current.cloneContents()).length];
-        }
-        const range = composerRange(start, end);
-        range.deleteContents();range.insertNode(dictationReveal(text));
-        if (offsets) {
-          const mapped = offsets.map(offset => voiceSelection(offset, start, end, text.length));
-          selection.removeAllRanges();selection.addRange(composerRange(...mapped));
-        }
+        // A final pass shows its words as they are: words still revealing simply end now.
+        if (!live) settleDictationWords([...composerEl().querySelectorAll('.voice-reveal-word')]);
+        let words = [];
+        editDictationComposer(() => {
+          if (start === 0 && end === 0) dropComposerPlaceholder(composerEl(), false);
+          const range = composerRange(start, end);
+          const leaf = range.startContainer, word = leaf.parentElement;
+          if (range.collapsed && word?.classList.contains('voice-reveal-word') && range.startOffset === leaf.length) {
+            range.setStartAfter(word);range.collapse(true);
+          }
+          range.deleteContents();
+          if (!text) return;
+          const node = live ? dictationReveal(text) : document.createTextNode(text);
+          if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) words = [...node.querySelectorAll('.voice-reveal-word')];
+          range.insertNode(node);
+        }, offset => voiceSelection(offset, start, end, text.length));
+        if (words.length) Promise.all(words.flatMap(word => word.getAnimations().map(animation => animation.finished.catch(() => {})))).then(() => settleDictationWords(words));
         autoGrow();saveChatDraft();
       } else {
         const draft = state.drafts.get(id) || {text:'', attachments:[], editing:null};
@@ -128,7 +174,12 @@ function dictationInsertion(target) {
       if (start + shift >= 0 && value.slice(start + shift) === previous.slice(start)) {
         start += shift;previous = value;return true;
       }
-      if (value.slice(0, start + inserted.length) === previous.slice(0, start + inserted.length)) {
+      const edge = start + inserted.length;
+      if (value.slice(0, edge) === previous.slice(0, edge)) {
+        const extension = /[\p{L}\p{N}]$/u.test(inserted) && value.slice(edge).match(/^[\p{L}\p{M}\p{N}]+/u);
+        if (extension && !previous.slice(edge).startsWith(extension[0])) {
+          start = edge + extension[0].length;inserted = '';previous = value;return false;
+        }
         previous = value;return true;
       }
       let first = 0, suffix = 0;
@@ -144,7 +195,7 @@ function dictationInsertion(target) {
       previous = value;
       return owned;
     },
-    update(text) {
+    update(text, live = false) {
       if (!target.valid()) return;
       const value = target.read(), end = start + inserted.length;
       const before = value.slice(0, start), after = value.slice(end);
@@ -154,7 +205,7 @@ function dictationInsertion(target) {
         let prefix = 0, suffix = 0;
         while (prefix < Math.min(inserted.length, replacement.length) && inserted[prefix] === replacement[prefix]) prefix++;
         while (suffix < Math.min(inserted.length, replacement.length) - prefix && inserted[inserted.length - 1 - suffix] === replacement[replacement.length - 1 - suffix]) suffix++;
-        target.replace(start + prefix, end - suffix, replacement.slice(prefix, replacement.length - suffix));
+        target.replace(start + prefix, end - suffix, replacement.slice(prefix, replacement.length - suffix), live);
       }
       inserted = replacement;previous = target.read();
       if (replacement.length < full.length) target.status(t(target.limitMessage));
@@ -164,11 +215,78 @@ function dictationInsertion(target) {
   return edit;
 }
 
+const dictationWords = text => text.match(/\S+/gu) || [];
+const dictationKey = word => word.toLowerCase().replace(/^\p{P}+|\p{P}+$/gu, '') || word;
+
+function agreedWords(a, b) {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+}
+
+// Locate the end of an already published prefix after Whisper revises earlier words.
+// The common append-only case needs no alignment. On a correction, prefer the nearest
+// word boundary with the fewest insertions, deletions and substitutions.
+function dictationBoundary(published, current) {
+  const first = agreedWords(published, current);
+  if (first === Math.min(published.length, current.length)) return first;
+  const rest = published.slice(first), anchor = current.indexOf(rest[0], first);
+  if (anchor !== -1 && rest.every((word, i) => word === current[anchor+i])) return anchor + rest.length;
+  const n = rest.length, m = Math.min(current.length - first, n * 2);
+  // In a tie retain exact matches: "meet John" -> "meet with John" must consume John.
+  const step = n + 1;
+  let costs = Array.from({length:m + 1}, (_, j) => j * step);
+  for (let i = 1; i <= n; i++) {
+    const next = [i * step];
+    for (let j = 1; j <= m; j++) next[j] = Math.min(costs[j] + step, next[j-1] + step,
+      costs[j-1] + (published[first+i-1] === current[first+j-1] ? -1 : step));
+    costs = next;
+  }
+  let best = Math.min(n, m);
+  for (let j = 0; j <= m; j++) if (costs[j] < costs[best] || (costs[j] === costs[best] && Math.abs(n-j) < Math.abs(n-best))) best = j;
+  return first + best;
+}
+
 function syncLiveInsertion(recording) {
   if (recording.insertion.sync()) return;
-  recording.base = recording.shownThrough;
-  recording.from = recording.base;recording.committed = '';recording.previewText = '';
-  recording.revision++;
+  // The user took over the words already shown; the confirmed ones still waiting continue after the edit.
+  const unshown = dictationWords(recording.previewText).slice(recording.shown);
+  recording.protectedWords = recording.published.slice(0, Math.max(0, recording.published.length - unshown.length));
+  recording.previewText = unshown.join(' ');
+  recording.shown = 0;
+}
+
+// Confirmed words arrive in bursts, one per preview: show them one at a time, faster when they pile up.
+function dripDictation(recording) {
+  recording.drip = null;
+  if (recording.stopped || !recording.target.valid()) return;
+  syncLiveInsertion(recording);
+  const words = dictationWords(recording.previewText);
+  recording.shown = Math.min(words.length, recording.shown + 1);
+  recording.insertion.update(words.slice(0, recording.shown).join(' '), true);
+  const left = words.length - recording.shown;
+  if (left > 0) recording.drip = setTimeout(() => dripDictation(recording), Math.min(220, Math.max(50, 900 / left)));
+}
+
+// Stop shows every confirmed word at once; the final pass then corrects the text in place.
+function flushDictation(recording) {
+  clearTimeout(recording.drip);recording.drip = null;
+  syncLiveInsertion(recording);
+  recording.shown = dictationWords(recording.previewText).length;
+  recording.insertion.update(recording.previewText, true);
+}
+
+function publishDictationPreview(recording, text) {
+  const words = dictationWords(text), keys = words.map(dictationKey);
+  const confirmed = agreedWords(recording.previousWords, keys);
+  recording.previousWords = keys;
+  const start = dictationBoundary(recording.published, keys);
+  if (confirmed > start) {
+    recording.previewText = joinDictation(recording.previewText, words.slice(start, confirmed).join(' '));
+    recording.published = keys.slice(0, confirmed);
+    if (!recording.drip) dripDictation(recording);
+  }
+  return confirmed < keys.length;
 }
 
 function recordingSamples(recording, start = 0, end = recording.count) {
@@ -185,25 +303,26 @@ function recordingSamples(recording, start = 0, end = recording.count) {
 
 function previewRecording(recording) {
   if (recording.stopped || voice.capture !== recording || !recording.target.valid() || recording.owner !== state.config.firebase_email
-    || recording.count < recording.nextPreview || recording.lastSpeech <= recording.previewSpeech
+    || recording.count < recording.nextPreview || (recording.lastSpeech <= recording.previewSpeech && !recording.confirmPause)
     || voice.previewWorker || voice.worker || voice.jobs.length || voice.nativeOperation) return;
   syncLiveInsertion(recording);
   const rate = recording.context.sampleRate, from = recording.from;
-  const end = Math.min(recording.count, from + rate * 30), revision = recording.revision;
+  const end = Math.min(recording.count, from + rate * 30);
   if (end - from < rate * 1.5) return;
   const samples = recordingSamples(recording, from, end);
   const spoken = recording.lastSpeech;
   const current = () => !recording.stopped && voice.capture === recording && recording.target.valid()
-    && recording.owner === state.config.firebase_email && recording.revision === revision;
+    && recording.owner === state.config.firebase_email;
+  const newSpeech = spoken > recording.previewSpeech;
+  recording.confirmPause = false;
   voice.previewWorker = (async () => {
     try {
       const result = await speechRequest('preview_audio', {samples, language:recording.language});
       if (!current()) return;
       syncLiveInsertion(recording);
-      if (!current()) return;
-      recording.previewText = joinDictation(recording.committed, result.text.trim());
-      recording.insertion.update(recording.previewText);
-      recording.shownThrough = end;
+      const pending = publishDictationPreview(recording, joinDictation(recording.committed, result.text.trim()));
+      // A short phrase followed by silence still gets one chance to settle.
+      recording.confirmPause = newSpeech && pending;
       recording.previewSpeech = Math.min(spoken, end);
       recording.committed = joinDictation(recording.committed, result.committed);
       recording.from += Math.round(result.advance * rate / 16000);
@@ -213,7 +332,12 @@ function previewRecording(recording) {
       if (!current()) return;
       if (String(error).includes('speech_silence')) {
         recording.previewSpeech = Math.min(spoken, end);
-        if (end - from >= rate * 12) recording.from = end;
+        if (end - from >= rate * 12) {
+          // The next audio window no longer contains the words visible before this silence.
+          if (recording.published.length > dictationWords(recording.committed).length) recording.committed = recording.published.join(' ');
+          recording.previousWords = dictationWords(recording.committed).map(dictationKey);
+          recording.from = end;
+        }
       } else if (!String(error).includes('speech_busy')) {
         console.error('Live dictation failed', error);
         if (!recording.previewFailed) recording.target.status(voiceError(error));
@@ -346,17 +470,25 @@ function voiceUi(message = '') {
   mic.title = label;
   mic.replaceChildren(icon(voice.recording ? 'stop' : 'mic'));
   const busy = voice.pending || transcribing || finishing;
+  // Like Codex: while the first job transcribes, the frozen waveform stays and Stop (or Send) spins.
+  const queued = transcribing && job !== voice.jobs[0], spinning = transcribing && !queued;
+  const textual = voice.pending || finishing || queued;
   // Intermediate refreshes (e.g. media resume) must not wipe the visible progress label.
   voice.status = busy ? message || voice.status || '' : '';
+  voice.shownWave = voice.recording ? null : job?.wave || [];
   $('#voice-recording').hidden = !active;
-  $('#voice-recording').classList.toggle('is-busy', busy);
+  $('#voice-recording').classList.toggle('is-busy', textual);
+  $('#voice-recording').classList.toggle('is-transcribing', spinning);
   const backgroundChat = voice.conversationId && voice.conversationId !== state.activeConversationId ? findConversation(voice.conversationId)?.conversation.title : null;
-  const statusText = finishing ? t('voice.finishing') : transcribing ? t(job === voice.jobs[0] ? 'voice.transcribing' : 'voice.queued') : busy ? voice.status : message;
+  const statusText = finishing ? t('voice.finishing') : transcribing ? t(queued ? 'voice.queued' : 'voice.transcribing') : busy ? voice.status : message;
   $('#voice-recording-status').textContent = backgroundChat ? `${statusText} · ${backgroundChat}` : statusText;
-  $('#voice-recording-status').classList.toggle('sr-only', !busy);
-  $('#voice-waveform').hidden = voice.pending || transcribing || finishing;
+  $('#voice-recording-status').classList.toggle('sr-only', !textual);
+  $('#voice-waveform').hidden = !voice.recording && !spinning;
   $('#voice-recording-cancel').disabled = finishing;
-  $('#voice-stop').hidden = !voice.recording;
+  const stop = $('#voice-stop'), stopSpins = spinning && !job.sendAfter;
+  stop.hidden = !voice.recording && !stopSpins;
+  stop.disabled = !voice.recording;
+  stop.classList.toggle('is-spinning', stopSpins);
   updateComposerControls();
   if (active && !voice.frame) drawVoiceWave();
   if (!active) { cancelAnimationFrame(voice.frame); voice.frame = null; }
@@ -365,7 +497,7 @@ function voiceUi(message = '') {
 
 function releaseRecording(recording) {
   recording.stopped = true;
-  clearTimeout(recording.timer);
+  clearTimeout(recording.timer);clearTimeout(recording.drip);
   recording.stream?.getTracks().forEach(track => track.stop());
   recording.node?.disconnect(); recording.source?.disconnect();
   if (recording.context && recording.context.state !== 'closed') recording.context.close().catch(() => {});
@@ -393,7 +525,7 @@ function cancelVoice(all = false) {
     for (const job of voice.jobs) {
       if (all || (!job.field && job.conversationId === state.activeConversationId)) {
         job.cancelled = true;
-        if (!job.sendAfter) job.recording.insertion.cancel();
+        job.recording.insertion.cancel();
       }
     }
   }
@@ -419,13 +551,13 @@ function speechSamples(chunks, rate) {
   return Array.from(output);
 }
 
-function paintWave(canvas) {
+function paintWave(canvas, values = voice.waveform) {
   const rect = canvas.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
   canvas.width = Math.max(1, Math.round(rect.width * ratio)); canvas.height = 32 * ratio;
   const ctx = canvas.getContext('2d'); ctx.scale(ratio, ratio);
   const count = Math.max(1, Math.floor(rect.width / 5));
-  const values = voice.waveform.slice(-count);
+  values = values.slice(-count);
   ctx.fillStyle = getComputedStyle(canvas).color;
   for (let i = 0; i < count; i++) {
     const value = values[i - (count - values.length)] || 0;
@@ -435,7 +567,7 @@ function paintWave(canvas) {
 }
 
 function drawVoiceWave() {
-  paintWave($('#voice-waveform'));
+  paintWave($('#voice-waveform'), voice.shownWave || voice.waveform);
   voice.frame = requestAnimationFrame(drawVoiceWave);
 }
 
@@ -457,7 +589,7 @@ async function captureVoice(epoch, extra, ui) {
   voice.waveform = [];
   const target = extra.field || composerDictationTarget(extra.conversationId, owner);
   const recording = { chunks: [], count: 0, waveEnergy: 0, waveSamples: 0, epoch, owner, language:lang, report:ui.report,
-    target, insertion:dictationInsertion(target), base:0, from:0, shownThrough:0, revision:0, committed:'', previewText:'',
+    target, insertion:dictationInsertion(target), from:0, committed:'', previewText:'', shown:0, drip:null, previousWords:[], published:[], protectedWords:[],
     nextPreview:0, previewSpeech:0, lastSpeech:0, ...extra };
   voice.capture = recording;
   try {
@@ -515,7 +647,7 @@ async function finishRecording(recording, job) {
       recording.node.port.postMessage('flush');
     });
     await releaseRecording(recording);
-    job.samples = recordingSamples(recording, recording.base);
+    job.samples = recordingSamples(recording);
     recording.chunks = [];
   } catch (error) {
     await releaseRecording(recording);
@@ -562,18 +694,10 @@ async function stopVoice(sendAfter = false) {
   const recording = voice.recording;
   if (!recording) return;
   const conversationId = recording.conversationId;
-  syncLiveInsertion(recording);
-  if (sendAfter) recording.insertion.cancel();
-  if (conversationId === state.activeConversationId) saveChatDraft();
-  const draft = structuredClone(state.drafts.get(conversationId) || {text:'',attachments:[],editing:null});
-  const job = {conversationId, recording, owner:recording.owner, language:recording.language, cancelled:false, samples:null, sendAfter, draft, transcript:recording.previewText};
+  flushDictation(recording);
+  // Send keeps the draft and the live words visible; the composer is only locked until the final pass.
+  const job = {conversationId, recording, owner:recording.owner, language:recording.language, cancelled:false, samples:null, sendAfter, wave:voice.waveform.slice()};
   voice.jobs.push(job);voice.transcribing = true;
-  if (sendAfter) {
-    state.drafts.delete(conversationId);
-    if (conversationId === state.activeConversationId) {
-      setComposerText('');autoGrow();state.attachments=[];state.editingMessageIndex=null;renderDraft();
-    }
-  }
   voice.recording = null;voiceUi(t('voice.transcribing'));
   try { await finishRecording(recording, job); }
   finally {
@@ -626,7 +750,7 @@ async function startFieldVoice(target) {
 async function stopFieldVoice() {
   const recording = voice.field?.recording;
   if (!recording) return;
-  syncLiveInsertion(recording);
+  flushDictation(recording);
   const job = {field:recording.field, recording, owner:recording.owner, language:recording.language, cancelled:false, samples:null};
   voice.jobs.push(job);voice.transcribing = true;
   voice.field = null;voiceUi();
@@ -667,41 +791,28 @@ function fieldVoiceStrip(onCancel) {
   return strip;
 }
 
-function restoreVoiceDraft(job) {
-  if (!job.sendAfter || job.restored || job.owner !== state.config.firebase_email || !findConversation(job.conversationId)) return;
-  job.restored = true;
-  if (job.conversationId === state.activeConversationId) saveChatDraft();
-  const newer = state.drafts.get(job.conversationId);
-  state.drafts.set(job.conversationId, {
-    text:[job.draft.text,job.cancelled ? '' : job.transcript,newer?.text].filter(Boolean).join('\n'),
-    attachments:[...job.draft.attachments,...(newer?.attachments || [])],
-    editing:newer?.editing ?? job.draft.editing
-  });
-  if (job.conversationId === state.activeConversationId) restoreChatDraft(job.conversationId);
+// Sends exactly what the composer of `id` shows, collapsed pastes and file mentions included.
+function takeVoiceMessage(id) {
+  if (id === state.activeConversationId) saveChatDraft();
+  const draft = state.drafts.get(id);
+  const message = {...composerMessage(draft?.parts || [{text:draft?.text || ''}]), attachments:draft?.attachments || [], edit_index:draft?.editing ?? null};
+  if (!message.content && !message.attachments.length) return null;
+  state.drafts.delete(id);
+  if (id === state.activeConversationId) restoreChatDraft(id);
+  return message;
 }
 
 // A field job never reaches the engine once cancelled, and its text is dropped unless the target is
 // still valid when the transcript arrives.
 async function finalTranscript(job) {
   const recording = job.recording;
-  const sync = () => {
-    if (job.sendAfter || !recording.target.valid()) return false;
-    const base = recording.base;
-    syncLiveInsertion(recording);
-    if (base === recording.base) return false;
-    job.samples = job.samples.slice(Math.round((recording.base - base) * 16000 / recording.context.sampleRate));
-    return true;
-  };
-  sync();
-  // A manual edit owns the already-shown words. Decode only the remaining audio.
-  while (true) {
-    if (recording.base && job.samples.length < 1600) return null;
-    const text = await speechRequest('transcribe_audio', {samples:job.samples,language:job.language});
-    if (job.cancelled || !recording.target.valid()) return null;
-    if (sync()) continue;
-    if (!text?.trim()) throw 'speech_silence';
-    return text.trim();
-  }
+  const text = await speechRequest('transcribe_audio', {samples:job.samples,language:job.language});
+  if (job.cancelled || !recording.target.valid()) return null;
+  if (!text?.trim()) throw 'speech_silence';
+  syncLiveInsertion(recording);
+  if (!recording.protectedWords.length) return text.trim();
+  const words = dictationWords(text);
+  return words.slice(dictationBoundary(recording.protectedWords, words.map(dictationKey))).join(' ');
 }
 
 async function drainFieldJob(job) {
@@ -728,37 +839,37 @@ function drainTranscriptions() {
     while (voice.jobs[0]?.ready) {
       const job = voice.jobs[0], id = job.conversationId;
       if (job.field) { await drainFieldJob(job); continue; }
+      const stale = () => job.cancelled || job.owner !== state.config.firebase_email || !findConversation(id);
       try {
-        if (job.cancelled || job.owner !== state.config.firebase_email || !findConversation(id)) {
-          restoreVoiceDraft(job);continue;
-        }
+        if (stale()) continue;
         if (job.error) throw job.error;
         const text = await finalTranscript(job);
-        if (job.cancelled || job.owner !== state.config.firebase_email || !findConversation(id)) {
-          restoreVoiceDraft(job);continue;
-        }
-        job.transcript = text || '';
+        if (stale()) continue;
+        if (text !== null) job.recording.insertion.update(text);
         if (job.sendAfter) {
-          const message = {content:joinDictation(job.draft.text, job.transcript),attachments:job.draft.attachments,edit_index:job.draft.editing};
           await discoverRemoteTarget(id);
-          if (job.cancelled || job.owner !== state.config.firebase_email || !findConversation(id)) {
-            restoreVoiceDraft(job);continue;
+          if (stale()) continue;
+          const message = takeVoiceMessage(id);
+          if (message) {
+            const queue = state.queues.get(id) || [];
+            queue.push(message);state.queues.set(id,queue);refreshQueue(id);
+            if (id === state.activeConversationId) chatScroll.follow();
           }
-          const queue = state.queues.get(id) || [];
-          queue.push(message);state.queues.set(id,queue);refreshQueue(id);
-        } else {
-          if (text !== null) job.recording.insertion.update(text);
-          if (id === state.activeConversationId) composerStatus();
-          else composerStatus(`${t('voice.added_to')} «${findConversation(id)?.conversation.title}»`);
-        }
+        } else if (id === state.activeConversationId) composerStatus();
+        else composerStatus(`${t('voice.added_to')} «${findConversation(id)?.conversation.title}»`);
       } catch (error) {
         console.error('Dictation failed',error);
-        restoreVoiceDraft(job);
+        // The draft and the live words never left the composer: it only needs unlocking.
         if (job.owner === state.config.firebase_email) composerStatus(`${voiceError(error)} · ${findConversation(id)?.conversation.title || ''}`);
       } finally {
         job.samples = null;
         voice.jobs.shift();voice.transcribing = voice.jobs.length > 0;
         voiceUi();flushQueue(id);
+        // Locking the composer dropped its focus (and the disabled Send button's): give it back.
+        const focused = document.activeElement;
+        if (job.sendAfter && id === state.activeConversationId && (focused === document.body || focused?.closest('.composer'))) {
+          composerEl().focus();placeCaretAtEnd(composerEl());
+        }
       }
     }
   })().finally(() => {voice.worker = null;if (voice.jobs[0]?.ready) drainTranscriptions();});

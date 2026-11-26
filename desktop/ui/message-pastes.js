@@ -21,8 +21,8 @@ function messageParts(message) {
   return parts;
 }
 
-function composerMessage() {
-  const parts = composerParts(), raw = parts.map(part => part.text).join('');
+function composerMessage(parts = composerParts()) {
+  const raw = parts.map(part => part.text).join('');
   const content = raw.trim(), left = raw.length - raw.trimStart().length, right = left + content.length;
   let offset = 0;
   const pastes = [];

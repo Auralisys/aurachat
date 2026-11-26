@@ -71,6 +71,8 @@ chiave sono descritti nel runbook; nessun segreto va inserito nel repository.
   Nessun rinnovo automatico dei vecchi titoli o retry AI dopo errori:
   il titolo provvisorio resta visibile e viene segnalato il fallimento.
   Il titolo e condiviso con Mac e mobile, anche quando il turno nasce da remoto.
+  Un messaggio appena inviato entra con una breve salita e dissolvenza (260 ms);
+  ricostruire la cronologia non rianima le bubble già presenti.
   Mentre il modello pensa il composer resta utilizzabile: con il
   campo vuoto compare solo **Stop**, che chiude il turno conservando la parte di risposta
   gia mostrata; con testo o allegati compaiono **Stop** e **Invia** e l'invio accoda il
@@ -90,7 +92,12 @@ chiave sono descritti nel runbook; nessun segreto va inserito nel repository.
   disponibile (`stop_chat` ferma il turno solo per il proprietario della conversazione).
 - **Errori e chat in background**: un turno fallito conserva testo parziale,
   errore e Riprova anche cambiando chat o ricaricando la cronologia nella stessa
-  sessione. Non vengono inseriti errori locali nei salvataggi della sidebar.
+  sessione. L'errore è una scheda leggibile: titolo e suggerimento per rete, chiave
+  API rifiutata, limite di richieste o provider in errore, con il testo tecnico
+  in «Dettagli tecnici». Riprova compare solo sull'ultimo errore e rimanda lo stesso
+  messaggio (allegati inclusi) o rigenera la risposta. Prima di arrivare
+  all'utente, una connessione caduta prima della risposta viene ritentata due volte
+  (0,8 s e 1,6 s). Non vengono inseriti errori locali nei salvataggi della sidebar.
   Una cronologia realmente piu recente, ricevuta da un altro dispositivo,
   sostituisce il tentativo fallito; un nuovo invio non riparte automaticamente.
   Le code avviate in background mostrano subito la domanda corretta quando si
@@ -793,20 +800,28 @@ e confrontare la durata con il vecchio ritmo, senza riscaricarli.
 Il registratore AudioWorklet cattura mono, ricampiona a 16 kHz e conserva l'audio
 solo in memoria. Limite due minuti. La dettatura desktop è **sempre live** in tutti
 i campi con microfono: compositore, risposte Ask User e commenti sulle immagini,
-senza opzione per disattivarla e senza correzione LLM. `preview_audio` aggiorna il
-testo dopo i primi 1,5 s di audio e poi con almeno 750 ms di nuovo audio dopo ogni
-risposta; la latenza effettiva dipende dall'inferenza. Le finestre arrivano al massimo
+senza opzione per disattivarla e senza correzione LLM. `preview_audio` parte dopo
+1,5 s e riparte con almeno 750 ms di nuovo audio dopo ogni risposta. Le parole
+compaiono quando due letture consecutive concordano; in pausa è possibile una
+lettura di conferma. La latenza dipende dall'inferenza. Le finestre arrivano al massimo
 a 30 s: dai 12 s si conservano i segmenti completi di Whisper, lasciando almeno
-l'ultimo secondo da rivedere. Stop rilegge l'intero clip per finalizzarlo.
-Si anima solo il testo nuovo, con fade e lieve sfocatura in sequenza da sinistra a
-destra (240 ms, ritardo massimo 180 ms), senza spostare il testo esistente.
+l'ultimo secondo da rivedere. Mentre parli, le parole già visibili non vengono
+riscritte. Le nuove parole confermate entrano una alla volta, a un ritmo che segue
+quante ne restano da mostrare (50–220 ms ciascuna): ognuna si scopre da sinistra a
+destra con una maschera morbida e nasce in viola AuraChat (`--c-glow`) prima di
+prendere il colore del testo. Il testo già scritto non viene mai animato.
+Stop mostra subito le parole ancora in attesa, ferma la forma d'onda attenuandola
+e mette uno spinner al posto di Stop mentre Whisper rilegge l'intera registrazione;
+le correzioni finali sostituiscono il testo direttamente, senza una seconda animazione.
 I textarea usano uno specchio visivo temporaneo non interattivo e nascosto alle
 tecnologie assistive; la preferenza di sistema per movimento ridotto elimina
 l'effetto, non la trascrizione live.
 La lingua segue italiano/inglese dell'interfaccia. Registrazione con forma
 d'onda: X scarta audio e testo provvisorio ancora posseduto dalla dettatura;
 Stop finalizza senza inviare; Invio finalizza e invia
-insieme al testo già scritto e agli allegati. Modificare a mano le parole dettate
+insieme al testo già scritto e agli allegati. Durante quell'ultima passata il
+compositore resta visibile ma bloccato, con uno spinner sul pulsante Invia: né il
+testo scritto prima né quello dettato scompaiono. Modificare a mano le parole dettate
 le conserva e fa continuare la dettatura dall'audio non ancora mostrato.
 La destinazione viene fissata
 all'avvio, prima della preparazione del modello: cambiare chat non sposta il
@@ -818,8 +833,9 @@ e lingua/destinazione proprie. La chat interessata mostra il loader o
 “Trascrizione in coda”; le altre restano utilizzabili. Una sola anteprima può essere
 in corso, non si accodano anteprime obsolete e i lavori finali hanno precedenza.
 Annullare una trascrizione non annulla quelle delle altre chat; logout e chiusura
-nel tray invalidano tutte le operazioni. Un errore nell'Invio ripristina la bozza
-e gli allegati senza inviare altrove. Un errore lascia il testo live disponibile e
+nel tray invalidano tutte le operazioni. Un errore nell'Invio lascia nel compositore
+la bozza, il testo dettato e gli allegati così come erano, lo sblocca e non invia altrove.
+Un errore lascia il testo live disponibile e
 mostra l'avviso; una risposta nativa già in corso può terminare ma viene ignorata
 dopo l'annullamento.
 

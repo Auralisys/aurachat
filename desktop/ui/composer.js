@@ -148,8 +148,11 @@ function composerRange(start, end) {
 }
 
 // Chromium keeps a placeholder <br> in an emptied field; it must not become a trailing newline.
-function dropComposerPlaceholder(el) {
-  if (!composerText() && !el.querySelector('.paste-token') && el.querySelector('br')) {el.replaceChildren();placeCaretAtEnd(el);}
+function dropComposerPlaceholder(el, placeCaret = true) {
+  if (!composerText() && !el.querySelector('.paste-token') && el.querySelector('br')) {
+    el.replaceChildren();
+    if (placeCaret) placeCaretAtEnd(el);
+  }
 }
 
 // Insert plain text at the caret (replacing any current selection).

@@ -111,16 +111,23 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve,extname}=requir
     await page.screenshot({path:resolve(shots,'question-live-complete.png')});
     await page.evaluate(()=>window.__liveText='test dettatura');
     await page.waitForFunction(()=>document.querySelector('#question-requests textarea').value==='prima test dettatura dopo');
-    await strip.locator('.annotator__voice-stop').click();await idle();
+    assert.deepEqual(await mirror.locator('.voice-reveal-word').allTextContents(),['dettatura']);
+    await page.evaluate(()=>{window.__delayTranscript=true;window.__transcript='Test di dettatura.';});
+    await strip.locator('.annotator__voice-stop').click();await page.waitForFunction(()=>window.__finishTranscript);
     assert.equal(await field.inputValue(),'prima test dettatura dopo');
-    assert.equal((await draft('q1')).custom,'prima test dettatura dopo');
+    await mirror.waitFor({state:'detached'});
+    await page.evaluate(()=>{window.__finishTranscript();window.__delayTranscript=false;window.__transcript=null;});
+    await idle();
+    assert.equal(await field.inputValue(),'prima Test di dettatura. dopo');
+    assert.equal((await draft('q1')).custom,'prima Test di dettatura. dopo');
+    assert.equal(await mirror.count(),0,'The corrected final text is native, never a second reveal');
     await mediaBack();
-    await record();await page.waitForFunction(()=>document.querySelector('#question-requests textarea').value.includes('test dettatura test dettatura'));
+    await record();await page.waitForFunction(()=>document.querySelector('#question-requests textarea').value.includes('Test di dettatura. test dettatura'));
     await strip.locator('.annotator__voice-cancel').click();await idle();await mediaBack();
-    assert.equal(await field.inputValue(),'prima test dettatura dopo');
+    assert.equal(await field.inputValue(),'prima Test di dettatura. dopo');
     // Reduced motion changes presentation only: live text still arrives, without mirror/animation.
     await page.emulateMedia({reducedMotion:'reduce'});
-    await record();await page.waitForFunction(()=>document.querySelector('#question-requests textarea').value.includes('test dettatura test dettatura'));
+    await record();await page.waitForFunction(()=>document.querySelector('#question-requests textarea').value.includes('Test di dettatura. test dettatura'));
     assert.equal(await mirror.count(),0);
     await strip.locator('.annotator__voice-cancel').click();await idle();await mediaBack();
     await page.emulateMedia({reducedMotion:'no-preference'});

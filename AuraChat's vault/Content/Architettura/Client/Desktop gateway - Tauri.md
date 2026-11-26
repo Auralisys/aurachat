@@ -218,11 +218,19 @@ già in corso; X, logout e chiusura ignorano i risultati obsoleti. Bozza, accoun
 chat, passaggio o commento restano fissati all'avvio. Il testo già presente, gli
 allegati e i token file/incolla non vengono ricreati. Le modifiche fuori dal tratto
 dettato spostano il suo intervallo; modificare le parole dettate le rende manuali e
-fa proseguire dall'audio non ancora mostrato. Errori espliciti, nessun invio
+protegge il prefisso riconosciuto. La rilettura finale usa tutto l'audio e allinea
+quel prefisso, senza scartare la coda non ancora mostrata. Errori espliciti, nessun invio
 automatico dopo un errore, testo provvisorio recuperabile.
 
-Solo i caratteri nuovi hanno fade/sfocatura in sequenza da sinistra a destra;
-il prefisso invariato non lampeggia. I textarea restano nativi e modificabili:
+Il campo aggiunge solo parole su cui concordano due anteprime consecutive (senza
+distinguere maiuscole e punteggiatura esterna). In pausa si può fare un'ultima
+verifica della coda. Se Whisper rivede o accorcia una frase, quanto già mostrato
+rimane fermo. Le parole nuove escono una alla volta (`dripDictation`, 50–220 ms
+ciascuna a seconda di quante ne restano): ognuna si scopre da sinistra a destra
+con una maschera (`voice-word-wipe`, 380 ms) e nasce in viola `--c-glow`
+(`voice-word-ink`, 900 ms). Stop mostra subito la coda (`flushDictation`) e
+applica il risultato finale come testo normale, senza
+svuotare la bozza né animarla di nuovo. I textarea restano nativi e modificabili:
 uno specchio temporaneo, `aria-hidden` e senza eventi, riproduce l'effetto senza
 muovere cursore o selezione. Con movimento ridotto il testo appare senza effetto.
 
@@ -294,8 +302,12 @@ considerata risolta dalla sola verifica dei campioni audio.
 dell'attesa del modello/microfono. Ogni trascrizione conserva questi dati:
 la destinazione non dipende dalla chat aperta quando il risultato arriva.
 Stop aggiorna la bozza originale (o il compositore corrente se nel frattempo
-si torna alla stessa chat). Invio fotografa testo, allegati e indice di modifica,
-quindi accoda il messaggio nella chat originale anche in background.
+si torna alla stessa chat). Invio lascia testo, allegati e parole dettate nel
+compositore, bloccato (`contentEditable=false`, `aria-readonly`) con uno spinner
+su Invia fino alla rilettura finale; poi prende esattamente ciò che il compositore
+mostra (`takeVoiceMessage`) e lo accoda nella chat originale anche in background.
+Durante la rilettura di Stop la forma d'onda resta ferma e attenuata e uno spinner
+sostituisce Stop, come in Codex.
 
 Una sola cattura del microfono alla volta; durante l'inferenza si puo registrare
 in un'altra chat. `voice.jobs` conserva al massimo 8 audio in attesa in memoria;
@@ -304,8 +316,8 @@ il worker li trascrive in FIFO con una sola chiamata nativa alla volta.
 trascrizione in corso/in coda per la chat aperta. X annulla la cattura corrente
 oppure le trascrizioni della chat aperta, non quelle degli altri progetti.
 Logout, chiusura nel tray e pagehide invalidano tutte le operazioni.
-Un errore di Invio ripristina testo/allegati nella bozza originale; nessun invio
-alternativo alla chat attiva. Le code non sopravvivono al riavvio.
+Un errore di Invio lascia testo/allegati nel compositore così come erano e lo
+sblocca; nessun invio alternativo alla chat attiva. Le code non sopravvivono al riavvio.
 
 `desktop/tests/voice-flow.cjs` copre cattura AudioWorklet, cambio chat durante
 preparazione/inferenza, ritorno all'origine, seconda trascrizione FIFO con invio
@@ -793,6 +805,14 @@ Correzione solo UI: copie separate in `app.js:191`, `app.js:1067`,
 rischio, perché Rust rifiutava la scrittura. La traduzione
 `errors.use_save_conversation` (it/en) sostituisce il codice grezzo. Un invio
 fallito in background resta recuperabile con Riprova (`failedSend`).
+
+Scheda d'errore (26 novembre 2026): `chatError` classifica rete, chiave rifiutata,
+limite di richieste e provider in errore in un titolo con suggerimento
+(`chat.error_*` it/en); il testo grezzo resta in «Dettagli tecnici». Riprova
+(`canRetryError`, `retryFailedTurn`) compare solo sull'ultimo errore: rimanda il
+messaggio fallito o rigenera la risposta. `llm.rs` ritenta due volte (0,8 e
+1,6 s) un `send()` caduto prima della risposta. Le bubble utente appena inviate
+entrano con `msg--arriving` (260 ms, niente con movimento ridotto).
 
 Verifica: `desktop/tests/history-save.cjs`, con mock fedele a `rebase`
 (`data.rs:119`) e `save_tree`, fallisce sul codice precedente e passa ora. Gli

@@ -52,13 +52,13 @@ const assert=require('node:assert/strict');
    if(cmd==='remove_speech_model'){window.__model={ready:false,busy:false,loading:false,loaded:false,downloaded:0,total};return window.__model;}
    if(cmd==='choose_chat_files')return [{name:'notes.md',content:'Existing attachment'}];
    if(cmd==='preview_audio'){
-    if(window.__previewError){window.__previewError=false;throw 'speech_engine: preview failure';}
+    if(window.__previewError){const error=window.__previewError;window.__previewError=false;throw error===true?'speech_engine: preview failure':error;}
     if(window.__delayPreview)return new Promise(resolve=>window.__finishPreview=()=>{window.__finishPreview=null;resolve({text:window.__liveText||'',committed:'',advance:0});});
     return window.__previewResult||{text:window.__liveText||'',committed:'',advance:0};
    }
    if(cmd==='transcribe_audio'){
     if(window.__transcribeError){window.__transcribeError=false;throw 'speech_engine: test failure';}
-    if(window.__delayTranscript){window.__model.busy=true;return new Promise(resolve=>window.__finishTranscript=()=>{window.__model.busy=false;resolve('test dettatura');});}
+    if(window.__delayTranscript){window.__model.busy=true;return new Promise(resolve=>window.__finishTranscript=()=>{window.__model.busy=false;window.__finishTranscript=null;resolve(window.__finalText||'test dettatura');});}
     return 'test dettatura';
    }
    if(cmd==='chat'){
@@ -149,8 +149,12 @@ const assert=require('node:assert/strict');
  await page.evaluate(()=>window.__delayTranscript=true);await record();await page.click('#voice-stop');await page.waitForFunction(()=>window.__finishTranscript);
  await page.waitForFunction(()=>!voice.mediaOperation);
  assert.match(await page.locator('#voice-recording-status').textContent(),/Trascrizione/,'Transcribing label survives media resume');
- assert.equal(await page.locator('#voice-recording-status').evaluate(el=>el.classList.contains('sr-only')),false);
- assert.equal(await page.locator('.voice-loader').isVisible(),true);
+ // Codex-style: the frozen, dimmed waveform stays and Stop turns into a spinner; the label is for screen readers.
+ assert.equal(await page.locator('#voice-recording-status').evaluate(el=>el.classList.contains('sr-only')),true);
+ assert.equal(await page.locator('#voice-waveform').isVisible(),true);
+ assert.equal(await page.locator('#voice-stop.is-spinning').isVisible(),true);
+ assert.equal(await page.locator('#voice-stop').isDisabled(),true);
+ assert.equal(await page.locator('.voice-loader').isVisible(),false);
  await page.screenshot({path:resolve(shots,'voice-transcribing.png')});
  await page.click('#btn-new-chat');await page.fill('#composer-input','Nuova bozza');
  assert.equal(await page.evaluate(()=>__playing),true,'Playback has already resumed during delayed transcription');
@@ -230,22 +234,42 @@ const assert=require('node:assert/strict');
  await page.waitForFunction(()=>!voice.mediaOperation);
  assert.equal(await page.evaluate(()=>__playing),true,'Closing to tray restores playback and stops capture');
  assert.equal(await page.evaluate(()=>window.__tracks.every(t=>t.readyState==='ended')),true);
- // Live text appears before Stop, changes only the owned range, and finalization never duplicates it.
+ // Whisper revises and retracts its tail. Publish only agreeing words, without replacing old nodes.
  await page.fill('#composer-input','Contesto');
- await page.evaluate(()=>{window.__liveText='test';window.__delayTranscript=false;});
+ await page.evaluate(()=>{window.__delayPreview=true;window.__delayTranscript=true;});
  await record();
- await page.waitForFunction(()=>composerText()==='Contesto test' && !!voice.recording);
+ const hypothesis=async text=>{
+   await page.waitForFunction(()=>window.__finishPreview);
+   await page.evaluate(text=>{window.__liveText=text;window.__finishPreview();},text);
+   await page.waitForFunction(()=>!voice.previewWorker&&!voice.recording?.drip);
+   return page.evaluate(()=>composerText());
+ };
+ assert.equal(await hypothesis('prova della dettatura internazionale.'),'Contesto');
+ assert.equal(await hypothesis('prova della dettatura in tempo reale.'),'Contesto prova della dettatura');
  assert.equal(await page.evaluate(()=>__playing),false,'Live inference does not resume media');
- const reveal=await page.locator('#composer-input .voice-reveal-word').count();
- assert(reveal>0,'Only the inserted text has reveal spans');
- await page.evaluate(()=>window.__liveText='test dettatura');
- await page.waitForFunction(()=>composerText()==='Contesto test dettatura');
+ await page.evaluate(()=>window.__oldWords=[...composerEl().querySelectorAll('.voice-reveal-word')].map(word=>word.firstChild));
+ assert.equal(await hypothesis('Prova della'),'Contesto prova della dettatura');
+ assert.equal(await hypothesis('Prova della dettatura in tempo reale. Applausi.'),'Contesto prova della dettatura');
+ assert.equal(await hypothesis('Prova della dettatura in tempo reale. Ancora.'),'Contesto prova della dettatura in tempo reale.');
+ assert.equal(await page.evaluate(()=>__oldWords.every(n=>n.isConnected)&&!composerEl().querySelector('.voice-reveal-word .voice-reveal-word')),true);
  await page.screenshot({path:resolve(shots,'voice-live.png')});
- await page.click('#voice-stop');await page.waitForFunction(()=>!voice.transcribing);
+ await page.evaluate(()=>{
+   window.__delayPreview=false;
+   const r=composerRange(1,12);getSelection().setBaseAndExtent(r.endContainer,r.endOffset,r.startContainer,r.startOffset);
+   return stopVoice();
+ });
+ await page.waitForFunction(()=>window.__finishTranscript);
+ assert.equal(await page.evaluate(()=>composerText()),'Contesto prova della dettatura in tempo reale.');
+ await page.waitForFunction(()=>!composerEl().querySelector('.voice-reveal-word'));
+ assert.equal(await page.evaluate(()=>getSelection().direction),'backward','Settling preserves the direction of a selection');
+ await page.evaluate(()=>{window.__delayTranscript=false;window.__finishTranscript();});
+ await page.waitForFunction(()=>!voice.transcribing);
  assert.equal(await page.evaluate(()=>composerText()),'Contesto test dettatura');
+ assert.equal(await page.locator('#composer-input .voice-reveal-word').count(),0,'Final replacement has no animation');
  await page.waitForFunction(()=>!voice.mediaOperation);
 
  // Cancellation rolls back visible provisional words, not manual edits outside the owned range.
+ await page.evaluate(()=>window.__liveText='test dettatura');
  await page.fill('#composer-input','Base');await record();
  await page.waitForFunction(()=>composerText()==='Base test dettatura');
  await page.evaluate(()=>{const node=composerEl().firstChild;node.textContent='Base aggiornata';});
@@ -255,10 +279,26 @@ const assert=require('node:assert/strict');
  await page.evaluate(()=>window.__liveText='test');await record();
  await page.waitForFunction(()=>composerText()==='Base aggiornata test');
  await page.fill('#composer-input','Correzione manuale');
- await page.evaluate(()=>window.__liveText='altro testo');
+ await page.evaluate(()=>window.__liveText='test altro testo');
  await page.waitForFunction(()=>composerText()==='Correzione manuale altro testo');
  await page.click('#voice-recording-cancel');await page.waitForFunction(()=>!voice.mediaOperation);
  assert.equal(await page.evaluate(()=>composerText()),'Correzione manuale');
+
+ // Corrections before a published name are not new speech. Editing that name during
+ // finalization keeps the edit and the not-yet-visible ending of the same recording.
+ await page.fill('#composer-input','');
+ await page.evaluate(()=>{window.__delayPreview=true;window.__delayTranscript=true;});
+ await record();
+ assert.equal(await hypothesis('chiama Anna ora'),'');
+ assert.equal(await hypothesis('chiama Anna domani'),'chiama Anna');
+ assert.equal(await hypothesis('chiama anche la collega Anna domani'),'chiama Anna');
+ assert.equal(await hypothesis('chiama anche la collega Anna domani mattina'),'chiama Anna domani');
+ await page.evaluate(()=>{window.__delayPreview=false;window.__finalText='Chiama anche la collega Anna domani mattina.';});
+ await page.click('#voice-stop');await page.waitForFunction(()=>window.__finishTranscript);
+ await page.fill('#composer-input','Scrivi a Luca venerdì');
+ await page.evaluate(()=>{window.__finishTranscript();window.__delayTranscript=false;window.__finalText=null;});
+ await page.waitForFunction(()=>!voice.transcribing);
+ assert.equal(await page.evaluate(()=>composerText()),'Scrivi a Luca venerdì mattina.');
 
  // Stop waits for at most the in-flight preview; no final inference races the preview.
  await page.fill('#composer-input','Invio live');
@@ -303,6 +343,24 @@ const assert=require('node:assert/strict');
  assert.equal(bounded.samples,16000*30);assert.equal(bounded.from,12);
  await page.click('#voice-recording-cancel');await page.waitForFunction(()=>!voice.mediaOperation);
  await page.evaluate(()=>{window.__previewResult=null;window.__liveText='';});
+ // A pause confirms a short utterance just once. Skipping a silent window must not swallow
+ // the first word of the next phrase, including when a word is genuinely repeated.
+ await page.fill('#composer-input','');await record();
+ const paused=await page.evaluate(async()=>{
+   const r=voice.recording,rate=r.context.sampleRate;
+   const tick=async(seconds,text,speech,error=false)=>{
+     r.count=seconds*rate;r.chunks=[new Float32Array(r.count).fill(.01)];
+     if(speech)r.lastSpeech=r.count;
+     window.__liveText=text;window.__previewError=error;
+     const before=__calls.length;previewRecording(r);await voice.previewWorker;
+     while(r.drip)await new Promise(resolve=>setTimeout(resolve,20));
+     return [composerText(),__calls.slice(before).some(c=>c.cmd==='preview_audio')];
+   };
+   return [await tick(2,'ciao',true),await tick(3,'ciao',false),await tick(4,'',false),
+     await tick(13,'',true,'speech_silence'),await tick(15,'sì sì',true),await tick(16,'sì sì certo',true)];
+ });
+ assert.deepEqual(paused,[['',true],['ciao',true],['ciao',false],['ciao',true],['ciao',true],['ciao sì sì',true]]);
+ await page.click('#voice-recording-cancel');await page.waitForFunction(()=>!voice.mediaOperation);
  // Live failures are surfaced and recover on a later preview, without losing the draft.
  await page.fill('#composer-input','Base');
  await page.evaluate(()=>{window.__liveText='parole nuove';window.__previewError=true;});
@@ -312,19 +370,32 @@ const assert=require('node:assert/strict');
  assert.equal(await page.locator('#composer-status').textContent(),'');
  await page.evaluate(()=>window.__transcribeError=true);
  await page.click('#composer-send');await page.waitForFunction(()=>!voice.transcribing);
- assert.equal(await page.evaluate(()=>composerText()),'Base\nparole nuove','Failed final send restores the visible live transcript once');
+ assert.equal(await page.evaluate(()=>composerText()),'Base parole nuove','Failed final send leaves the visible draft exactly as it was');
+ assert.equal(await page.evaluate(()=>composerEl().contentEditable),'true','The composer unlocks after a failed send');
  await page.waitForFunction(()=>!voice.mediaOperation);
 
- // Measure the actual staggered fade mid-flight: stable text is not animated.
+ // Measure the reveal mid-flight: words arrive one per insertion, each wiped in from the left in AuraChat violet.
  await page.fill('#composer-input','Dettatura live:');
- await page.evaluate(()=>window.__liveText='Il testo appare mentre parlo, senza comparire di colpo.');
+ await page.evaluate(()=>{
+   window.__liveText='Il testo appare mentre parlo, senza comparire di colpo.';
+   window.__wordBatches=[];
+   new MutationObserver(records=>records.forEach(record=>{
+     const words=[...record.addedNodes].filter(node=>node.classList?.contains('voice-reveal-word')).length;
+     if(words)__wordBatches.push(words);
+   })).observe(composerEl(),{childList:true,subtree:true});
+ });
  await record();await page.waitForFunction(()=>composerText().includes('di colpo.'));
  const motion=await page.locator('#composer-input').evaluate(el=>{
-   const words=[...el.querySelectorAll('.voice-reveal-word')];
-   words.forEach(word=>word.getAnimations().forEach(animation=>{animation.pause();animation.currentTime=100;}));
-   return words.map(word=>({text:word.textContent,opacity:Number(getComputedStyle(word).opacity)}));
+   const word=[...el.querySelectorAll('.voice-reveal-word')].at(-1),animations=word.getAnimations();
+   animations.forEach(animation=>{animation.pause();animation.currentTime=100;});
+   const style=getComputedStyle(word);
+   return {text:word.textContent,names:animations.map(animation=>animation.animationName).sort(),mask:style.webkitMaskPosition||style.maskPosition,color:style.color,ink:getComputedStyle(el).color};
  });
- assert(motion.length>3);assert(motion[0].opacity>motion.at(-1).opacity,'New words reveal from left to right');
+ assert.equal(motion.text,'colpo.');
+ assert.deepEqual(motion.names,['voice-word-ink','voice-word-wipe']);
+ assert(!['0% 0%','100% 0%'].includes(motion.mask),`The wipe is mid-way (${motion.mask})`);
+ assert.notEqual(motion.color,motion.ink,'A new word lands in violet before taking the text colour');
+ assert(await page.evaluate(()=>__wordBatches.length>=8&&__wordBatches.every(count=>count===1)),'Words appear one at a time');
  assert.equal(await page.evaluate(()=>composerEl().firstChild.nodeType===Node.TEXT_NODE),true,'Existing text is not animated');
  await page.screenshot({path:resolve(shots,'voice-live-reveal.png')});
  await page.locator('#composer-input').evaluate(el=>el.querySelectorAll('.voice-reveal-word').forEach(word=>word.getAnimations().forEach(animation=>animation.finish())));
@@ -358,7 +429,7 @@ const assert=require('node:assert/strict');
  assert.equal(await micPage.locator('#composer-mic').isEnabled(),true);
  assert.equal(await micPage.locator('#composer-mic').evaluate(el=>el.classList.contains('is-loading')),false);
  assert.equal(await micPage.locator('#composer-mic').getAttribute('aria-label'),locales['chat.dictate']);
- await micPage.evaluate(()=>window.__liveText='Testo provvisorio');
+ await micPage.evaluate(()=>{composerEl().replaceChildren(document.createElement('br'));window.__liveText='Testo provvisorio';});
  await micPage.click('#composer-mic');await micPage.locator('#voice-stop').waitFor({state:'visible'});
  await micPage.waitForFunction(()=>composerText()==='Testo provvisorio');
  assert.equal(await micPage.evaluate(()=>window.__tracks.length>0),true);

@@ -183,7 +183,22 @@ input,textarea { caret-color:var(--c-glow); }
 .msg--user { align-items:flex-end; position:relative; }
 .msg__text { line-height:1.65; overflow-wrap:anywhere; white-space:pre-wrap; font-size:var(--fs-chat); }
 .msg--user .msg__text { max-width:min(85%,560px); background:var(--c-user); border-radius:18px; padding:var(--space-3) var(--space-4); }
-.msg--error .msg__text { color:var(--c-glow); border:1px solid var(--c-destructive); padding:var(--space-3); border-radius:var(--radius-md); }
+@media (prefers-reduced-motion:no-preference) {
+  .msg--user.msg--arriving { animation:msg-arrive 260ms cubic-bezier(.2,.7,.2,1); transform-origin:100% 100%; }
+  @keyframes msg-arrive { from { opacity:0; transform:translateY(8px) scale(.98); } }
+}
+.msg--error .msg__text { display:grid; gap:4px; justify-items:start; max-width:min(100%,560px); white-space:normal; background:rgba(212,24,61,.08); border:1px solid rgba(212,24,61,.32); padding:12px 14px; border-radius:var(--radius-md); }
+.msg__error-title { display:flex; align-items:flex-start; gap:8px; margin:0; color:var(--c-text); font-weight:600; }
+.msg__error-title .ui-icon { width:16px; height:16px; flex:none; margin-top:.3em; color:#ff6b86; }
+.msg__error-hint { margin:0 0 0 24px; color:var(--c-text-muted); }
+.msg__error-retry { display:inline-flex; align-items:center; gap:6px; height:30px; margin:6px 0 0 24px; padding:0 12px; border-radius:7px; background:var(--c-accent); color:#fff; font-size:13px; font-weight:500; transition:background .15s ease, transform .1s ease; }
+.msg__error-retry .ui-icon { width:14px; height:14px; }
+.msg__error-retry:hover:not(:disabled) { background:var(--c-accent-hover); }
+.msg__error-retry:active:not(:disabled) { transform:scale(.97); }
+.msg__error-retry:disabled { opacity:.5; cursor:default; }
+.msg__error-details { margin:4px 0 0 24px; color:var(--c-text-muted); font-size:var(--fs-label); }
+.msg__error-details summary { cursor:pointer; width:max-content; }
+.msg__error-details p { margin:6px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; }
 .msg__meta,.thinking__label { color:var(--c-text-muted); font-size:var(--fs-label); font-variant-numeric:tabular-nums; }
 .thinking { display:none; }
 .messages > .msg { flex-shrink:0; }
@@ -219,6 +234,7 @@ input,textarea { caret-color:var(--c-glow); }
 .composer__input { position:relative; display:block; width:100%; min-height:44px; max-height:160px; overflow-y:auto; background:transparent; border:0; outline:0; line-height:1.6; padding:var(--space-1) var(--space-2); white-space:pre-wrap; overflow-wrap:break-word; scrollbar-width:none; cursor:text; }
 .composer__input::-webkit-scrollbar { display:none; }
 .composer__input:focus-visible { outline:0; }
+.composer__input[contenteditable="false"] { cursor:default; }
 .composer__input:empty::before, .composer__input.is-empty::before { content:attr(data-placeholder); position:absolute; inset:var(--space-1) var(--space-2) auto; color:var(--c-placeholder); pointer-events:none; user-select:none; }
 .composer__input .skill-token { color:var(--c-glow); }
 .paste-token { display:inline-flex; align-items:center; gap:4px; padding:1px 6px; margin-inline-end:4px; border-radius:var(--radius-full); background:var(--c-hover); color:var(--c-text); font-size:12px; line-height:1.6; vertical-align:baseline; white-space:nowrap; cursor:pointer; user-select:all; }
@@ -725,10 +741,13 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 .voice-field-reveal { position:absolute; box-sizing:border-box; margin:0; border:0; overflow:hidden; white-space:pre-wrap; pointer-events:none; user-select:none; }
 .voice-field-revealing { color:transparent !important; caret-color:var(--voice-caret) !important; }
 @media (prefers-reduced-motion:no-preference) {
-  .voice-reveal-word { animation:voice-text-arrive 240ms cubic-bezier(.16,1,.3,1) var(--voice-delay,0ms) backwards; }
-  @keyframes voice-text-arrive { from { opacity:0; filter:blur(2px); } to { opacity:1; filter:blur(0); } }
+  /* Codex-style arrival: each word is wiped in from the left and lands in AuraChat violet before taking the text colour. */
+  .voice-reveal-word { -webkit-mask-image:linear-gradient(90deg,#000 33.3%,transparent 66.6%); mask-image:linear-gradient(90deg,#000 33.3%,transparent 66.6%); -webkit-mask-size:300% 100%; mask-size:300% 100%; -webkit-mask-repeat:no-repeat; mask-repeat:no-repeat; animation:voice-word-wipe 380ms cubic-bezier(.3,.45,.25,1) var(--voice-delay,0ms) backwards,voice-word-ink 900ms ease-out var(--voice-delay,0ms) backwards; }
+  @keyframes voice-word-wipe { from { -webkit-mask-position:100% 0; mask-position:100% 0; } to { -webkit-mask-position:0 0; mask-position:0 0; } }
+  @keyframes voice-word-ink { from { color:var(--c-glow); } }
 }
-.voice-recording canvas { flex:1 1 0; width:0; min-width:0; height:32px; color:var(--c-text-muted); }
+.voice-recording canvas { flex:1 1 0; width:0; min-width:0; height:32px; color:var(--c-text-muted); transition:opacity .2s ease; }
+.voice-recording.is-transcribing canvas { opacity:.45; }
 .voice-recording .icon-button { flex:none; width:28px; height:28px; padding:0; border-radius:50%; background:var(--c-hover); }
 #voice-recording-status:not(.sr-only) { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:var(--c-text-muted); }
 .voice-loader { display:none; flex:none; align-items:center; gap:4px; height:28px; padding:0 2px; }
@@ -749,6 +768,14 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 @keyframes mic-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:no-preference) { #composer-mic.is-loading::after { animation:mic-spin .85s linear infinite; } }
 .is-backgrounded #composer-mic.is-loading::after { animation-play-state:paused; }
+/* While the recording is transcribed, Stop (or Send, for transcribe-and-send) turns into a spinner, as in Codex. */
+#voice-stop.is-spinning,.composer__send.is-spinning { position:relative; cursor:progress; }
+#voice-stop.is-spinning:disabled,.composer__send.is-spinning:disabled { opacity:1; }
+#voice-stop.is-spinning > svg,.composer__send.is-spinning > svg { visibility:hidden; }
+#voice-stop.is-spinning::after,.composer__send.is-spinning::after { content:''; position:absolute; inset:0; margin:auto; width:16px; height:16px; border:2px solid color-mix(in srgb,currentColor 30%,transparent); border-top-color:currentColor; border-radius:50%; }
+#voice-stop.is-spinning { color:var(--c-glow); }
+@media (prefers-reduced-motion:no-preference) { #voice-stop.is-spinning::after,.composer__send.is-spinning::after { animation:mic-spin .85s linear infinite; } }
+.is-backgrounded #voice-stop.is-spinning::after,.is-backgrounded .composer__send.is-spinning::after { animation-play-state:paused; }
 #voice-error:empty { display:none; }
 .permission-control { position:relative; flex-shrink:1; min-width:0; }
 .composer__toolbar:has(.permission-control:not([hidden])) .composer__attach { margin-right:0; }

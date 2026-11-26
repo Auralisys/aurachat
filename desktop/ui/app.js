@@ -86,7 +86,7 @@ function applyTranslations() {
   document.querySelectorAll('[data-i18n]').forEach((el) => (el.textContent = t(el.dataset.i18n)));
   document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
     const value = t(el.dataset.i18nPlaceholder);
-    if (el.isContentEditable) {el.setAttribute('data-placeholder', value);el.setAttribute('aria-placeholder', value);}
+    if (el.hasAttribute('contenteditable')) {el.setAttribute('data-placeholder', value);el.setAttribute('aria-placeholder', value);}
     else el.setAttribute('placeholder', value);
   });
   document.querySelectorAll('[data-i18n-aria-label]').forEach((el) => el.setAttribute('aria-label', t(el.dataset.i18nAriaLabel)));
@@ -325,7 +325,7 @@ function icon(name) {
     }
     return svg;
   }
-  const glyph = {computer:'Monitor', gear:'Settings', person:'UserRound', cpu:'Cpu', microphone:'Mic', search:'Search', back:'ArrowLeft', trash:'Trash2', compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', image:'Image', fileCode:'FileCode', fileData:'FileJson', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown', globe:'Globe', external:'ExternalLink', forward:'ArrowRight', reload:'RotateCw', capture:'MessageSquarePlus', summary:'List', panelRight:'PanelRight', expand:'Maximize2', restore:'Minimize2', git:'GitBranch', sources:'Files', link:'Link2', handoff:'ArrowRightLeft'}[name];
+  const glyph = {computer:'Monitor', gear:'Settings', person:'UserRound', cpu:'Cpu', microphone:'Mic', search:'Search', back:'ArrowLeft', trash:'Trash2', compose:'MessageCirclePlus', chat:'MessageSquare', project:'Folder', file:'FileText', image:'Image', fileCode:'FileCode', fileData:'FileJson', shield:'ShieldCheck', agents:'Bot', settings:'Settings2', terminal:'SquareTerminal', check:'Check', more:'Ellipsis', chevron:'ChevronDown', globe:'Globe', external:'ExternalLink', forward:'ArrowRight', reload:'RotateCw', capture:'MessageSquarePlus', summary:'List', panelRight:'PanelRight', expand:'Maximize2', restore:'Minimize2', git:'GitBranch', sources:'Files', link:'Link2', handoff:'ArrowRightLeft', alert:'CircleAlert'}[name];
   if (glyph && lucide.icons[glyph]) return lucide.createElement(lucide.icons[glyph], {class:'ui-icon','aria-hidden':'true'});
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
@@ -1223,7 +1223,22 @@ function messageEl(m, index) {
   if (role === 'assistant') {
     text.classList.add('markdown');renderTurnBody(text, m);
   } else if (role === 'user') renderMessagePastes(text, m);
-  else text.textContent = m.content;
+  else {
+    const title = document.createElement('p');title.className = 'msg__error-title';
+    title.append(icon('alert'),document.createTextNode(m.content));text.appendChild(title);
+    if (m.hint) {const hint = document.createElement('p');hint.className = 'msg__error-hint';hint.textContent = m.hint;text.appendChild(hint);}
+    if (canRetryError(m,index)) {
+      const retry = document.createElement('button');retry.type = 'button';retry.className = 'msg__error-retry';
+      retry.append(icon('retry'),document.createTextNode(t('chat.retry')));retry.disabled = state.busy;
+      retry.addEventListener('click',retryFailedTurn);text.appendChild(retry);el._busyRetry = retry;
+    }
+    if (m.detail) {
+      const details = document.createElement('details');details.className = 'msg__error-details';
+      const summary = document.createElement('summary');summary.textContent = t('chat.error_details');
+      const detail = document.createElement('p');detail.textContent = m.detail;
+      details.append(summary,detail);text.appendChild(details);
+    }
+  }
   const images = (m.attachments || []).filter(isImageAttachment), files = (m.attachments || []).filter(file => !isImageAttachment(file));
   if (images.length) el.appendChild(messageImagesEl(images));
   if (m.content || m.activity?.length) el.appendChild(text);
@@ -1234,8 +1249,8 @@ function messageEl(m, index) {
   }
   const actions = document.createElement('div');actions.className = 'msg-actions';
   // Reused history nodes follow busy changes without being rebuilt.
-  el._busyControls = [];
-  if (m.content) actions.appendChild(messageAction('copy','chat.copy',button => copyText(m.content,button)));
+  el._busyControls = el._busyRetry ? [el._busyRetry] : [];
+  if (m.content) actions.appendChild(messageAction('copy','chat.copy',button => copyText([m.content,m.hint,m.detail].filter(Boolean).join('\n'),button)));
   if (role === 'assistant') {
     if ('AudioContext' in window || ('speechSynthesis' in window && typeof SpeechSynthesisUtterance === 'function')) actions.appendChild(messageAction('speaker','chat.read_aloud',button => readMessage(m.content,button)));
     for (const [glyph,key,value] of [['thumbUp','chat.helpful',true],['thumbDown','chat.not_helpful',false]]) {
@@ -1252,11 +1267,13 @@ function messageEl(m, index) {
     const edit = messageAction('rename','chat.edit',() => editMessage(index));
     edit.classList.add('message-action--edit');edit.append(document.createTextNode(t('chat.edit_short')));
     edit.disabled = state.busy;actions.appendChild(edit);el._busyControls.push(edit);
-  } else if (state.failedSend) actions.appendChild(messageAction('retry','chat.retry',() => {
-    restoreMessageDraft(state.failedSend);state.editingMessageIndex = state.failedSend.edit_index ?? null;
-    state.attachments = structuredClone(state.failedSend.attachments);renderDraft();autoGrow();send();
-  }));
+  }
   el.appendChild(actions);return el;
+}
+
+// Only the latest failure can be retried, and an unsaved message needs its original payload.
+function canRetryError(m, index) {
+  return !!m.retry && index === state.messages.length - 1 && (m.retry === 'regenerate' || !!state.failedSend);
 }
 
 // Unchanged history keeps its DOM. Rebuilding a long chat re-parses every Markdown
@@ -1286,13 +1303,18 @@ function sameMessage(a, b) {
 }
 
 function renderedMessage(message, index, latest) {
-  const failed = message.role === 'error' && !!state.failedSend;
+  const failed = message.role === 'error' && canRetryError(message,index);
   const entry = renderedMessages.entries[index];
   if (entry && entry.latest === latest && entry.failed === failed && sameMessage(entry.message,message)) {
     entry.node._busyControls.forEach(button => {button.disabled = state.busy;});
     return entry.node;
   }
   const node = messageEl(message,index);node.dataset.messageIndex = String(index);
+  // Only a prompt sent just now glides in; history and rebuilds of the same bubble appear in place.
+  if (message.role === 'user' && !(entry && sameMessage(entry.message,message)) && typeof message.created_at === 'number' && Date.now() - message.created_at < 1500) {
+    node.classList.add('msg--arriving');
+    node.addEventListener('animationend', event => {if (event.target === node) node.classList.remove('msg--arriving');});
+  }
   renderedMessages.entries[index] = {message:messageSnapshot(message), node, latest, failed};
   return node;
 }
@@ -1412,12 +1434,14 @@ async function requestChat(payload) {
     return true;
   } catch (e) {
     await finishLiveTurn(run);
+    // Guidance or summaries added during the turn mean the gateway saved the user message: retry regenerates it.
+    const savedTurn = !payload.retry && run.messages.length > run.initialMessageCount;
     if (run.stream?.content || run.stream?.activity.length) run.messages.push({role:'assistant', content:run.stream.content, activity:run.stream.activity});
-    run.messages.push({role:'error',content:localizeError(e)});
+    run.messages.push({role:'error', ...chatError(e,id), retry:payload.retry || savedTurn ? 'regenerate' : 'resend'});
     // Requests already billed before the failure stay visible as the last reply.
     run.usage = run.liveUsage || null;run.liveUsage = null;
     run.queueOutcome = 'failed';
-    if (!payload.retry) run.failedSend = {content:payload.content, attachments:payload.attachments || [],edit_index:payload.edit_index,...pasteMetadata(payload)};
+    if (!payload.retry && !savedTurn) run.failedSend = {content:payload.content, attachments:payload.attachments || [],edit_index:payload.edit_index,index:run.initialMessageCount - 1,...pasteMetadata(payload)};
     return false;
   }
   finally {
@@ -1443,6 +1467,23 @@ async function regenerateReply() {
   catch (error) {composerStatus(localizeError(error));return;}
   if (state.busy) return;
   await requestChat({conversation_id:state.activeConversationId,content:'',retry:true});
+}
+
+// The failed bubble stays in place: an unsaved message is sent again as it was,
+// a turn the gateway already saved is regenerated from its last user message.
+async function retryFailedTurn() {
+  const id = state.activeConversationId, failed = state.messages.at(-1);
+  if (failed?.role !== 'error' || !failed.retry || state.loadingConversation || !canStartRequest(id)) return;
+  const message = failed.retry === 'resend' ? state.failedSend : null;
+  if (failed.retry === 'resend' && !message) return;
+  try {await discoverRemoteTarget(id);}
+  catch (error) {composerStatus(localizeError(error));return;}
+  if (id !== state.activeConversationId || state.messages.at(-1) !== failed || !canStartRequest(id)) return;
+  const run = state.runs.get(id);if (run) {run.failedSend = null;run.queueOutcome = null;}
+  state.failedSend = null;queuedTurns.paused.delete(id);
+  if (!message) {state.messages.pop();await requestChat({conversation_id:id,content:'',retry:true});return;}
+  state.messages.splice(message.index + 1);
+  await requestChat({conversation_id:id, content:message.content, attachments:message.attachments, edit_index:message.edit_index,...pasteMetadata(message)});
 }
 
 // ===== Nome della chat =====
@@ -1477,6 +1518,13 @@ function updateComposerControls() {
   input.dataset.i18nPlaceholder = placeholderKey;
   input.dataset.placeholder = placeholder;
   input.setAttribute('aria-placeholder', placeholder);
+  // Transcribe-and-send keeps the text on screen but read-only until it is queued.
+  const sendingVoice = voice.jobs.some(job => job.sendAfter && !job.cancelled && job.conversationId === state.activeConversationId);
+  if (input.isContentEditable === sendingVoice) {
+    input.contentEditable = String(!sendingVoice);
+    if (sendingVoice) input.setAttribute('aria-readonly', 'true');
+    else input.removeAttribute('aria-readonly');
+  }
   const preparingImages = !!imageJobs.get(state.activeConversationId);
   // Composer vuoto durante un turno: solo Stop. Con un messaggio scritto: Stop e Invia (accodato).
   // Durante la registrazione vocale lo stop del modello non ha senso: resta solo Invia (trascrivi e invia).
@@ -1484,6 +1532,7 @@ function updateComposerControls() {
   stop.disabled = !busy || notReady || dictating || recording || !!run?.stopping;
   send.hidden = busy && !composerHasContent() && !recording && !preparingImages;
   send.disabled = notReady || dictating || preparingImages;
+  send.classList.toggle('is-spinning', sendingVoice);
   const label = t(busy ? 'chat.queue_send' : state.editingMessageIndex !== null ? 'chat.send_edit' : 'titlebar.send');
   send.setAttribute('aria-label', label);
   send.title = label;
@@ -2178,6 +2227,23 @@ function localizeError(e) {
   const key = 'errors.' + raw;
   if (t(key) !== key) return t(key);
   return t('chat.error_prefix') + raw;
+}
+
+// Provider failures read as a plain sentence; the raw text stays under the technical details.
+function chatError(e, id) {
+  const raw = errText(e);
+  if (t('errors.' + raw) !== 'errors.' + raw) return {content:localizeError(e)};
+  const kind = /richiesta HTTP fallita|lettura risposta|stream interrupted|error sending request|timed out/i.test(raw) ? 'network'
+    : /\bAPI 40[13]\b/.test(raw) ? 'auth' : /\bAPI 429\b/.test(raw) ? 'rate' : /\bAPI 5\d\d\b/.test(raw) ? 'server' : null;
+  if (!kind) return {content:localizeError(e)};
+  const model = findConversation(id)?.conversation?.model || state.config.active_model;
+  const host = raw.match(/https?:\/\/([^/\s)]+)/)?.[1];
+  const presets = Object.values(PROVIDER_PRESETS);
+  const provider = state.config.providers?.find(item => item.models.some(entry => entry.id === model))?.name
+    || (host && presets.find(item => item.endpoint.includes(host))?.name)
+    || presets.find(item => item.models.includes(model))?.name || host || t('chat.error_provider');
+  const title = t('chat.error_' + kind).replace('{provider}', provider);
+  return {content:title.charAt(0).toUpperCase() + title.slice(1), hint:t(`chat.error_${kind}_hint`), detail:raw};
 }
 
 // Native events only start after the splash has finished restoring normal bounds.

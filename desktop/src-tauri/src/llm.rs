@@ -1064,7 +1064,17 @@ impl Completion<'_> {
                     } else {(self.activity)(kind,text);}
                 };
                 let provider = async {
-                let mut response = self.client.post(&self.url).bearer_auth(self.api_key).json(&body).send().await.map_err(|e| format!("richiesta HTTP fallita: {e}"))?;
+                let mut attempt = 0;
+                let mut response = loop {
+                    match self.client.post(&self.url).bearer_auth(self.api_key).json(&body).send().await {
+                        Ok(response) => break response,
+                        // No reply has started yet: a brief network drop is retried before it reaches the user.
+                        Err(e) if attempt < 2 && (e.is_connect() || e.is_timeout() || e.is_request()) => {
+                            attempt += 1;tokio::time::sleep(std::time::Duration::from_millis(800 * attempt)).await;
+                        }
+                        Err(e) => return Err(format!("richiesta HTTP fallita: {e}").into()),
+                    }
+                };
                 let status = response.status();
                 if !status.is_success() {
                     let text = response.text().await.map_err(|e|e.to_string())?;
@@ -2259,5 +2269,29 @@ mod tests {
         assert_eq!(error,"images_unsupported");
         listener.set_nonblocking(true).unwrap();
         assert_eq!(listener.accept().unwrap_err().kind(),std::io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn dropped_connection_is_retried_before_reaching_the_user() {
+        use std::io::{Read,Write};
+        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let address=listener.local_addr().unwrap();
+        let server=std::thread::spawn(move||{
+            drop(listener.accept().unwrap());
+            let (mut socket,_)=listener.accept().unwrap();socket.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+            let mut bytes=Vec::new();let mut buffer=[0;4096];
+            loop {
+                let n=socket.read(&mut buffer).unwrap();assert!(n>0);bytes.extend_from_slice(&buffer[..n]);
+                if let Some(end)=bytes.windows(4).position(|w|w==b"\r\n\r\n") {
+                    let headers=String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+                    let length:usize=headers.lines().find_map(|line|line.strip_prefix("content-length:")).unwrap().trim().parse().unwrap();
+                    if bytes.len()>=end+4+length {break;}
+                }
+            }
+            let response=serde_json::json!({"choices":[{"message":{"role":"assistant","content":"Recovered."}}]}).to_string();
+            write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{response}",response.len()).unwrap();
+        });
+        let messages:Vec<ChatMessage>=serde_json::from_value(serde_json::json!([{"role":"user","content":"Hi"}])).unwrap();
+        let result=tauri::async_runtime::block_on(chat_completion(&reqwest::Client::new(),&format!("http://{address}"),"test","test",&messages,None,None,|_,_|{},|_|{})).unwrap();
+        server.join().unwrap();assert_eq!(result.0,"Recovered.");
     }
 }

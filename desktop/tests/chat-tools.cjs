@@ -39,7 +39,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
    if(cmd==='save_data'){window.__store=structuredClone(args.data);return structuredClone(args.data);}
    if(cmd==='choose_chat_files')return window.__nextFiles||[{name:'notes.md',content:'Private text selected by the user.'}];
    if(cmd==='chat'){
-    if(window.__failChat){window.__failChat=false;throw new Error('Test API error');}
+    if(window.__failChat){const message=typeof window.__failChat==='string'?window.__failChat:'Test API error';window.__failChat=false;throw new Error(message);}
     const tree=structuredClone(window.__store),conv=tree.conversations.find(c=>c.id===args.conversation_id);
     const index=args.retry?conv.messages.findLastIndex(m=>m.role==='user'):args.edit_index??conv.messages.length;
     const user=args.retry?conv.messages[index]:{role:'user',content:args.content,attachments:args.attachments||[]};
@@ -147,7 +147,10 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  await page.locator('#context-info summary').click();await page.screenshot({path:resolve(shots,'markdown-desktop.png')});
  // Edit a completed prompt with a later exchange. Entering and cancelling the editor are non-destructive.
  await page.fill('#composer-input','Seconda domanda da sostituire');await page.click('#composer-send');
+ // Only the prompt just sent glides in; the bubble already in history stays put.
+ assert.deepEqual(await page.locator('.msg--user').evaluateAll(nodes=>nodes.map(node=>node.classList.contains('msg--arriving'))),[false,true]);
  await page.waitForFunction(()=>window.__store.conversations[0].messages.length===4 && !state.busy);
+ await page.waitForFunction(()=>!document.querySelector('.msg--arriving'));
  const firstEdit=page.locator('.msg--user').first().getByRole('button',{name:'Modifica messaggio',exact:true});
  await firstEdit.click();await page.click('#cancel-edit');
  assert.equal(await page.locator('.msg--user').count(),2);
@@ -155,19 +158,33 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
  assert.equal(await page.locator('#editing-message').isVisible(),true);
  await page.fill('#composer-input','Messaggio modificato');
  await page.locator('.composer').screenshot({path:resolve(shots,'edit-prompt.png')});
- await page.evaluate(()=>window.__failChat=true);
+ const networkError='richiesta HTTP fallita: error sending request for url (https://api.deepseek.com/v1/chat/completions)';
+ await page.evaluate(error=>window.__failChat=error,networkError);
  await page.getByRole('button',{name:'Invia modifica',exact:true}).click();
  await page.locator('.msg--error').waitFor();
  assert.equal(await page.evaluate(()=>window.__store.conversations[0].messages.length),4);
- await page.locator('.msg--error .message-action').last().click();
+ // A provider failure reads as a sentence; the raw error stays under the technical details.
+ assert.equal(await page.locator('.msg__error-title').innerText(),'Impossibile raggiungere DeepSeek');
+ assert.equal(await page.locator('.msg__error-hint').isVisible(),true);
+ assert.equal(await page.locator('.msg__error-details p').isVisible(),false);
+ assert.equal(await page.locator('.msg__error-details p').textContent(),networkError);
+ await page.locator('.msg--error').screenshot({path:resolve(shots,'error-retry.png')});
+ const chats=await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='chat').length);
+ await page.locator('.msg--error').getByRole('button',{name:'Riprova',exact:true}).click();
  await page.waitForFunction(()=>window.__store.conversations[0].messages[0].content==='Messaggio modificato');
  assert.equal(await page.evaluate(()=>window.__store.conversations[0].messages.length),2);
  assert.equal(await page.locator('.msg--user').count(),1);
- // A failed regeneration cannot remove the saved answer.
+ const resent=await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='chat').slice(-1)[0].args);
+ assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='chat').length),chats+1);
+ assert.equal(resent.content,'Messaggio modificato');assert.equal(resent.edit_index,0);assert.equal(resent.retry,undefined);
+ assert.equal(await page.locator('#composer-input').textContent(),'','Retrying must not move the failed message back into the composer');
+ // A failed regeneration cannot remove the saved answer, and its retry regenerates again.
  const saved=await page.evaluate(()=>window.__store.conversations[0].messages);
- await page.evaluate(()=>window.__failChat=true);await page.getByRole('button',{name:'Rigenera risposta',exact:true}).click();await page.locator('.msg--error').waitFor();
+ await page.evaluate(()=>window.__failChat='API 503: upstream unavailable');await page.getByRole('button',{name:'Rigenera risposta',exact:true}).click();await page.locator('.msg--error').waitFor();
  assert.deepEqual(await page.evaluate(()=>window.__store.conversations[0].messages),saved);
- await page.getByRole('button',{name:'Rigenera risposta',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.msg--error').length===0);
+ assert.equal(await page.locator('.msg__error-title').innerText(),'DeepSeek non risponde correttamente');
+ await page.locator('.msg--error').getByRole('button',{name:'Riprova',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.msg--error').length===0);
+ assert.equal(await page.evaluate(()=>window.__calls.filter(c=>c.cmd==='chat').at(-1).args.retry),true);
  // Attachments stay visible as chips and reach the backend only on send.
  await page.keyboard.press('Control+n');await page.click('#composer-attach');
  await page.locator('#composer-attachments .attachment-chip').waitFor();assert.equal(await page.locator('#attachment-note').isVisible(),true);
