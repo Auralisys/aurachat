@@ -2131,25 +2131,31 @@ function usageSection(title, usage, detailed) {
   return section;
 }
 
-// Always visible in a chat: with no usage yet it stays as an idle "0 token" chip that still gives access to the balance.
-function updateContextInfo() {
-  const details = $('#context-info'), conversation = activeConversation()?.conversation;
-  const run = state.activeConversationId ? state.runs.get(state.activeConversationId) : null;
+function conversationUsage(id) {
+  const conversation = id ? findConversation(id)?.conversation : null;
+  const run = state.runs.get(id);
   const pending = !!run?.pending;
   const live = pending ? usageTotals(run.liveUsage) : null;
   // A metadata refresh can already contain this turn before the native response settles.
   const saved = pending && run.baseUsage !== undefined ? run.baseUsage : conversation?.usage;
   const chat = addUsage(usageTotals(saved), live);
-  const last = pending ? null : usageTotals(state.lastUsage);
+  const last = pending ? null : usageTotals(id === state.activeConversationId ? state.lastUsage : run?.usage);
   const legacy = conversation?.context_tokens || 0;
   const headline = chat || last;
-  details.hidden = false;
-  details.classList.toggle('context-info--idle', !headline && !legacy);
-  details.classList.toggle('context-info--live', pending);
-  const summary = $('#context-summary');
   const tokens = headline ? headline.total_tokens : legacy;
-  summary.textContent = headline?.cost_usd != null ? `${formatTokens(tokens)} · ${formatUsd(headline.cost_usd)}` : `${formatTokens(tokens)} ${t('chat.tokens')}`;
+  const text = headline?.cost_usd != null ? `${formatTokens(tokens)} · ${formatUsd(headline.cost_usd)}` : `${formatTokens(tokens)} ${t('chat.tokens')}`;
   const label = `${t('chat.usage')}: ${exactTokens(tokens)}${headline?.cost_usd != null ? ` · ${t('usage.estimated_cost')} ${formatUsd(headline.cost_usd)}` : ''}${pending ? ` · ${t('usage.current_reply')}` : ''}`;
+  return {pending,live,chat,last,legacy,headline,text,label,idle:!headline && !legacy};
+}
+
+// Always visible in a chat: with no usage yet it stays as an idle "0 token" chip that still gives access to the balance.
+function updateContextInfo() {
+  const details = $('#context-info');
+  const {pending,live,chat,last,legacy,headline,text,label,idle} = conversationUsage(state.activeConversationId);
+  details.hidden = false;
+  details.classList.toggle('context-info--idle', idle);
+  details.classList.toggle('context-info--live', pending);
+  $('#context-summary').textContent = text;
   details.querySelector('summary').setAttribute('aria-label', label);
   details.querySelector('summary').title = label;
   const panel = $('#context-details'); panel.replaceChildren();

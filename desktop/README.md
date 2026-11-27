@@ -1661,6 +1661,11 @@ prezzo» con una nota). «Modifica prezzi» apre Impostazioni › Provider di
 modelli. Le chat salvate prima di questa funzione mostrano solo i token di
 contesto dell'ultima risposta; il costo parte dalle risposte successive.
 
+Anche l'anteprima di una chat nella barra laterale (al passaggio del mouse o
+con il focus da tastiera) mostra token e costo stimato come ultima riga.
+Usa gli stessi valori e stati del pulsante Utilizzo, ma per la chat indicata,
+anche in background. Non apre il dettaglio e non interroga il saldo.
+
 **Chat nuove e turno in corso.** Il pulsante è sempre presente nella vista chat,
 senza lasciare un vuoto nell'intestazione. Una chat ancora senza consumi mostra
 lo stato a riposo `0 token` (attenuato): il popover ha «Questa chat» a zero con

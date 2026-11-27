@@ -1182,6 +1182,13 @@ conserva il totale di partenza anche se un refresh dei metadati include già il
 turno in corso. A fine turno il parziale viene sostituito dall'utilizzo restituito
 da `chat`, senza doppio conteggio.
 
+L'anteprima delle chat nella sidebar usa `conversationUsage(id)` come
+l'indicatore in intestazione. L'ultima riga mostra solo token e, quando noto,
+costo stimato in USD. Prima del primo consumo mostra `0 token`; durante il
+turno il punto live pulsa (resta fermo con movimento ridotto). `__usage`
+aggiorna l'anteprima aperta anche per una chat in background, senza cambiare
+chat né interrogare il saldo DeepSeek.
+
 Prezzi (`config.rs`): USD per 1M token in tre voci (ingresso da cache, ingresso
 nuovo, uscita). Listino DeepSeek solo per `api.deepseek.com`: Flash e nomi legacy
 0,006 / 0,30 / 1,20, `deepseek-v4-pro` 0,044 / 1,32 / 3,96; sconto del 50% fuori

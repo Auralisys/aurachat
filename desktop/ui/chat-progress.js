@@ -505,6 +505,7 @@ async function setupChatProgress() {
     const run = state.runs.get(payload.conversation_id);if (!run?.pending) return;
     if (payload.kind === '__usage') {
       try {run.liveUsage = JSON.parse(payload.text);} catch (error) {console.error('Invalid usage update', error);return;}
+      refreshChatPreviewUsage(payload.conversation_id);
       if (state.activeConversationId === payload.conversation_id) updateContextInfo();
       return;
     }

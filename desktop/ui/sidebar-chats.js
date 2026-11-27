@@ -122,12 +122,32 @@ function chatPreview(panel, conv, project) {
     top.append(time);
   }
   const title = document.createElement('strong');title.textContent = conv.title || t('sidebar.new_chat');
-  const detail = (glyph, text) => {const line = document.createElement('p');line.className = 'chat-preview__detail';line.append(icon(glyph),document.createTextNode(text));return line;};
+  const detail = (glyph, content) => {const line = document.createElement('p');line.className = 'chat-preview__detail';line.append(icon(glyph),content);return line;};
   panel.replaceChildren(top,title,detail('project',project?.name || t('chat.no_project')));
   if (conv.model) {
     const provider = state.config.providers?.find(p => p.models.some(m => m.id === conv.model));
     panel.append(detail('cpu',provider ? `${provider.name} · ${provider.models.find(m => m.id === conv.model).model}` : conv.model));
   }
+  const usage = detail('usage',document.createElement('span'));
+  usage.classList.add('chat-preview__usage');
+  usage.setAttribute('role','group');
+  setChatPreviewUsage(usage,conv.id);
+  panel.append(usage);
+}
+
+function setChatPreviewUsage(row, id) {
+  const {text,label,pending,idle} = conversationUsage(id);
+  row.lastElementChild.textContent = text;
+  row.title = label;
+  row.setAttribute('aria-label',label);
+  row.toggleAttribute('data-live',pending);
+  row.toggleAttribute('data-idle',idle);
+}
+
+function refreshChatPreviewUsage(id) {
+  if (previewRow?.closest('.tree-conv')?.dataset.conversationId !== id) return;
+  const row = $('#project-preview .chat-preview__usage');
+  if (row) setChatPreviewUsage(row,id);
 }
 
 function setupChatPeek(row, title, conv, project) {

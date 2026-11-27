@@ -22,7 +22,7 @@ const assert = require('node:assert/strict');
   const usage = { prompt_tokens: sum('prompt_tokens'), completion_tokens: sum('completion_tokens'), total_tokens: sum('prompt_tokens') + sum('completion_tokens'), requests: sum('requests'),
     cache_hit_tokens: sum('cache_hit_tokens'), cache_miss_tokens: sum('cache_miss_tokens'), reasoning_tokens: sum('reasoning_tokens'), unpriced_tokens: sum('unpriced_tokens'), cost_usd: 0.004716, models };
   await page.addInitScript(({ locales, usage }) => {
-    window.__store = { projects: [], conversations: [
+    window.__store = { projects: [{id:'p', name:'Demo', source_folders:[], conversations:[]}], conversations: [
       { id: 'c', title: 'Costi', created_at: 1, updated_at: 2, context_tokens: 4000, usage, messages: [{ role: 'user', content: 'Ciao' }, { role: 'assistant', content: 'Ciao!' }] },
       { id: 'old', title: 'Vecchia', created_at: 1, updated_at: 1, context_tokens: 1530, messages: [{ role: 'user', content: 'Ciao' }, { role: 'assistant', content: 'Ciao!' }] },
       { id: 'fresh', title: 'Nuova', created_at: 1, updated_at: 1, messages: [] }] };
@@ -69,6 +69,11 @@ const assert = require('node:assert/strict');
 
   await page.evaluate(() => openConversation('c', false));
   const summary = page.locator('#context-info summary');
+  const peek = page.locator('#project-preview'), peekUsage = peek.locator('.chat-preview__usage:last-child');
+  const hoverChat = async id => {
+    await page.locator(`#recent-chats [data-conversation-id="${id}"] .tree-conv__title`).hover();
+    await peekUsage.waitFor({state:'visible'});
+  };
   assert.match(await summary.innerText(), /^12,7k · 0,0047\s\$$/);
   assert.match(await summary.getAttribute('aria-label'), /12\.700 token · costo stimato 0,0047\s\$/);
   await summary.click();
@@ -100,6 +105,18 @@ const assert = require('node:assert/strict');
   await summary.click();
   await page.mouse.click(400, 400);
   assert.equal(await page.locator('#context-info').evaluate(el => el.open), false);
+  await hoverChat('c');
+  assert.equal(await peekUsage.innerText(), await summary.innerText());
+  assert.equal(await peekUsage.getAttribute('aria-label'), await summary.getAttribute('aria-label'));
+  await hoverChat('old');
+  assert.equal(await peekUsage.innerText(), '1,5k token', 'legacy usage belongs to the hovered chat, with no invented price');
+  await hoverChat('fresh');
+  assert.equal(await peekUsage.innerText(), '0 token');
+  assert.equal(await peekUsage.evaluate(el => el.hasAttribute('data-idle') && !el.hasAttribute('data-live')), true);
+  await page.locator('#sidebar-tree .tree-project__head').hover();
+  await peek.locator('.project-preview__count').waitFor({state:'visible'});
+  assert.equal(await peekUsage.count(), 0, 'project previews have no chat usage');
+  assert.equal(await balanceCalls(), 0);
 
   // A new reply shows its own compact section below the chat total.
   await page.fill('#composer-input', 'Ancora');
@@ -135,6 +152,9 @@ const assert = require('node:assert/strict');
   await page.keyboard.press('Escape');
   await hold();
   await page.evaluate(reply => { state.config.providers[0].balance = true; window.__balance.reply = reply; return openConversation('c', false); }, readings.first);
+  await page.locator('#recent-chats [data-conversation-id="old"] .tree-conv__title').focus();
+  await peekUsage.waitFor({state:'visible'});
+  assert.equal(await peekUsage.innerText(), '1,5k token');
   assert.equal(await balanceCalls(), 0, 'a closed popover does not read the balance');
   await summary.click();
   await page.waitForFunction(() => document.querySelector('.balance--popover .balance__body')?.getAttribute('aria-busy') === 'true');
@@ -262,7 +282,12 @@ const assert = require('node:assert/strict');
   const liveBalanceCalls = await balanceCalls();
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.screenshot({ path: resolve(shots, 'usage-first-request.png') });
+  await hoverChat('fresh');
+  assert.equal(await peekUsage.innerText(), '0 token');
+  assert.equal(await peekUsage.evaluate(el => el.hasAttribute('data-live') && getComputedStyle(el,'::after').animationName === 'none'), true);
   await emitUsage(turn(1, 900, 0.0002));
+  assert.equal(await peekUsage.innerText(), await summary.innerText(), 'the open preview updates on the first billed request');
+  assert.equal(await peekUsage.getAttribute('data-idle'), null);
   assert.match(await summary.innerText(), /^900 · 0,00020\s\$$/);
   assert.doesNotMatch(await chip.getAttribute('class'), /context-info--idle/);
   assert.deepEqual(await panel.locator('.usage-section__title').allInnerTexts(), ['Questa chat', 'Risposta in corso']);
@@ -302,13 +327,22 @@ const assert = require('node:assert/strict');
   assert.match(await summary.innerText(), /^2,4k · 0,00063\s\$$/, 'a refreshed total must not count the live turn twice');
   await page.evaluate(() => openConversation('c', false));
   const otherSummary = await summary.innerText();
-  await emitUsage(next);
+  await hoverChat('fresh');
+  assert.match(await peekUsage.innerText(), /^2,4k · 0,00063\s\$$/);
+  const more = turn(2, 1400, 0.0003), finished = turn(4, 2900, 0.000726);
+  const callsBeforeHoverUpdate = await balanceCalls();
+  await emitUsage(more);
+  assert.match(await peekUsage.innerText(), /^2,9k · 0,00073\s\$$/);
+  assert.equal(await balanceCalls(), callsBeforeHoverUpdate);
   assert.equal(await summary.innerText(), otherSummary, 'a background turn must not replace another chat usage');
   await page.evaluate(() => openConversation('fresh', false));
-  assert.match(await summary.innerText(), /^2,4k · 0,00063\s\$$/);
-  await page.evaluate(result => { window.__chatResult = result; window.__releaseChat(); }, { usage: next, total, cancelled: true });
+  assert.match(await summary.innerText(), /^2,9k · 0,00073\s\$$/);
+  await page.evaluate(result => { window.__chatResult = result; window.__releaseChat(); }, { usage: more, total: finished, cancelled: true });
   await page.waitForFunction(() => !document.querySelector('#context-info').classList.contains('context-info--live'));
-  assert.match(await summary.innerText(), /^2,4k · 0,00063\s\$$/, 'stopping preserves the usage already billed');
+  assert.match(await summary.innerText(), /^2,9k · 0,00073\s\$$/, 'stopping preserves the usage already billed');
+  await hoverChat('fresh');
+  assert.equal(await peekUsage.getAttribute('data-live'), null);
+  assert.equal(await peekUsage.innerText(), await summary.innerText());
 
   // A failed request preserves partial usage and makes the known balance accessible.
   await page.evaluate(() => { window.__chatGate = new Promise(resolve => { window.__releaseChat = resolve; }); });
