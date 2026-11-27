@@ -171,6 +171,39 @@ e DirectML disponibile. La build release standard e passata senza modifiche.
 Le tre suite gia segnalate nella voce precedente restano fuori ambito.
 Cmd+Shift+V su macOS non verificato. Dettagli in [[Desktop gateway - Tauri]].
 
+### Installer pronto, installazione rimandata — 27 novembre 2026
+
+Preparata localmente la build Windows **0.1.6** con card delle chat create dal
+modello, chevron sul bordo destro e spaziatura ampliata, riepilogo da 295 px e
+link ai file locali con nome, tooltip e apertura nella cartella. Dettagli in
+[[Desktop gateway - Tauri]] e [[UIUX - Overview]].
+
+Installer NSIS da 47,67 MiB e firma updater copiati nella cartella
+`Desktop\AuraChat PROD 2026-11-27\`:
+`AuraChat_0.1.6_x64-setup.exe` e relativo `.sig`.
+**Solo preparazione: non installato, AuraChat in uso non chiusa ne riavviata.**
+Hash dell'eseguibile installato invariato e stesso processo ancora rispondente.
+L'installazione attende una nuova autorizzazione esplicita dell'utente.
+Nessun incremento di versione, upload o pubblicazione di release.
+
+Build con `node desktop\scripts\release.cjs`, ambiente Visual Studio `vcvars64`,
+Vulkan SDK 1.4.363.0, `CARGO_TARGET_DIR=C:\act` e `ORT_LIB_PATH` rimosso.
+Ricevuta `C:\act\release\updater\build-receipt.json` validata con
+`node desktop\scripts\release.cjs --skip-build` nello stesso target; copia
+dell'installer e della firma confrontate con gli SHA-256 della ricevuta.
+
+- Fingerprint dei sorgenti desktop:
+  `4aec20ebc0da69e07de63fd7bdca1a098e5d5f5f85a2a3ca995914e29cf20f66`.
+- SHA-256 installer:
+  `7706fa0fc745743d6206a35ffef5145529cdad92124041e0d2739ac47d344be6`.
+- SHA-256 firma updater:
+  `a3d1b1c1bc95af92033f525ef6e5759c3b0df3b701a97cea788952dd491a9be6`.
+
+Regressioni UI mirate passate: `activity-panel`, `chat-links`,
+`operations-flow`, `panel-tabs`, `mentions`. La firma updater e presente;
+la firma Windows Authenticode non e configurata, quindi SmartScreen puo
+comparire al momento dell'installazione.
+
 ## Limiti
 
 La firma dell'updater non sostituisce la firma del sistema operativo: su Windows

@@ -277,6 +277,7 @@ function renderSidebar() {
     recent.appendChild(create);
   }
   populateProjectMenu();
+  refreshChatCards();
 }
 
 const ICONS = {
@@ -1000,11 +1001,49 @@ function emptyHTML() {
     </div>`;
 }
 
+// DOMPurify's default URI list plus `file:` URLs and drive-letter paths, which become local file links.
+const MARKDOWN_URI = /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix|file):|[a-z]:(?:[\\/]|%5c)|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
+
 function markdownHTML(content) {
   return DOMPurify.sanitize(marked.parse(content, {gfm:true, breaks:false}), {
     ALLOWED_TAGS:['p','br','strong','em','del','blockquote','ul','ol','li','h1','h2','h3','h4','pre','code','a','table','thead','tbody','tr','th','td','hr','details','summary'],
-    ALLOWED_ATTR:['href','title','start','class'], ALLOW_DATA_ATTR:false,
+    ALLOWED_ATTR:['href','title','start','class'], ALLOW_DATA_ATTR:false, ALLOWED_URI_REGEXP:MARKDOWN_URI,
   });
+}
+
+function localFilePath(href) {
+  if (!/^(?:file:|[a-z]:(?:[\\/]|%5c)|\/(?!\/))/i.test(href || '')) return null;
+  try {return projectFileLocation(/^file:/i.test(href) ? href : decodeURIComponent(href)).path;} catch (_) {return null;}
+}
+
+// One floating hint for every file link: the full path that the link text shortens to a name.
+function showFileHint(link) {
+  let hint = document.querySelector('#file-link-hint');
+  if (!hint) {
+    hint = document.createElement('div');hint.id = 'file-link-hint';hint.className = 'file-link-hint';hint.setAttribute('role','tooltip');
+    document.body.append(hint);addEventListener('scroll', hideFileHint, true);
+  }
+  hint.textContent = link.dataset.path;hint.hidden = false;
+  const box = link.getBoundingClientRect(), below = box.bottom + 6;
+  hint.style.left = `${Math.max(8, Math.min(box.left, innerWidth - hint.offsetWidth - 8))}px`;
+  hint.style.top = `${below + hint.offsetHeight > innerHeight - 8 ? box.top - hint.offsetHeight - 6 : below}px`;
+}
+
+function hideFileHint() {
+  const hint = document.querySelector('#file-link-hint');if (hint) hint.hidden = true;
+}
+
+function decorateFileLink(link, path) {
+  if (!link.textContent.trim() || /^(?:file:|[a-z]:[\\/]|\/)/i.test(link.textContent.trim())) link.textContent = pathName(path);
+  link.setAttribute('aria-label', `${link.textContent.trim()} · ${t('chat.reveal_file')}: ${path}`);
+  link.prepend(fileIcon(path));link.classList.add('file-link');link.dataset.path = path;link.removeAttribute('title');
+  link.onpointerenter = link.onfocus = () => showFileHint(link);
+  link.onpointerleave = link.onblur = hideFileHint;
+  link.onclick = async event => {
+    event.preventDefault();hideFileHint();
+    if (remoteTarget(state.activeConversationId)) {showError(t('preview.remote'));return;}
+    try {await invoke('reveal_local_path', {path});} catch (error) {showError(previewError(error));}
+  };
 }
 
 // Keep unchanged Markdown blocks mounted: selection, disclosures and horizontal
@@ -1025,11 +1064,21 @@ function renderMarkdown(target, content) {
     let rendered = node;
     (node.matches('a') ? [node] : [...node.querySelectorAll('a')]).forEach(link => {
       link.rel = 'noopener noreferrer';
+      const path = localFilePath(link.getAttribute('href'));
+      if (path) {decorateFileLink(link,path);return;}
       link.onclick = async event => {
         event.preventDefault();
         if (!/^https?:$/.test(link.protocol)) return;
         await openLink(link.href, event);
       };
+    });
+    // Inline code holding just an absolute Windows path or file: URL reads as a file link too.
+    node.querySelectorAll('code').forEach(code => {
+      const text = code.textContent.trim();
+      if (code.closest('pre,a') || !/^(?:file:\/\/\/|[a-z]:[\\/])[^*?"<>|\n]*$/i.test(text)) return;
+      let location;try {location = projectFileLocation(text);} catch (_) {return;}
+      const link = document.createElement('a');link.href = location.url;link.textContent = text;
+      code.replaceWith(link);decorateFileLink(link,location.path);
     });
     const decorateCode = pre => {
       const code = pre.querySelector('code');if (!code) return;

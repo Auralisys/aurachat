@@ -16,7 +16,7 @@ function progressLabel(item) {
   return `${t(key) === key ? item.action || t('progress.command') : t(key)}${item.path ? ` · ${item.path}` : ''}`;
 }
 
-// A chat created by the model stays reachable from the step that created it.
+// A chat created by the model stays reachable from a card in the turn that created it.
 function createdChatId(item) {
   if (item?.action !== 'create_chat' || !item.output) return null;
   try {
@@ -25,18 +25,42 @@ function createdChatId(item) {
   } catch (_) {return null;}
 }
 
-function updateCreatedChatLink(row, item) {
-  const summary = row.firstElementChild, id = createdChatId(item);
-  let button = summary.querySelector(':scope > .turn-step__open');
-  if (!id) {button?.remove();return;}
-  if (!button) {
-    button = document.createElement('button');button.type = 'button';button.className = 'turn-step__open';
-    button.append(icon('forward'),document.createElement('span'));
-    button.lastElementChild.textContent = t('chat.open_created');
-    summary.insertBefore(button,summary.querySelector('.turn-step__status'));
+const CHAT_CARD_STATUS = {running:'running', loading:'running', waiting:'waiting', failed:'failed', stopped:'cancelled'};
+
+function renderChatCard(item, existing) {
+  const id = createdChatId(item), card = existing || document.createElement('button');
+  if (!existing) {
+    card.type = 'button';card.className = 'turn-agent turn-chat';
+    const lead = activityText('span', '', 'turn-agent__lead');lead.append(icon('chat'));
+    const text = activityText('span', '', 'turn-agent__text');
+    text.append(activityText('span', '', 'turn-agent__title'), activityText('span', '', 'turn-agent__status'));
+    card.append(lead, text, icon('chevron'));
   }
-  button.dataset.chatId = id;
-  button.onclick = event => {event.preventDefault();event.stopPropagation();showView('chat');openConversation(id);};
+  card._item = item;card.dataset.chatId = id;
+  card.onclick = () => {showView('chat');openConversation(id);};
+  const conv = findConversation(id).conversation, current = chatStatus(id), run = state.runs.get(id);
+  const latest = (run?.messages?.length ? run.messages : conv.messages || []).findLast(message => message.content)?.content || item.arguments?.message || '';
+  if (card._latest !== latest) {
+    const box = document.createElement('div');box.innerHTML = markdownHTML(latest);
+    card._latest = latest;card._preview = box.textContent.replace(/\s+/g, ' ').trim();
+  }
+  const busy = ['running','loading','waiting'].includes(current.kind);
+  const name = conv.title || item.arguments?.title || t('sidebar.new_chat'), detail = busy || !card._preview ? current.description : card._preview;
+  const status = card.querySelector('.turn-agent__status');
+  card.dataset.status = CHAT_CARD_STATUS[current.kind] || 'completed';
+  card.querySelector('.turn-agent__title').textContent = name;
+  status.textContent = detail;status.classList.toggle('is-working-text', busy);
+  card.title = name;
+  card.setAttribute('aria-label', `${name} · ${detail} · ${t('chat.open_created')}`);
+  return card;
+}
+
+// Chat status lives in the sidebar state; cards follow every sidebar refresh.
+function refreshChatCards() {
+  document.querySelectorAll('#messages .turn-chat').forEach(card => {
+    if (createdChatId(card._item)) renderChatCard(card._item, card);
+    else card.remove();
+  });
 }
 
 function reconcileChildren(parent, nodes) {
@@ -75,7 +99,6 @@ function updateProgressRow(row, original, live, last) {
     } else if (body.textContent !== text) body.textContent = text;
     if (row.open) body._follow?.sync();
     updateToolImages(row, item);
-    updateCreatedChatLink(row, item);
 }
 
 function reasoningPreview(text, live) {
@@ -203,6 +226,12 @@ function renderTurnBody(body, message, live = false) {
       flush();
       const key = `agent-${item.id}`;
       const card = renderAgentCard(item, existing.get(key));card.dataset.partKey = key;
+      nodes.push(card);continue;
+    }
+    if (createdChatId(item)) {
+      flush();
+      const key = `chat-${item.id}`;
+      const card = renderChatCard(item, existing.get(key));card.dataset.partKey = key;
       nodes.push(card);continue;
     }
     if (!group.length) {groupOffset = position;groupStart = index;}

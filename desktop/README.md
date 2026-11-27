@@ -152,7 +152,7 @@ sono necessarie nuove regole Firestore rispetto al relay esistente.
 ### Riepilogo e pannello a schede
 
 L'intestazione separa **menu · riepilogo · divisore · pannello laterale**:
-nessun globo per aprire il pannello. Il riepilogo riserva una colonna da 280 px
+nessun globo per aprire il pannello. Il riepilogo riserva una colonna da 295 px
 a destra della conversazione, ridimensionando messaggi e composer senza coprirli.
 Si apre entrando in una conversazione gia avviata; chiuderlo manualmente lo
 mantiene nascosto durante gli aggiornamenti della stessa chat.
@@ -792,6 +792,14 @@ La conversazione usa una colonna di lettura da 760 px, carattere di sistema,
 Markdown sanificato, blocchi di codice copiabili e azioni sui messaggi:
 copia, modifica, rigenera, feedback e lettura (voce locale Kokoro se installata,
 altrimenti le voci del sistema).
+I file locali citati dal modello come link Markdown (`[report](<C:/percorso/report.md>)`,
+`file:///…`) o come codice inline con un percorso Windows assoluto diventano link
+viola con icona e solo il nome (o l'etichetta scelta dal modello); al passaggio
+del mouse o con il focus un riquadro mostra il percorso completo, il clic apre
+Esplora file/Finder con il file selezionato (`reveal_local_path`: solo percorsi
+assoluti locali esistenti, niente UNC). Il prompt del progetto chiede al modello
+questo formato, con barre `/` perché marked tratta `\` come escape.
+Verifica: `desktop/tests/activity-panel.cjs` e `reveal_path_tests`.
 Il titolo apre le azioni della conversazione e i token stanno nel dettaglio
 contesto. Il pulsante + sceglie fino a quattro file di testo (128 KiB ciascuno,
 256 KiB complessivi) e fino a otto immagini, che si possono anche incollare con
@@ -1056,8 +1064,11 @@ attesa di una risposta/approvazione, errore e interruzione hanno stati distinti;
 errori e turni interrotti non diventano Done. Lo stato di lettura rimane locale
 alla sessione desktop, senza modificare la cronologia condivisa.
 Nell'intestazione il chip «Collegata a …» riporta alla chat madre (il collegamento
-è solo informativo; il telefono lo ignora). Il passo nella cronologia ha il
-pulsante «Apri chat». Dal menu ⋯ dell'intestazione, «Handoff in una nuova chat» e
+è solo informativo; il telefono lo ignora). Nella chat madre, al posto del passo
+nella cronologia, compare una card compatta con icona, titolo e stato della chat
+creata e una freccia a destra: mentre la chat lavora mostra lo spinner e
+«Sto pensando…» (o la descrizione dell'attività in corso), poi l'anteprima
+dell'ultima risposta; il clic apre la chat. Dal menu ⋯ dell'intestazione, «Handoff in una nuova chat» e
 «Handoff in una chat collegata» chiedono al modello di scrivere un riassunto
 autosufficiente (obiettivo, stato, decisioni, file, prossimi passi; usa la skill
 handoff se c'è) e di passarlo direttamente come primo messaggio, senza salvare file.

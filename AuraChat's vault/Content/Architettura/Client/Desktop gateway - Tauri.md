@@ -1088,7 +1088,7 @@ La coda JS serializza apertura, limiti, azioni, cattura e chiusura. Nascondere
 conserva le pagine; chiudere aspetta il backend e mantiene la scheda in caso di
 errore. Logout/cambio account chiude le schede; non si ripristinano al riavvio.
 Il riepilogo è indipendente dal pannello multi-tab e riserva una colonna da
-280 px nella griglia della chat, ridimensionando messaggi e composer. Si apre
+295 px nella griglia della chat, ridimensionando messaggi e composer. Si apre
 al cambio conversazione; la chiusura manuale non viene annullata dai refresh.
 Sotto 700 px disponibili si dispone sopra i messaggi con altezza limitata e
 scroll proprio, senza sovrapporsi alla chat.
@@ -1332,11 +1332,31 @@ I completamenti companion e `create_chat` includono esito e interruzione:
 aggiornamenti di soli metadati non riattivano Done; errori e Stop non sono successi.
 Test degli stati e delle transizioni in `desktop/tests/background-chats.cjs`.
 Restano il chip «Collegata a …» nell'intestazione,
-pulsante «Apri chat» nel passo `create_chat` della cronologia e, nel menu opzioni
+la card compatta nella chat madre al posto del passo `create_chat` (icona, titolo,
+stato e chevron a destra; spinner e «Sto pensando…» o descrizione dell'attività
+mentre lavora, poi anteprima dell'ultima risposta; il clic apre la chat;
+`renderChatCard`/`refreshChatCards` in `chat-progress.js`, aggiornata da
+`renderSidebar`) e, nel menu opzioni
 della chat, «Handoff in una nuova chat» / «Handoff in una chat collegata», che
 inviano un prompt preimpostato localizzato (il modello scrive l'handoff, usa la
 skill se disponibile, chiama `create_chat`). Test: `desktop/tests/chat-links.cjs` e
 `chat_links::tests`.
+
+Link ai file locali nelle risposte: link Markdown con `file:`/percorso assoluto
+(`[report](<C:/percorso/report.md>)`) o codice inline con un percorso Windows
+assoluto diventano `.file-link` (accento `--c-glow`, icona del tipo, solo nome o
+etichetta). Hover/focus mostrano `#file-link-hint` col percorso completo; il clic
+chiama `reveal_local_path` (`lib.rs`, opener `reveal_item_in_dir`; rifiuta UNC,
+relativi e file inesistenti). DOMPurify ammette `file:` e lettere di unità via
+`ALLOWED_URI_REGEXP`. Il prompt di progetto (`project_files.rs`) chiede questo
+formato con `/`, perché marked interpreta `\` come escape. Test:
+`desktop/tests/activity-panel.cjs` e `reveal_path_tests`.
+
+Limiti attuali: i percorsi nel testo semplice e i percorsi Unix nel codice inline
+non vengono convertiti; un href `/settings` e interpretato come percorso locale,
+non come link relativo di un sito. Il suggerimento sul formato dei link e nel
+prompt del progetto, non nelle chat libere. I link dei documenti Markdown aperti
+nel pannello conservano invece la navigazione dell'anteprima file.
 
 Sotto ogni messaggio utente «Modifica» permette di ripartire da quel punto:
 solo «Invia modifica» invia `edit_index` e sostituisce il seguito; annullare

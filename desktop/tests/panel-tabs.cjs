@@ -79,7 +79,7 @@ const assert = require('node:assert/strict');
     assert.deepEqual(controls,['conversation-options','activity-toggle','chat-tools__separator','panel-toggle']);
     const width=(await page.locator('#messages').boundingBox()).width;
     await page.click('#activity-toggle');
-    assert.equal((await page.locator('#messages').boundingBox()).width,width+280);
+    assert.equal((await page.locator('#messages').boundingBox()).width,width+295);
     await page.click('#activity-toggle');
     await page.screenshot({path:resolve(shots,'summary-1440.png')});
     await page.click('#panel-toggle');

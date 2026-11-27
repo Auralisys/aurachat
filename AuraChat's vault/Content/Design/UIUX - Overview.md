@@ -127,6 +127,16 @@ sostituzione della palette Auralisys, dei permessi o delle funzioni di AuraChat.
 - Markdown live e finale con le stesse azioni: copia codice, linguaggio,
   tabelle scrollabili e link HTTP(S). I blocchi invariati mantengono il DOM;
   il parsing del segmento rimane completo, non incrementale come nel riferimento.
+- File locali citati come link Markdown o codice inline con percorso Windows:
+  icona del tipo e nome/etichetta nell'accento AuraChat; hover e focus mostrano il
+  percorso completo, il clic rivela il file in Esplora file/Finder. I link web
+  mantengono il comportamento del browser; dettagli e limiti in [[Desktop gateway - Tauri]].
+- Card compatte nella cronologia per subagenti e chat create dal modello:
+  larghezza massima 420 px, altezza minima 58 px, testo flessibile e chevron
+  sul bordo destro, con piu spazio interno ed esterno. Lo spinner sostituisce
+  l'icona durante il lavoro; il clic apre il dettaglio del subagente nel pannello
+  oppure la nuova chat. La card della chat mostra stato e anteprima dell'ultima
+  risposta e si aggiorna insieme alla sidebar.
 - Sidebar inizialmente chiusa in overlay sotto 850 px; attivita inizialmente
   chiuse sotto 1000 px. Escape e selezione chat chiudono la navigazione compatta.
 - Risposta troncata o filtrata segnalata esplicitamente, conservando il testo
@@ -136,7 +146,7 @@ sostituzione della palette Auralisys, dei permessi o delle funzioni di AuraChat.
   editor modale con elenco a lato (in colonna sotto 820 px), badge sulla
   miniatura e note nel visualizzatore. Il telefono li mostra in sola lettura.
 - Header con menu, riepilogo, separatore e pulsante del pannello laterale,
-  senza globo. Il riepilogo riserva 280 px a destra, spostando messaggi e composer,
+  senza globo. Il riepilogo riserva 295 px a destra, spostando messaggi e composer,
   e si apre entrando nelle conversazioni gia avviate. Con al massimo 700 px
   disponibili si dispone sopra i messaggi con scroll proprio, mai in overlay.
   Resta indipendente dal pannello con schede, **+**, espansione e Nascondi.

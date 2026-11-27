@@ -1146,6 +1146,34 @@ fn open_external_url(app:tauri::AppHandle, url:String) -> Result<(),String> {
     app.opener().open_url(parsed.as_str(), None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Paths come from model output: network (UNC) paths are refused so Explorer never contacts another host.
+fn revealable_path(path:&str) -> Result<std::path::PathBuf,String> {
+    let candidate = std::path::PathBuf::from(path);
+    if path.starts_with(r"\\") || path.starts_with("//") || path.contains('\0') || !candidate.is_absolute() { return Err("invalid_path".into()); }
+    if !candidate.exists() { return Err("file_unavailable".into()); }
+    Ok(candidate)
+}
+
+#[tauri::command]
+fn reveal_local_path(app:tauri::AppHandle, path:String) -> Result<(),String> {
+    app.opener().reveal_item_in_dir(revealable_path(&path)?).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod reveal_path_tests {
+    #[test]
+    fn only_existing_absolute_local_paths_are_revealed() {
+        let file = std::env::temp_dir().join("aurachat-reveal-fixture.txt");
+        std::fs::write(&file, b"x").unwrap();
+        assert_eq!(super::revealable_path(file.to_str().unwrap()).unwrap(), file);
+        assert_eq!(super::revealable_path(file.with_extension("missing").to_str().unwrap()).unwrap_err(), "file_unavailable");
+        for path in [r"\\server\share\f.txt", "//server/share/f.txt", "relative.txt", r"\\?\UNC\server\share\f.txt"] {
+            assert_eq!(super::revealable_path(path).unwrap_err(), "invalid_path", "{path}");
+        }
+        let _ = std::fs::remove_file(file);
+    }
+}
+
 /// Images and small UTF-8 files are stored in the chat; anything else (binary, too large, or past
 /// the text limits) becomes a link to its absolute path that the model reads itself.
 fn picked_attachment(path: &std::path::Path, bytes: Vec<u8>, texts: &mut (usize, usize)) -> Result<Attachment, String> {
@@ -1677,7 +1705,7 @@ pub fn run() {
             prune_folder_access,
             choose_chat_files,
             read_chat_video,
-            open_external_url
+            open_external_url, reveal_local_path
             ,browser::browser_open, browser::browser_bounds, browser::browser_action, browser::browser_close, browser::browser_capture
             ,list_shells, stop_shell
             ,speech_model_status, download_speech_model, cancel_speech_download, remove_speech_model, prepare_speech_model, transcribe_audio, preview_audio

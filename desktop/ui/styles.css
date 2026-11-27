@@ -541,10 +541,7 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 .chat-link .ui-icon { width:13px; height:13px; flex:none; }
 .chat-link span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-link:hover { background:var(--c-hover); color:var(--c-text); }
-.turn-step__open { display:inline-flex; align-items:center; gap:4px; flex:none; padding:2px 10px; border:1px solid var(--c-soft-border); border-radius:var(--radius-full); color:var(--c-text); font-size:12px; cursor:pointer; transition:background-color 120ms ease-out; }
-.turn-step__open .ui-icon { width:13px; height:13px; }
-.turn-step__open:hover { background:var(--c-hover); }
-@media (prefers-reduced-motion:reduce) { .chat-link,.turn-step__open { transition:none; } }
+@media (prefers-reduced-motion:reduce) { .chat-link { transition:none; } }
 .tree-conv .tree-actions { position:absolute; right:var(--space-1); background:inherit; pointer-events:none; }
 .tree-conv:hover .tree-actions,.tree-conv:focus-within .tree-actions,.tree-conv.is-menu-open .tree-actions { position:static; pointer-events:auto; }
 .tree-conv__spinner { width:12px; height:12px; border:1.5px solid var(--c-soft-border); border-top-color:var(--c-glow); background:transparent; }
@@ -587,6 +584,10 @@ button:active:not(:disabled) { filter:brightness(1.15); }
 .markdown li { padding-left:4px; margin:6px 0; }
 .markdown li > p { margin:4px 0; }
 .markdown a { color:var(--c-glow); text-underline-offset:3px; }
+.markdown a.file-link { text-decoration:none; font-weight:500; overflow-wrap:anywhere; }
+.markdown a.file-link:hover { text-decoration:underline; }
+.file-link .ui-icon { display:inline-block; width:1em; height:1em; margin-right:.3em; vertical-align:-.15em; }
+.file-link-hint { position:fixed; z-index:60; max-width:min(560px,calc(100vw - 16px)); padding:6px 10px; border:1px solid var(--c-soft-border); border-radius:var(--radius-md); background:var(--c-panel); box-shadow:var(--shadow-overlay); color:var(--c-text); font-size:12px; line-height:1.45; overflow-wrap:anywhere; pointer-events:none; }
 .markdown blockquote { margin:16px 0; padding:8px 16px; border-left:1px solid var(--c-text-muted); color:var(--c-text-muted); }
 .markdown code { padding:2px 5px; border-radius:4px; background:var(--c-hover); font:13px/1.6 Consolas,'Cascadia Code',monospace; }
 .markdown pre { position:relative; max-width:100%; overflow:auto; overscroll-behavior:contain; padding:40px 16px 16px; border-radius:var(--radius-md); background:var(--c-sidebar); white-space:pre; }

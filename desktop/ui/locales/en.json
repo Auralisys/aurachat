@@ -321,6 +321,7 @@
   "mentions.truncated_list": "Showing only the first results: type more to narrow down.",
   "progress.create_chat": "New chat",
   "chat.open_created": "Open chat",
+  "chat.reveal_file": "Show in folder",
   "chat.linked_from": "Linked to “{title}”",
   "chat.handoff_new": "Hand off to a new chat",
   "chat.handoff_linked": "Hand off to a linked chat",

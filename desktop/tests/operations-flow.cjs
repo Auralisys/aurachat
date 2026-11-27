@@ -107,7 +107,7 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   assert.equal(await page.locator('#messages .turn-step[data-step-id^="spawn-"]').count(),0,'real spawn events do not insert duplicate activity groups between shortcuts');
   assert.equal(await card.evaluate(el=>el.nextElementSibling.dataset.agentId),'b');
   assert.equal(await card.locator('.turn-agent__lead').evaluate(el=>getComputedStyle(el,'::after').animationName),'turn-agent-spin');
-  const bounds=await card.boundingBox();assert(bounds.width<=360 && bounds.height<=60,`compact shortcut: ${JSON.stringify(bounds)}`);
+  const bounds=await card.boundingBox();assert(bounds.width<=420 && bounds.height<=64,`compact shortcut: ${JSON.stringify(bounds)}`);
   assert.equal(await card.evaluate(el=>el.previousElementSibling.textContent),'Avvio i due incarichi indipendenti.');
   await card.focus();await page.evaluate(()=>window.__agentCard=document.querySelector('#messages .turn-agent[data-agent-id="a"]'));
   await page.evaluate(()=>__events['chat-progress']({payload:{conversation_id:'c',kind:'__delta',text:' Intanto proseguo nella chat principale.'}}));

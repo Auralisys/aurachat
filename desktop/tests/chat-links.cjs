@@ -79,20 +79,36 @@ const {readFileSync,mkdirSync}=require('node:fs');const {resolve}=require('node:
   assert.equal(new Set(recentIds).size,recentIds.length);
   await page.screenshot({path:resolve(shots,'sidebar.png')});
 
-  // The step that created a chat links to it; a deleted chat leaves no button.
+  // A created chat gets a compact card; a deleted one stays only in the history.
   await row('parent').locator('.tree-conv__title').click();
+  const card=page.locator('#messages .turn-chat');
+  assert.equal(await card.count(),1);
+  assert.equal(await card.locator('.turn-agent__title').textContent(),'Seguito');
+  assert.equal(await card.locator('.turn-agent__status').textContent(),'Riparto da qui.');
+  assert.equal(await card.getAttribute('data-status'),'completed');
+  assert.match(await card.getAttribute('aria-label'),new RegExp(locales['chat.open_created']));
+  const [box,chevron]=await Promise.all([card.boundingBox(),card.locator('> .ui-icon').last().boundingBox()]);
+  assert.ok(box.x+box.width-(chevron.x+chevron.width)<=16,'The chevron sits at the right edge of the card');
   await page.locator('#messages .turn-history > summary').click();
   const steps=page.locator('#messages .turn-history .turn-step');
-  assert.equal(await steps.count(),2);
-  assert.match(await steps.first().locator('.turn-step__label').textContent(),/Nuova chat · Seguito/);
-  assert.equal(await steps.first().locator('.turn-step__open').count(),1);
-  assert.equal(await steps.nth(1).locator('.turn-step__open').count(),0);
+  assert.equal(await steps.count(),1);
+  assert.match(await steps.first().locator('.turn-step__label').textContent(),/Nuova chat · Persa/);
   assert.equal(await page.locator('#conversation-link').count(),0);
-  await page.screenshot({path:resolve(shots,'created-step.png')});
-  assert.equal(await steps.first().evaluate(el=>el.open),false);
+  await page.screenshot({path:resolve(shots,'created-card.png')});
+
+  // While the created chat works, its bubble becomes a loader.
+  await page.evaluate(async()=>{await window.__events['companion-started']({payload:{conversation_id:'child',content:'Continua'}});});
+  assert.equal(await card.getAttribute('data-status'),'running');
+  assert.equal(await card.locator('.turn-agent__status').textContent(),locales['chat.thinking']);
+  assert.equal(await card.locator('.turn-agent__lead').evaluate(el=>getComputedStyle(el,'::after').animationName),'turn-agent-spin');
+  await card.screenshot({path:resolve(shots,'created-card-running.png')});
+  await page.evaluate(async()=>{await window.__events['companion-updated']({payload:{conversation_id:'child',status:'completed',cancelled:false}});});
+  assert.equal(await card.getAttribute('data-status'),'completed');
+  assert.equal(await card.locator('.turn-agent__status').textContent(),'Riparto da qui.');
+
   await row('parent').locator('.chat-toggle').click();
   assert.equal(await row('child').isVisible(),false);
-  await steps.first().locator('.turn-step__open').click();
+  await card.click();
   assert.equal(await page.evaluate(()=>state.activeConversationId),'child');
   assert.equal(await row('child').isVisible(),true);
 

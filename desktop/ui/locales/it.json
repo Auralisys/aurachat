@@ -321,6 +321,7 @@
   "mentions.truncated_list": "Mostro solo i primi risultati: scrivi di più per restringere.",
   "progress.create_chat": "Nuova chat",
   "chat.open_created": "Apri chat",
+  "chat.reveal_file": "Mostra nella cartella",
   "chat.linked_from": "Collegata a «{title}»",
   "chat.handoff_new": "Handoff in una nuova chat",
   "chat.handoff_linked": "Handoff in una chat collegata",
