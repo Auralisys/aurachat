@@ -894,6 +894,23 @@ Verifica: `desktop/tests/history-save.cjs`, con mock fedele a `rebase`
 altri test UI danno esiti identici prima e dopo la correzione. Nessuna modifica
 Rust né nuova versione.
 
+## Chat creata dal telefono non eliminabile — 27 novembre 2026
+
+Sintomo: la chat «Spegni il computer» (progetto Auralisys) tornava nella sidebar
+dopo «Elimina». Il clic non dava errori visibili.
+
+Causa: il telefono crea la chat senza `model`. Il primo turno lo salva solo nel
+tree (`prepare_title_job` → `save_tree`); lo spegnimento ha impedito il
+`save_conversation` finale, quindi il documento è rimasto senza modello.
+All'apertura `load_conversation` sostituiva il riepilogo in cache con i metadati
+del documento: baseline `model: None`, remoto `model: X`. Ogni eliminazione
+finiva in `conversation_conflict` e `saveChatData` ripristinava la chat.
+
+Correzione: `adopt_loaded` (`firestore.rs`) tiene dal tree anche `model`, oltre
+a titolo, stato titolo e collegamento. Test di regressione
+`opened_chat_with_interrupted_first_turn_can_still_be_deleted`; test Firestore
+verdi. PROD 0.1.6 reinstallata su questo PC con la correzione.
+
 ## Guida modificabile finché non viene letta — 2 novembre 2026
 
 Problema: dopo **Invia subito** durante un turno la guida spariva finché il

@@ -978,6 +978,9 @@ i messaggi stanno in `messages/m000000000000`, con ordine esplicito e mappe
 native. All'avvio si legge il tree; la singola cronologia viene letta quando si
 apre la chat. I turni aggiornano solo i messaggi cambiati, con commit atomico e
 precondizioni sulle versioni. I conflitti richiedono di riaprire la chat.
+All'apertura, titolo, stato titolo, collegamento e modello restano quelli del
+tree: il primo turno li scrive solo lì e, se si interrompe (es. spegnimento),
+il documento resterebbe senza modello e l'eliminazione andrebbe in conflitto.
 
 I salvataggi della sidebar (`save_data`) cambiano struttura, nomi e feedback;
 i testi dei messaggi li scrive solo il turno, a fine risposta. Per questo la UI

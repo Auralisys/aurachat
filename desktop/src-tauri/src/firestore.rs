@@ -496,10 +496,7 @@ impl Firestore {
         metadata.insert("messages_loaded".into(),json!(true));metadata.insert("revision".into(),json!(version(&doc)?));
         let mut conversation:Conversation=serde_json::from_value(Value::Object(metadata)).map_err(|e|e.to_string())?;
         if let Some(tree)=self.trees.lock().unwrap().get_mut(uid) {
-            if let Some(summary)=tree.find_conversation_mut(id) {
-                conversation.title=summary.title.clone();conversation.title_state=summary.title_state.clone();
-                conversation.linked_from=summary.linked_from.clone();*summary=conversation.clone();
-            }
+            if let Some(summary)=tree.find_conversation_mut(id) {adopt_loaded(summary,&mut conversation);}
         }
         Ok(conversation)
     }
@@ -683,6 +680,13 @@ fn conversation_metadata(conversation:&Conversation,count:usize)->Value{
     // Omitted when empty, so the field mask of an update leaves the stored total untouched.
     if !conversation.usage.is_empty() { metadata["usage"]=json!(conversation.usage); }
     metadata
+}
+/// Title and the first turn's model are written only to the tree: the cached summary must keep
+/// them, or later deletes of the chat conflict with the remote tree forever.
+fn adopt_loaded(summary:&mut Conversation,conversation:&mut Conversation){
+    conversation.title=summary.title.clone();conversation.title_state=summary.title_state.clone();
+    conversation.linked_from=summary.linked_from.clone();conversation.model=summary.model.clone();
+    *summary=conversation.clone();
 }
 fn message_path(path:&str,index:usize)->String{format!("{path}/messages/m{index:012}")}
 fn message_value(index:usize,message:&crate::llm::ChatMessage)->Result<Value,String>{
@@ -871,6 +875,20 @@ mod tests {
         assert_eq!(merged["projects"]["p"]["name"],"local");assert_eq!(merged["conversations"]["c"]["title"],"remote");
         remote["projects"]["p"]["name"]=json!("conflicting");
         assert!(merge_changes(&base,&desired,&remote).is_err());
+    }
+
+    #[test]
+    fn opened_chat_with_interrupted_first_turn_can_still_be_deleted(){
+        // The phone created the chat without a model; the first turn saved one only in the tree.
+        let summary:Conversation=serde_json::from_value(json!({"id":"c","title":"Spegni il computer","title_state":"generated","model":"deepseek","created_at":1,"updated_at":1,"context_tokens":0,"messages_loaded":false})).unwrap();
+        let mut cached=ChatData{projects:vec![],conversations:vec![summary]};
+        let remote=cached.storage_tree().unwrap();
+        let mut loaded:Conversation=serde_json::from_value(json!({"id":"c","title":"Spegni il computer","created_at":1,"updated_at":1,"context_tokens":0,"revision":"v1"})).unwrap();
+        adopt_loaded(cached.find_conversation_mut("c").unwrap(),&mut loaded);
+        assert_eq!(loaded.model.as_deref(),Some("deepseek"));
+        let deleted=ChatData::default();
+        let merged=merge_changes(&cached.storage_tree().unwrap(),&deleted.storage_tree().unwrap(),&remote).unwrap();
+        assert!(merged["conversations"].get("c").is_none());
     }
 
     #[test]
