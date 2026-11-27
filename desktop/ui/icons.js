@@ -8,6 +8,7 @@ function fileTypeIcon(file) {
   if (/\.jsonl?$/.test(name)) return 'Braces';
   if (/\.xml$/.test(name)) return 'CodeXml';
   if (/\.(csv|tsv)$/.test(name)) return 'Table2';
+  if (/\.(mp4|m4v|mov|webm|mkv|avi|ogv)$/.test(name)) return 'Film';
   return {image:'Image',document:'FileText',code:'FileCode',data:'Settings2',log:'FileTerminal',file:'File'}[artifactType({...item,path})];
 }
 

@@ -43,10 +43,12 @@ async function openProjectFile(input, projectId = mentionProjectId()) {
 }
 
 function disposeFilePreview(file) {
+  if (file.video) {file.request = (file.request || 0) + 1;disposeVideoContent(file.view);}
   file.view.remove();
 }
 
 function reloadFileTab(tab) {
+  if (tab.file.video) {if (!tab.loading) loadVideoTab(tab);return;}
   if (!tab.busy && !tab.loading && (!tab.file.dirty || confirm(t('preview.discard')))) loadProjectFile(tab);
 }
 

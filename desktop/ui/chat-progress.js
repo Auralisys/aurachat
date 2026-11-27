@@ -11,6 +11,7 @@ function progressLabel(item) {
   if (item.kind === 'agent') return item.title || t('activity.agent');
   if (item.kind === 'reasoning') return t('progress.reasoned');
   if (item.action === 'create_chat' && typeof item.arguments?.title === 'string') return `${t('progress.create_chat')} · ${item.arguments.title}`;
+  if (item.action === 'create_subagent' && typeof item.arguments?.title === 'string') return `${t('activity.agent')} · ${item.arguments.title}`;
   const key = `progress.${item.action}`;
   return `${t(key) === key ? item.action || t('progress.command') : t(key)}${item.path ? ` · ${item.path}` : ''}`;
 }
@@ -175,7 +176,8 @@ function progressHistory(items, live = false, existing = null) {
 
 function renderTurnBody(body, message, live = false) {
   const existing = new Map([...body.children].map(el => [el.dataset.partKey,el]));
-  let offset = 0, group = [], groupOffset = 0;
+  const agentTools = new Set((message.activity || []).filter(item => item.kind === 'agent' && item.tool_event_id).map(item => item.tool_event_id));
+  let offset = 0, group = [], groupOffset = 0, groupStart = 0;
   const nodes = [];
   const appendText = text => {
     if (!text) return;
@@ -186,22 +188,31 @@ function renderTurnBody(body, message, live = false) {
   };
   const flush = () => {
     if (!group.length) return;
-    const key = `group-${groupOffset}`;
+    const key = `group-${groupOffset}-${groupStart}`;
     const history = progressHistory(group,live && message.content.length <= groupOffset,existing.get(key));history.dataset.partKey = key;
     history.dataset.historyKey = key;nodes.push(history);group = [];
   };
-  for (const item of message.activity || []) {
-    if (!['tool','reasoning','approval'].includes(item.kind)) continue;
+  for (const [index, item] of (message.activity || []).entries()) {
+    if (!['tool','reasoning','approval','agent'].includes(item.kind)) continue;
+    // The card already exposes the task and result; failed launches without a child stay in history.
+    if (item.kind === 'tool' && item.action === 'create_subagent' && agentTools.has(item.id)) continue;
     const position = Math.max(offset,Math.min(message.content.length,item.offset || 0));
     if (position > offset) {flush();appendText(message.content.slice(offset,position));offset = position;}
-    if (!group.length) groupOffset = position;
+    if (item.kind === 'agent') {
+      if (typeof item.id !== 'string') continue;
+      flush();
+      const key = `agent-${item.id}`;
+      const card = renderAgentCard(item, existing.get(key));card.dataset.partKey = key;
+      nodes.push(card);continue;
+    }
+    if (!group.length) {groupOffset = position;groupStart = index;}
     group.push(item);
   }
   flush();appendText(message.content.slice(offset));
   if (live) {
     let history = nodes.findLast(node => node.classList.contains('turn-history'));
     if (!history) {
-      history = progressHistory([], true, existing.get('group-0'));history.dataset.partKey = 'group-0';
+      history = progressHistory([], true, existing.get('group-0-0'));history.dataset.partKey = 'group-0-0';
       nodes.unshift(history);
     }
     history.toggleAttribute('data-live-history', true);
@@ -543,7 +554,9 @@ async function setupChatProgress() {
       stream.content = ''; stream.shown = 0; stream.activity = [];
     }
     if (state.activeConversationId === payload.conversation_id) {
-      if (['__steering','__question_summary','__guidance_queued','__guidance_withdrawn'].includes(payload.kind)) renderMessages();
+      if (['__steering','__question_summary','__guidance_queued','__guidance_withdrawn'].includes(payload.kind)) {
+        state.messages = run.messages;renderMessages();
+      }
       else revealTurn(run);
     }
   });

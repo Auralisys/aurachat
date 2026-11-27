@@ -176,6 +176,7 @@ function restoreChatDraft(id) {
   const draft = state.drafts.get(id);
   setComposerParts(draft?.parts || [{text:draft?.text || ''}]);autoGrow();
   state.attachments = structuredClone(draft?.attachments || []);state.editingMessageIndex = draft?.editing ?? null;renderDraft();
+  if (mediaErrors.has(id)) composerStatus(mediaErrors.get(id));
 }
 
 function appendConversationDraft(id, text) {
@@ -1239,7 +1240,8 @@ function messageEl(m, index) {
       details.append(summary,detail);text.appendChild(details);
     }
   }
-  const images = (m.attachments || []).filter(isImageAttachment), files = (m.attachments || []).filter(file => !isImageAttachment(file));
+  const images = (m.attachments || []).filter(file => isImageAttachment(file) || isVideoAttachment(file)), files = (m.attachments || []).filter(file => !isImageAttachment(file) && !isVideoAttachment(file));
+  images.sort((a,b) => Number(isVideoAttachment(b)) - Number(isVideoAttachment(a)));
   if (images.length) el.appendChild(messageImagesEl(images));
   if (m.content || m.activity?.length) el.appendChild(text);
   if (files.length) {
@@ -1676,26 +1678,30 @@ function renderDraft() {
   renderActivity();
   const list = $('#composer-attachments');list.replaceChildren();
   const pending = imageJobs.get(state.activeConversationId) || 0;
-  const images = state.attachments.filter(isImageAttachment);
+  const images = state.attachments.filter(file => isImageAttachment(file) || isVideoAttachment(file));
+  images.sort((a,b) => Number(isVideoAttachment(b)) - Number(isVideoAttachment(a)));
   const remove = file => () => {
-    const index = state.attachments.indexOf(file);if (index >= 0) state.attachments.splice(index,1);
+    const generated = new Set(file.video?.generated_ids || []);
+    state.attachments = state.attachments.filter(item => item !== file && !generated.has(item.id));
     renderDraft();
     const input = $('#composer-input');input.focus();placeCaretAtEnd(input);
   };
   if (images.length || pending) {
     const group = document.createElement('div');group.className = 'attachment-images';
-    images.forEach((file,index) => group.append(imageTile(images,index,remove(file),opener => annotateDraftImage(file,opener))));
+    images.forEach((file,index) => group.append(imageTile(images,index,remove(file),isImageAttachment(file) ? opener => annotateDraftImage(file,opener) : null)));
     for (let i = 0; i < pending; i++) group.append(imageSkeleton());
     list.append(group);
   }
   for (const file of state.attachments) {
-    if (isImageAttachment(file)) continue;
+    if (isImageAttachment(file) || isVideoAttachment(file)) continue;
     const chip = isLinkedAttachment(file) ? linkedAttachmentChip(file) : attachmentChip(file);
     chip.append(messageAction('close','chat.remove_attachment',remove(file)));list.appendChild(chip);
   }
   list.hidden=!state.attachments.length && !pending;
   // Linked files are not copied into the chat: only their path reaches the model.
   $('#attachment-note').hidden=!state.attachments.some(file=>!isLinkedAttachment(file));
+  $('#attachment-note').dataset.i18n = state.attachments.some(isVideoAttachment) ? 'chat.video_attachment_note' : 'chat.attachment_note';
+  $('#attachment-note').textContent = t($('#attachment-note').dataset.i18n);
   $('#linked-note').hidden=!state.attachments.some(isLinkedAttachment);
   $('#editing-message').hidden=state.editingMessageIndex===null;updateComposerControls();
 }
@@ -1711,30 +1717,36 @@ async function annotateDraftImage(file, opener) {
 
 async function attachFiles() {
   if (state.preparing || state.loadingConversation) return;
+  const origin = state.activeConversationId;
   $('#composer-attach').disabled=true;composerStatus();
-  let images = [];
+  let images = [], videos = [];
   try {
     const files=await invoke('choose_chat_files');
     images = files.filter(isImageAttachment);
-    const known=new Set(state.attachments.filter(isLinkedAttachment).map(file=>file.path));
-    const next=[...state.attachments,...files.filter(file=>!isImageAttachment(file)&&!(isLinkedAttachment(file)&&known.has(file.path)))];
-    const texts=next.filter(file=>!isImageAttachment(file)&&!isLinkedAttachment(file));
+    videos = files.filter(isVideoSource);
+    const attachments = attachmentDraft(origin);
+    const known=new Set(attachments.filter(isLinkedAttachment).map(file=>file.path));
+    const next=[...attachments,...files.filter(file=>!isImageAttachment(file)&&!isVideoSource(file)&&!(isLinkedAttachment(file)&&known.has(file.path)))];
+    const texts=next.filter(file=>!isImageAttachment(file)&&!isLinkedAttachment(file)&&!isVideoAttachment(file));
     if(next.filter(isLinkedAttachment).length>16 || texts.length>4 || texts.reduce((sum,file)=>sum+new TextEncoder().encode(file.content).length,0)>262144) throw new Error('invalid_attachments');
-    state.attachments=next;renderDraft();
+    attachments.splice(0,attachments.length,...next);
+    if (origin === state.activeConversationId) renderDraft();
   } catch(e){composerStatus(localizeError(e));}
   finally{$('#composer-attach').disabled=false;}
-  if (images.length) addImageAttachments(images);
+  if (images.length) addImageAttachments(images,origin);
+  if (videos.length) addVideoAttachments(videos,origin);
+}
+
+function attachmentDraft(origin) {
+  if (origin === state.activeConversationId) return state.attachments;
+  if (!state.drafts.has(origin)) state.drafts.set(origin, {text:'', attachments:[], editing:null});
+  return state.drafts.get(origin).attachments;
 }
 
 // Images are prepared one at a time in the background and always land in the
 // draft of the chat where they were added, even if the user switches chat meanwhile.
-async function addImageAttachments(sources) {
-  const origin = state.activeConversationId;
-  const draft = () => {
-    if (origin === state.activeConversationId) return state.attachments;
-    if (!state.drafts.has(origin)) state.drafts.set(origin, {text:'', attachments:[], editing:null});
-    return state.drafts.get(origin).attachments;
-  };
+async function addImageAttachments(sources, origin = state.activeConversationId) {
+  const draft = () => attachmentDraft(origin);
   const room = IMAGE_LIMIT.count - draft().filter(isImageAttachment).length - (imageJobs.get(origin) || 0);
   const accepted = sources.slice(0, Math.max(0, room));
   let error = accepted.length < sources.length ? 'invalid_attachments' : null;
@@ -1748,7 +1760,7 @@ async function addImageAttachments(sources) {
     catch (e) {error ||= errText(e);}
     const files = draft();
     if (file) {
-      const total = files.filter(isImageAttachment).reduce((sum,item) => sum + item.data.length, 0);
+      const total = attachmentImageBytes(files);
       if (total + file.data.length > IMAGE_LIMIT.total) error ||= 'image_too_large';
       else {file.name = uniqueImageName(file.name, new Set(files.map(item => item.name)));ensureAttachmentId(file);files.push(file);}
     }

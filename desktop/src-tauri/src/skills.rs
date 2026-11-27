@@ -266,6 +266,18 @@ mod tests {
             for name in ["--all","a&calc","a b","a%PATH%","../outside"] {assert!(install_args("owner/repo",name).is_err(),"{name}");}
         }
         #[test]
+        #[ignore = "Read-only smoke test of this machine's installed global agent-loop"]
+        fn installed_global_agent_loop() {
+            let home=std::env::var_os(if cfg!(windows) {"USERPROFILE"} else {"HOME"}).unwrap();
+            let context=Context{project:None,global:Some(files(home.into())),preferences:None,execution:None};
+            for prompt in ["/agent-loop", "/agent-loop Revisiona le modifiche correnti"] {
+                let skill=context.slash(prompt).unwrap().expect("Global agent-loop installed");
+                assert_eq!(skill["scope"],"global");
+                assert!(skill["content"].as_str().unwrap().contains("inherit_context:false"));
+            }
+            assert_eq!(context.catalog(false).unwrap()["skills"].as_array().unwrap().iter().filter(|skill|skill["name"]=="agent-loop").count(),1);
+        }
+        #[test]
         #[ignore = "Read-only smoke test of this machine's installed global Impeccable"]
         fn installed_global_impeccable_slash_and_reference() {
             let home=std::env::var_os(if cfg!(windows) {"USERPROFILE"} else {"HOME"}).unwrap();

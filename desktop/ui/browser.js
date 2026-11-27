@@ -148,7 +148,10 @@ function renderBrowser() {
   panel.setAttribute('aria-busy', String(!!(browser && tab.loading)));
   $('#browser-progress').hidden = !browser || !tab.loading;
   $('#file-previews').hidden = !tab?.file;
-  for (const view of $('#file-previews').children) view.hidden = view !== tab?.file?.view;
+  for (const view of $('#file-previews').children) {
+    view.hidden = view !== tab?.file?.view;
+    if (view.hidden || !open) for (const video of view.querySelectorAll('.video-player')) video.pause();
+  }
   if (tab?.file) reload.disabled = !!tab.busy || !!tab.loading;
   $('#browser-empty').hidden = !browser || tab.file || tab.page || tab.opening;
   if (!$('#browser-empty').hidden) renderNewTab();

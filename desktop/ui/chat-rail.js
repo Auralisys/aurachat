@@ -55,13 +55,14 @@ const chatRail = (() => {
     }
     if (words) return words;
     const files = Array.isArray(message.attachments) ? message.attachments : [];
+    if (files.some(isVideoAttachment)) return files.find(isVideoAttachment).name;
     if (files.some(isImageAttachment)) return t('chat.rail_image');
     return files.length ? files[0].name || t('chat.rail_attachment') : '…';
   }
 
   function pictures(node) {
     const files = messageOf(node)?.attachments;
-    return Array.isArray(files) ? files.filter(isImageAttachment) : [];
+    return Array.isArray(files) ? files.filter(file => isImageAttachment(file) || isVideoAttachment(file)).sort((a,b) => Number(isVideoAttachment(b)) - Number(isVideoAttachment(a))) : [];
   }
 
   // Messages saved before `created_at` existed borrow the earliest activity time of their reply, usually seconds after sending.

@@ -514,8 +514,25 @@ preservano gli altri campi. `content` sostituisce il dettaglio precedente, non �
 un delta. Gli agenti sono separati per conversazione e restano in memoria durante
 la sessione. Il backend crea realmente i sub-agenti tramite il modello configurato,
 condivide il contesto e le root autorizzate e inoltra risultato, reasoning e
-strumenti eseguiti. Ogni chiamata attende il risultato; sono ammesse fino a
-quattro deleghe per turno e i figli non possono delegare a loro volta.
+strumenti eseguiti. `inherit_context:false` avvia invece un agente nuovo senza
+cronologia, allegati o report della chat madre: riceve soltanto istruzioni di
+sistema/progetto e incarico autosufficiente, con gli stessi permessi.
+Le chiamate `create_subagent` consecutive nella stessa risposta sono eseguite
+in parallelo, fino a quattro alla volta; il modello riceve tutti i risultati
+nell'ordine delle chiamate. Gli altri strumenti restano ordinati: una lettura o
+scrittura interposta separa i gruppi. Il prompt di sistema chiede esplicitamente
+di raggruppare le deleghe indipendenti, assegnando file distinti agli editor.
+Se il provider emette una sola delega per risposta non esistono altri incarichi
+da avviare contemporaneamente. I giri successivi possono creare nuovi revisori:
+non c'è un limite cumulativo di quattro per turno. I figli non delegano.
+
+Nella chat ogni subagente ha anche una **card compatta** nella posizione in cui
+è stato avviato: nome, stato, tempo e loader durante l'esecuzione. Il chevron a
+destra apre direttamente il dettaglio nel pannello laterale, anche da tastiera.
+È una scorciatoia aggiuntiva: riepilogo e vista Subagenti rimangono invariati.
+Gli aggiornamenti conservano nodo, focus e posizione; le card restano nella
+cronologia dopo completamento, errore o arresto e non compaiono in altre chat.
+La riduzione del movimento ferma il loader senza nascondere lo stato.
 
 Nel riepilogo la sezione **Subagenti** mostra fino a due agenti attivi
 (orb animato e titolo), poi righe compatte con orb di stato: «+N in esecuzione»,
@@ -533,6 +550,26 @@ lettura ad alta voce. Escape torna all'elenco, poi chiude la scheda.
 Verifica: `node tests/activity-panel.cjs` con Playwright in `NODE_PATH` (servizi
 nativi simulati) copre artefatti con filtri e scarto della prosa, trail shell con
 comandi in attesa e agenti. Le immagini di verifica sono in `../.artifact/activity/`.
+`node tests/operations-flow.cjs` copre anche le card inline, apertura diretta,
+focus durante lo streaming, navigazione in background e ripristino da cronologia.
+Il test Rust `subagents_overlap_and_new_rounds_can_start_without_parent_context`
+trattiene le risposte del provider simulato finché tutti e quattro i figli sono
+connessi, verifica isolamento, risultati fuori ordine, errori e un secondo giro.
+
+### Skill globale `/agent-loop`
+
+La skill personale installata in `~/.agents/skills/agent-loop/SKILL.md` funziona
+con `/agent-loop <prompt>` oppure `/agent-loop` sulle modifiche correnti. Non è
+inclusa nell'installer dell'app. Su questo PC le directory globali di Copilot,
+Cursor e Claude puntano alla stessa copia; i client che leggono `.agents/skills`
+(incluso Codex) la scoprono direttamente.
+Ogni giro usa uno o più revisori nuovi in sola lettura e senza cronologia madre.
+**ROSSO** riporta problemi concreti; la chat principale corregge, verifica e
+aggiorna le note pertinenti del vault Obsidian se presente, poi avvia nuovi
+revisori. **VERDE** richiede un nuovo giro senza problemi e verifiche riuscite.
+Un blocco, l'assenza di subagenti isolati o un ciclo senza progresso restano ROSSO.
+La skill non autorizza commit, push o installazioni. L'isolamento in AuraChat
+richiede una build con `inherit_context`; le versioni precedenti ereditano la chat.
 
 ```
 desktop/
@@ -1408,6 +1445,52 @@ limiti, conversione delle richieste, modelli senza visione e lettura tramite
 `deepseek-flash`. Il test reale `real_provider_reads_image` (ignorato, richiede
 `AURACHAT_LLM_SMOKE=1`, `AURACHAT_IMAGE` e `AURACHAT_IMAGE_TEXT`) usa il modello
 attivo dell'account.
+
+## Video locali: anteprima, player e frame automatici
+
+Il selettore **Allega** riconosce MP4/M4V, MOV, WebM, MKV, AVI e OGV. La
+decodifica usa il browser del desktop, senza FFmpeg o chiamate al modello:
+MP4 H.264 e WebM VP8/VP9 sono i formati consigliati; gli altri dipendono dai
+codec installati. Un codec non leggibile produce un errore, non un semplice
+percorso che il modello dovrebbe fingere di aver visto. Limite: 128 MiB di
+originali per selezione, fino a quattro video per messaggio.
+
+`video.js` campiona normalmente ogni 0,5 secondi, come il precedente script
+locale usato per il riferimento Codex. Crea tavole JPEG con otto frame
+(due colonne, quattro righe), indice e timestamp, e un catalogo JSON con
+durata, dimensioni, intervallo, posizione di ogni frame e limiti dell'analisi.
+Il massimo è 64 frame: per video lunghi o messaggi con altri allegati
+l'intervallo aumenta, dichiarandolo nel catalogo. Le tavole usano gli otto
+slot immagini e il catalogo uno dei quattro slot testo già disponibili;
+poster e tavole condividono il limite complessivo di 6 MiB.
+
+La preparazione è locale e non usa token. Solo dopo **Invia** il provider
+analizza le immagini: `deepseek-v4-pro` riceve le descrizioni delle tavole
+tramite il bridge `deepseek-flash` esistente, non un MP4 nativo. Questa lettura
+e la risposta consumano token. L'audio non entra nell'analisi; i campioni non
+garantiscono di vedere ogni evento né di stabilire tagli frame-accurate.
+
+Il video compare con miniatura, durata e Play nel composer, nella cronologia,
+nel riepilogo fonti e nell'anteprima della rail. Il clic apre il player
+a tutto schermo con controlli nativi, audio e seek; un pulsante lo apre
+nella scheda laterale, mantenendo la posizione. La scheda può riaprire il
+fullscreen e va in pausa quando viene nascosta; chiudere libera i Blob URL.
+Rimuovere il video dalla bozza rimuove anche il suo catalogo e le sue tavole,
+senza toccare il testo o gli altri allegati.
+
+`videos.rs` conserva una copia dell'originale nella directory `videos` della
+configurazione locale, deduplicata per SHA-256 e verificata in lettura.
+L'IPC accetta solo l'identificatore, mai un percorso arbitrario. Poster e
+metadati sono salvati insieme alla chat, ma i byte originali **non** sono
+inviati a Firestore o al modello: su un altro PC occorre riallegare il file
+per riprodurlo; tavole e catalogo restano nella cronologia. Le copie locali
+non vengono eliminate quando si rimuove una bozza o una chat.
+
+Verifiche isolate: `desktop/tests/video-attachments.cjs` usa veri MP4 H.264
+e WebM generati nel browser, controllando colori decodificati, timestamp,
+assenza di chiamate AI durante l'estrazione, bozze, errori e player.
+I test Rust coprono cache persistente, validazione e separazione tra poster,
+originale e immagini inviate al provider.
 
 ## Commenti sulle immagini e browser interno
 

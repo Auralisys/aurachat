@@ -14,6 +14,10 @@ function isImageAttachment(file) {
   return typeof file?.data === 'string' && IMAGE_TYPES.includes(file.mime_type);
 }
 
+function attachmentImageBytes(files) {
+  return files.reduce((sum,file) => sum + (file.data?.length || 0) + (file.video?.poster?.length || 0),0);
+}
+
 function imageTag(bytes, offset, text) {
   return [...text].every((char, index) => bytes[offset + index] === char.charCodeAt(0));
 }
@@ -115,7 +119,9 @@ function imageEntry(file) {
   } catch (_) {return null;}
 }
 
-function imageURL(file) { return imageEntry(file)?.url || null; }
+function imageURL(file) {
+  return imageEntry(file?.video ? {mime_type:'image/jpeg',data:file.video.poster} : file)?.url || null;
+}
 
 function isImageURL(value) {
   return typeof value === 'string' && value.startsWith('blob:') && [...imageCache.values()].some(entry => entry.url === value);
@@ -200,7 +206,9 @@ function prepareImage(source) {
 
 // ===== Thumbnails =====
 function imageThumb(files, index, className = 'image-thumb') {
-  const file = files[index], entry = imageEntry(file);
+  const file = files[index];
+  if (isVideoAttachment(file)) return videoThumb(file,className);
+  const entry = imageEntry(file);
   const button = document.createElement('button');button.type = 'button';button.className = className;
   const comments = annotationComments(file).length;
   const note = comments ? ` (${comments} ${t(comments === 1 ? 'annotations.count_one' : 'annotations.count_many')})` : '';
@@ -219,7 +227,7 @@ function messageImagesEl(files) {
   group.classList.toggle('message-images--single', files.length === 1);
   files.forEach((file, index) => {
     const thumb = imageThumb(files, index);
-    const entry = imageEntry(file);
+    const entry = isVideoAttachment(file) ? file.video : imageEntry(file);
     if (files.length === 1 && entry?.width && entry?.height) {
       const ratio = Math.min(3, Math.max(1 / 3, entry.width / entry.height));
       const width = Math.min(ratio >= 1 ? 260 : 260 * ratio, Math.max(64, entry.width));

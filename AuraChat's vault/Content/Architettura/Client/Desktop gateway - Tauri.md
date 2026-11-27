@@ -72,6 +72,81 @@ mantengono reasoning e operazioni e possono essere fermati cancellando le
 richieste HTTP e le shell registrate. Gli eventi tardivi non riattivano stati
 terminali. Le attività salvate ricostruiscono gli output file.
 
+### Video: preparazione locale e player — 27 novembre 2026
+
+Allegare un video avvia automaticamente il decoder del browser: frame ogni
+0,5 secondi, tavole JPEG 2x4 con indice e timestamp e catalogo JSON con durata,
+dimensioni e corrispondenza frame/tavola. Si riusa il metodo del riferimento
+Codex, senza LLM né FFmpeg per estrazione e catalogazione. Massimo 64 campioni,
+ridotti dagli slot immagini già occupati; per video lunghi l'intervallo aumenta
+ed è dichiarato. Fino a quattro video, 128 MiB di originali per selezione;
+tavole e cataloghi condividono i limiti immagini/testo, poster inclusi nei 6 MiB.
+
+Il modello riceve le tavole e il catalogo, non il video originale. Con DeepSeek
+V4 Pro, Flash legge le immagini e passa le descrizioni al Pro tramite il bridge
+esistente: questa analisi usa token, la preparazione no. Nessun audio inviato
+al modello, nessuna promessa di osservazione continua o tagli frame-accurate.
+Le fixture coprono MP4 H.264 e WebM VP8. Sul video di riferimento di 23,614 s
+il decoder locale ha catalogato 49 campioni in 7 tavole, senza inviarlo a
+DeepSeek. Per VP9 e gli altri codec la riproduzione dipende dal decoder di
+sistema; un file non leggibile produce un errore esplicito.
+
+Miniatura con durata e Play in composer, chat, fonti e rail. Il clic apre il
+player fullscreen, con controlli, seek e audio originali; il comando laterale
+riusa le schede dei documenti, conserva la posizione e permette il ritorno
+al fullscreen. Si ferma quando viene nascosto e libera gli URL alla chiusura.
+Rimuovere il video elimina dalla bozza anche i soli allegati generati per esso.
+Testo preesistente e chat d'origine sono conservati durante la preparazione.
+
+`videos.rs` salva gli originali nella cartella locale `videos`, indicizzati
+SHA-256, con scrittura completa prima della pubblicazione e verifica in lettura.
+L'IPC di playback riceve solo l'hash; poster e metadati persistono nella chat.
+Gli originali non sono caricati nel cloud né eliminati insieme a bozze/chat:
+su un altro PC il player chiede di riallegare il file, mentre frame e catalogo
+rimangono disponibili. `video-attachments.cjs` e test Rust verificano decoder,
+pixel, tempi, limiti, cache, cronologia, errori e navigazione del player.
+
+### Subagenti paralleli e scorciatoie inline — 27 novembre 2026
+
+Il ciclo delle tool call attendeva ogni `create_subagent` prima di avviare il
+successivo, anche quando il modello li chiedeva insieme. Ora le deleghe
+consecutive nella stessa risposta sono avviate in gruppi di massimo quattro
+contemporanei; i risultati tornano ordinati alla chat madre dopo il gruppo.
+Gli altri strumenti separano i gruppi e restano sequenziali. I permessi, il
+controllo delle revisioni dei file, la cancellazione e il conteggio dei consumi
+restano condivisi con il percorso precedente. Il modello è istruito a emettere
+insieme gli incarichi indipendenti e a dare file distinti agli editor paralleli;
+una delega emessa da sola non può anticipare quelle che il modello non ha creato.
+
+`inherit_context:false` conserva istruzioni di sistema/progetto e permessi, ma
+esclude messaggi, allegati e report della chat madre. L'incarico deve essere
+autosufficiente. Il valore predefinito conserva il comportamento precedente.
+Non c'è più il tetto cumulativo di quattro agenti per turno: ogni nuovo giro
+può creare revisori nuovi, sempre con massimo quattro simultanei e senza figli
+che generano altri agenti.
+
+La chat mostra **card compatte aggiuntive**, nello stile del riferimento:
+icona/loader, nome, stato, tempo e chevron verso destra. Clic o Invio apre
+direttamente il dettaglio già esistente nel tab laterale. Riepilogo e lista
+Subagenti non sono sostituiti. ID e offset iniziale mantengono la posizione
+durante gli aggiornamenti e nella cronologia; nessuna riattivazione dopo
+Completato, Errore o Interrotto. Il loader rispetta il movimento ridotto.
+
+La skill personale `/agent-loop [prompt]` è in
+`~/.agents/skills/agent-loop/SKILL.md`, condivisa sul PC tramite collegamenti
+nelle directory skill di Copilot, Cursor e Claude. Codex e AuraChat leggono
+anche la directory `.agents`. Da sola revisiona le modifiche correnti.
+Usa revisori nuovi senza cronologia a ogni giro: ROSSO con prove dei problemi,
+correzioni della chat madre, verifiche e aggiornamento del vault se presente,
+quindi nuovo giro fino a VERDE. Blocchi e assenza di progresso non diventano
+VERDE. Nessuna autorizzazione implicita a commit, push, deploy o installazioni.
+La skill globale è separata dal repository/installer; l'isolamento di AuraChat
+richiede questa nuova implementazione, non la PROD precedente.
+
+Verifiche isolate: test HTTP Rust con quattro richieste figlie trattenute prima
+delle risposte, un errore indipendente e un secondo giro con nuovi ID;
+`operations-flow.cjs` per card, streaming, tastiera, cambio chat e cronologia.
+
 **Limite effettivo:** le shell usano l'account Windows senza sandbox OS.
 La directory di lavoro non limita accesso a file e rete; root autorizzate e
 reviewer non sostituiscono isolamento di sistema. Accesso completo consente

@@ -10,6 +10,7 @@ mod skills;
 mod speech;
 mod tts;
 mod media;
+mod videos;
 mod project_files;
 mod mentions;
 mod git;
@@ -755,8 +756,13 @@ async fn chat_inner(
     let completion = llm::chat_completion_steered(&state.client, &base_url, &model, &api_key, &history, project, Some(agent_runs::Runtime{app:app.clone(),owner:uid.clone(),conversation:conversation_id.clone(),execution,spawn_chats}), Some(guidance.clone()), Some(&meter), &progress, |mut agent| {
         agent["conversation_id"] = serde_json::json!(conversation_id);
         let mut events = turn_activity.lock().unwrap();
-        let mut stored = agent.clone();stored["kind"] = serde_json::json!("agent");stored["offset"] = content_offset.load(std::sync::atomic::Ordering::Relaxed).into();
-        if let Some(previous) = events.iter_mut().find(|e| e["kind"] == "agent" && e["id"] == stored["id"]) { for (key,value) in stored.as_object().unwrap() {previous[key]=value.clone();} }
+        let mut segments = segments.lock().unwrap();
+        let previous = events.iter_mut().chain(segments.iter_mut().flat_map(|message|message.activity.iter_mut()))
+            .find(|e|e["kind"]=="agent" && e["id"]==agent["id"]);
+        agent["offset"] = previous.as_ref().map(|e|e["offset"].clone())
+            .unwrap_or_else(||content_offset.load(std::sync::atomic::Ordering::Relaxed).into());
+        let mut stored = agent.clone();stored["kind"] = serde_json::json!("agent");
+        if let Some(previous) = previous { for (key,value) in stored.as_object().unwrap() {previous[key]=value.clone();} }
         else { events.push(stored); }
         let _ = app.emit("agent-activity", agent);
     });
@@ -1163,12 +1169,25 @@ fn picked_attachment(path: &std::path::Path, bytes: Vec<u8>, texts: &mut (usize,
     Ok(Attachment::linked(name, link))
 }
 
-/// Picked images are returned as-is; the UI scales and re-encodes them before sending.
+fn picked_video(path: &std::path::Path, bytes: &[u8]) -> Result<serde_json::Value, String> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    if bytes.is_empty() {return Err("video_unreadable".into());}
+    if bytes.len() > videos::MAX_SOURCE {return Err("video_too_large".into());}
+    let mime = videos::mime(path).ok_or("video_unreadable")?;
+    let name = path.file_name().and_then(|name|name.to_str()).ok_or("invalid_attachments")?;
+    let link = Attachment::linked(name,path.to_str().ok_or("invalid_attachments")?);
+    llm::validate_attachments(std::slice::from_ref(&link))?;
+    // Only the picker response carries video bytes; the UI sends decoded sheets, never this payload.
+    Ok(serde_json::json!({"name":name,"path":link.path,"video_mime":mime,"video_data":BASE64.encode(bytes)}))
+}
+
+/// Picked media is returned as-is; the UI decodes it locally before sending.
 #[tauri::command]
-async fn choose_chat_files(window:tauri::Window) -> Result<Vec<Attachment>,String> {
+async fn choose_chat_files(window:tauri::Window, state:tauri::State<'_,AppState>) -> Result<Vec<serde_json::Value>,String> {
     const MAX_PICKED_IMAGE: usize = 20 << 20;
     const IMAGES: [&str; 5] = ["png","jpg","jpeg","gif","webp"];
     const TEXTS: [&str; 14] = ["txt","md","json","csv","log","js","ts","rs","py","html","css","toml","yaml","yml"];
+    let directory=state.config_dir.join("videos");
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::Read;
         let both = TEXTS.iter().chain(IMAGES.iter()).copied().collect::<Vec<_>>();
@@ -1176,22 +1195,64 @@ async fn choose_chat_files(window:tauri::Window) -> Result<Vec<Attachment>,Strin
             .add_filter("All files", &["*"])
             .add_filter("Text and images", &both)
             .add_filter("Images", &IMAGES)
+            .add_filter("Videos", &["mp4","m4v","mov","webm","mkv","avi","ogv"])
             .add_filter("Text files", &TEXTS)
             .blocking_pick_files().unwrap_or_default();
         let mut files = Vec::new();
+        let mut videos = Vec::new();
+        let mut video_bytes = 0;
         let mut texts = (0, 0);
         for path in paths {
             let path = path.into_path().map_err(|e| e.to_string())?;
+            let mut file = std::fs::File::open(&path).map_err(|e|e.to_string())?;
             let mut bytes = Vec::new();
-            std::fs::File::open(&path).map_err(|e| e.to_string())?.take(MAX_PICKED_IMAGE as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+            if videos::mime(&path).is_some() {
+                let size = file.metadata().map_err(|e|e.to_string())?.len();
+                if size > videos::MAX_SOURCE.saturating_sub(video_bytes) as u64 {return Err("video_too_large".into());}
+                file.by_ref().take(videos::MAX_SOURCE.saturating_sub(video_bytes) as u64 + 1).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
+                video_bytes += bytes.len();
+                if video_bytes > videos::MAX_SOURCE {return Err("video_too_large".into());}
+                let mut video=picked_video(&path,&bytes)?;
+                video["video_id"]=videos::store(&directory,&bytes)?.into();
+                videos.push(video);continue;
+            }
+            file.take(MAX_PICKED_IMAGE as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
             files.push(picked_attachment(&path, bytes, &mut texts)?);
         }
         let images = files.iter().filter(|file| file.is_image()).count();
         let linked = files.iter().filter(|file| file.is_linked()).count();
-        if images > llm::MAX_IMAGES || linked > llm::MAX_LINKED_FILES { return Err("invalid_attachments".into()); }
+        if images > llm::MAX_IMAGES || linked + videos.len() > llm::MAX_LINKED_FILES { return Err("invalid_attachments".into()); }
         llm::validate_attachments(&files.iter().filter(|file| !file.is_image()).cloned().collect::<Vec<_>>())?;
-        Ok(files)
+        let mut result=files.into_iter().map(serde_json::to_value).collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+        result.extend(videos);Ok(result)
     }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn read_chat_video(state:tauri::State<'_,AppState>, id:String) -> Result<String,String> {
+    let directory=state.config_dir.join("videos");
+    tauri::async_runtime::spawn_blocking(move || {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+        videos::read(&directory,&id).map(|bytes|BASE64.encode(bytes))
+    }).await.map_err(|e|e.to_string())?
+}
+
+#[cfg(test)]
+mod video_attachment_tests {
+    use super::*;
+    #[test]
+    fn picked_video_is_transient_and_never_a_provider_attachment() {
+        let path=std::env::temp_dir().join("clip.mp4");
+        let picked=picked_video(&path,b"fixture bytes decoded by the browser").unwrap();
+        assert_eq!(picked["video_mime"],"video/mp4");
+        assert!(picked.get("data").is_none());
+        let file:Attachment=serde_json::from_value(picked).unwrap();
+        llm::validate_attachments(&[file.clone()]).unwrap();
+        assert!(file.is_linked());assert!(!file.is_image());
+        assert_eq!(picked_video(&path,b"").unwrap_err(),"video_unreadable");
+        assert_eq!(videos::mime(&path.with_extension("WEBM")),Some("video/webm"));
+        assert_eq!(videos::mime(&path.with_extension("wav")),None);
+    }
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1615,6 +1676,7 @@ pub fn run() {
             list_questions, answer_question,
             prune_folder_access,
             choose_chat_files,
+            read_chat_video,
             open_external_url
             ,browser::browser_open, browser::browser_bounds, browser::browser_action, browser::browser_close, browser::browser_capture
             ,list_shells, stop_shell

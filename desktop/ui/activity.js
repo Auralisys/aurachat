@@ -32,8 +32,8 @@ function activityRecord(id) {
 function activityItems() {
   const record = activity.conversations.get(state.activeConversationId);
   const sources = [], links = new Set();
-  const fileSource = (id, file, summary) => isImageAttachment(file)
-    ? {id, title: file.name, summary, kind: 'image', image: file}
+  const fileSource = (id, file, summary) => isImageAttachment(file) || isVideoAttachment(file)
+    ? {id, title: file.name, summary, kind:isVideoAttachment(file) ? 'video' : 'image', image:file}
     : isLinkedAttachment(file)
       ? {id: `file:${file.path}`, title: file.name, summary: t('activity.linked'), path: file.path}
       : {id, title: file.name, summary, content: file.content, plain: true};
@@ -363,6 +363,45 @@ function agentRow(agent, compact, previous) {
   return row;
 }
 
+function renderAgentCard(item, existing) {
+  const agent = activity.conversations.get(state.activeConversationId)?.agents.get(item.id) || item;
+  const card = existing || activityRowBase('agents', agent);
+  if (!existing) {
+    card.className = 'turn-agent';card.dataset.agentId = agent.id;
+    const lead = activityText('span', '', 'turn-agent__lead');lead.append(icon('agents'));
+    const text = activityText('span', '', 'turn-agent__text');
+    text.append(activityText('span', '', 'turn-agent__title'), activityText('span', '', 'turn-agent__status'));
+    card.append(lead, text, agentElapsed(agent), icon('chevron'));
+  }
+  const name = agent.title || t('activity.agent'), status = activityStatus(agent);
+  card.dataset.status = agent.status;
+  card.querySelector('.turn-agent__title').textContent = name;
+  card.querySelector('.turn-agent__status').textContent = status;
+  card.title = name;
+  card.setAttribute('aria-label', `${name} · ${status} · ${t('activity.open_agent')}`);
+  return card;
+}
+
+function syncChatAgent(conversationId, agent, offset) {
+  const run = state.runs.get(conversationId);
+  if (run?.pending) {
+    const stream = run.stream ||= {content:'', shown:0, activity:[], frame:null};
+    // An agent may finish after steering has moved its card into a previous segment.
+    const previous = stream.activity.find(item => item.kind === 'agent' && item.id === agent.id)
+      || run.messages.flatMap(message => message.activity || []).find(item => item.kind === 'agent' && item.id === agent.id);
+    if (previous) Object.assign(previous, agent);
+    else {
+      stream.activity.push({...agent, kind:'agent', offset:Number.isFinite(offset) ? offset : stream.content.length});
+      revealTurn(run);
+    }
+  }
+  if (conversationId !== state.activeConversationId) return;
+  document.querySelectorAll('#messages .turn-agent').forEach(card => {
+    if (card.dataset.agentId === agent.id) renderAgentCard(agent, card);
+  });
+  updateActivityTimers();
+}
+
 function countLabel(key, count) {
   return t(`${key}_${count === 1 ? 'one' : 'many'}`).replace('{count}', String(count));
 }
@@ -399,7 +438,7 @@ function renderAgentSummary(group, header, agents) {
 
 // Images read faster as thumbnails; documents and links keep their rows.
 function renderSourceSummary(group, sources) {
-  const images = sources.filter(item => item.kind === 'image' && (item.image || safeActivityURL(item.url)));
+  const images = sources.filter(item => ['image','video'].includes(item.kind) && (item.image || safeActivityURL(item.url)));
   if (images.length) {
     const strip = activityText('div', '', 'activity-thumbs');
     for (const item of images.slice(0, 4)) {
@@ -878,11 +917,12 @@ async function setupActivity() {
     const record = activityRecord(payload.conversation_id), previous = record.agents.get(payload.id);
     const agent = {...previous, id: payload.id, status: payload.status};
     if (previous && ['completed','failed','cancelled'].includes(previous.status) && ['running','waiting'].includes(payload.status)) return;
-    for (const key of ['title','summary','task','content','model','reasoning','reasoning_content']) if (typeof payload[key] === 'string') agent[key] = payload[key];
+    for (const key of ['title','summary','task','content','model','reasoning','reasoning_content','tool_event_id']) if (typeof payload[key] === 'string') agent[key] = payload[key];
     if (Array.isArray(payload.activity)) agent.activity = payload.activity;
     agent.title ||= t('activity.agent');agent.started_at = previous?.started_at || (Number.isFinite(payload.started_at) ? payload.started_at : Date.now());
     agent.finished_at = ['completed','failed','cancelled'].includes(agent.status) ? (Number.isFinite(payload.finished_at) ? payload.finished_at : previous?.finished_at || Date.now()) : null;
     record.agents.set(agent.id, agent);
+    syncChatAgent(payload.conversation_id, agent, payload.offset);
     if (payload.conversation_id !== state.activeConversationId) return;
     // Streamed text and tool history appear only in the open agent detail.
     if (previous?.status === agent.status && previous.title === agent.title) {
